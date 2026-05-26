@@ -88,18 +88,25 @@ impl PtywrightClaudeSession {
         let workspace_env = params.workspace_env.cloned();
 
         let handle = tokio::task::spawn_blocking(move || {
-            // Generous PTY dimensions so the Claude Code TUI doesn't
-            // wrap long lines (which truncates file paths and breaks
-            // the chrome-strip regexes the plugin uses to keep tool
-            // progress out of streamed text) and so multi-tool turns
-            // fit in the visible buffer without scrolling state out of
-            // the classifier's reach (vt100 0.16.2 doesn't expose
-            // scrollback contents). 500 rows × 240 cols holds every
-            // single-turn render we've seen from Claude Code 2.1.x
-            // including long Explore-agent runs and large diffs;
-            // smaller defaults caused the chrome-leak / missing-tool
-            // symptoms tracked in the screenshot the user shared.
-            let pty_size = ptywright::TerminalSize::new(500, 240);
+            // PTY dimensions sized to:
+            //   * keep 80-col line-wrap from truncating file paths in
+            //     tool-call rows (the original symptom from the
+            //     screenshot — `ources/base.py` missing its leading
+            //     `s` is a direct 80-col wrap artifact), and
+            //   * leave room for multi-tool turns to fit in the
+            //     visible buffer (vt100 0.16.2 doesn't expose
+            //     scrollback contents through `screen.contents()`).
+            //
+            // 100 rows × 180 cols is a moderate, normal-terminal-shaped
+            // size. An earlier attempt at 500×240 broke Claude Code's
+            // startup input handling — the dimensions were unusual
+            // enough that bracketed-paste / first-keypress was being
+            // swallowed during the welcome-banner render, leaving
+            // prompts wedged with no spinner and no answer (the
+            // "sent a message and never got a response" symptom).
+            // 100×180 is small enough that Claude treats it like a
+            // normal terminal session.
+            let pty_size = ptywright::TerminalSize::new(100, 180);
             let mut target = ptywright::Target::new(claude_program.clone())
                 .args(target_args)
                 .cwd(working_dir)
@@ -1714,12 +1721,35 @@ fn extract_visible_answer(screen: &str, evidence: &str) -> String {
 
 fn prompt_submission_observed(
     grew: usize,
-    _anchored: bool,
+    anchored: bool,
     ptywright_state: &str,
     editable_prompt: bool,
 ) -> bool {
-    let submitted_state = matches!(ptywright_state, "thinking" | "completed_turn" | "error");
-    grew >= PASTE_REACTION_BYTES && !editable_prompt && submitted_state
+    if grew < PASTE_REACTION_BYTES || editable_prompt {
+        return false;
+    }
+    // `completed_turn` / `error` are strong terminal states — Claude
+    // visibly finished the turn (or errored). The transcript anchor
+    // may not be in the recent transcript slice we sampled (it could
+    // sit further back in a long session), so we don't require it
+    // here.
+    if matches!(ptywright_state, "completed_turn" | "error") {
+        return true;
+    }
+    // `thinking` is the weakest acceptance signal: the classifier
+    // reports `thinking` purely because `last_intent` was set to
+    // `prompt_submitted` when the plugin emitted the paste. With
+    // nothing else verified, mistaking welcome-banner / overlay
+    // redraw bytes for a successful paste is easy — and that's
+    // exactly the regression we hit when the PTY was sized so big
+    // that Claude's startup render dominated the byte-grew signal.
+    // Require positive evidence that the prompt text actually
+    // reached the transcript (`anchored`); otherwise this poll is
+    // inconclusive and we keep waiting.
+    if ptywright_state == "thinking" {
+        return anchored;
+    }
+    false
 }
 
 fn prompt_still_editable(screen: &str, prompt_anchor: &str) -> bool {
@@ -2580,10 +2610,31 @@ clean line
     }
 
     #[test]
-    fn prompt_submission_ack_accepts_thinking_after_prompt_leaves_input() {
-        assert!(prompt_submission_observed(
+    fn prompt_submission_ack_rejects_thinking_without_anchor() {
+        // `state=thinking` is set purely by the plugin recording
+        // `last_intent=prompt_submitted` — without `anchored=true`
+        // confirming the prompt text actually appeared in the
+        // transcript, "grew + thinking + !editable" can match a
+        // welcome-banner / overlay redraw and prematurely claim
+        // acknowledgement. Reject this case so the harness waits
+        // for the real signal (or hits the retry path).
+        assert!(!prompt_submission_observed(
             PASTE_REACTION_BYTES + 1,
             false,
+            "thinking",
+            false,
+        ));
+    }
+
+    #[test]
+    fn prompt_submission_ack_accepts_thinking_when_anchored() {
+        // `anchored=true` confirms the prompt text reached the
+        // transcript — that's the positive signal we want for the
+        // `thinking` path. With the input box clear (`!editable`)
+        // we know the paste fired, not just buffered.
+        assert!(prompt_submission_observed(
+            PASTE_REACTION_BYTES + 1,
+            true,
             "thinking",
             false,
         ));
