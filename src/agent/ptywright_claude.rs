@@ -16,7 +16,7 @@ use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{
     AssistantMessage, ContentBlock, Delta, FileAttachment, InnerStreamEvent, StartContentBlock,
-    StreamEvent, TaskUsage, UserContentBlock, UserEventMessage, UserMessageContent,
+    StreamEvent, TaskUsage, TokenUsage, UserContentBlock, UserEventMessage, UserMessageContent,
 };
 use super::{AgentSettings, PersistentSessionStart};
 
@@ -541,6 +541,7 @@ fn wait_for_turn_state(
         }
         let jsonl_turn_text =
             latest_claude_jsonl_assistant_text_for_prompt(working_dir, claude_session_id, prompt);
+        assistant_text.emit_usage(&state, broadcast_tx, turn_tx);
         if let Some(text) = jsonl_turn_text.as_deref() {
             assistant_text.emit_to(&text, broadcast_tx, turn_tx);
         } else {
@@ -917,35 +918,38 @@ fn extract_turn_answer(
                 return clean_final_assistant_text(&answer).unwrap_or(answer);
             }
             if let Some(text) = current_structured_turn_text(handle, state, prompt) {
-                let text = clean_final_assistant_text(text).unwrap_or_else(|| text.to_string());
+                if let Some(text) = clean_final_assistant_text(text) {
+                    tracing::debug!(
+                        target: "claudette::agent",
+                        turn_start,
+                        turn_end,
+                        response_len = text.len(),
+                        "ptywright Claude extracted structured turn text after transcript filter"
+                    );
+                    return text;
+                }
+            }
+        } else if let Some(text) = structured_turn_text(state) {
+            if let Some(text) = clean_final_assistant_text(text) {
                 tracing::debug!(
                     target: "claudette::agent",
                     turn_start,
                     turn_end,
                     response_len = text.len(),
-                    "ptywright Claude extracted structured turn text after transcript filter"
+                    "ptywright Claude extracted structured turn text after transcript eviction"
                 );
                 return text;
             }
-        } else if let Some(text) = structured_turn_text(state) {
-            let text = clean_final_assistant_text(text).unwrap_or_else(|| text.to_string());
+        }
+    } else if let Some(text) = structured_turn_text(state) {
+        if let Some(text) = clean_final_assistant_text(text) {
             tracing::debug!(
                 target: "claudette::agent",
-                turn_start,
-                turn_end,
                 response_len = text.len(),
-                "ptywright Claude extracted structured turn text after transcript eviction"
+                "ptywright Claude extracted structured turn text"
             );
             return text;
         }
-    } else if let Some(text) = structured_turn_text(state) {
-        let text = clean_final_assistant_text(text).unwrap_or_else(|| text.to_string());
-        tracing::debug!(
-            target: "claudette::agent",
-            response_len = text.len(),
-            "ptywright Claude extracted structured turn text"
-        );
-        return text;
     }
 
     let screen = handle.session().snapshot().plain_text;
@@ -957,7 +961,8 @@ fn extract_turn_answer(
         "ptywright Claude falling back to visible screen text"
     );
     let answer = extract_visible_answer(&screen, state.evidence.as_str());
-    clean_final_assistant_text(&answer).unwrap_or(answer)
+    clean_final_assistant_text(&answer)
+        .unwrap_or_else(|| format!("ptywright Claude turn completed: {}", state.evidence))
 }
 
 fn current_turn_has_answer(
@@ -1017,6 +1022,36 @@ fn structured_partial_turn_text(state: &ptywright::ExtensionStateSnapshot) -> Op
         .and_then(clean_ptywright_partial_text)
 }
 
+fn structured_turn_progress_usage(state: &ptywright::ExtensionStateSnapshot) -> Option<TokenUsage> {
+    let progress = state
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("turn"))
+        .and_then(|turn| turn.get("progress"))?;
+    let input_tokens = progress
+        .get("input_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let output_tokens = progress
+        .get("output_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if input_tokens == 0 && output_tokens == 0 {
+        return None;
+    }
+    Some(TokenUsage {
+        total_tokens: progress
+            .get("total_tokens")
+            .and_then(serde_json::Value::as_u64),
+        input_tokens,
+        output_tokens,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+        model_context_window: None,
+        iterations: None,
+    })
+}
+
 fn clean_ptywright_partial_text(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.contains('❯')
@@ -1054,6 +1089,7 @@ fn clean_ptywright_partial_text(text: &str) -> Option<String> {
 fn clean_final_assistant_text(text: &str) -> Option<String> {
     let mut lines = Vec::new();
     let mut seen_content = false;
+    let mut suppress_until_assistant_anchor = false;
 
     for line in text.trim().lines() {
         let trimmed = line.trim();
@@ -1068,9 +1104,18 @@ fn clean_final_assistant_text(text: &str) -> Option<String> {
             break;
         }
 
+        if starts_tool_activity_region(trimmed) {
+            suppress_until_assistant_anchor = true;
+            continue;
+        }
+        if suppress_until_assistant_anchor && !is_assistant_text_anchor(trimmed) {
+            continue;
+        }
+
         if is_ptywright_final_chrome_line(trimmed) {
             continue;
         }
+        suppress_until_assistant_anchor = false;
 
         let cleaned = normalize_final_assistant_line(line.trim_end());
         if cleaned.trim().is_empty() {
@@ -1147,6 +1192,8 @@ fn is_ptywright_final_chrome_line(line: &str) -> bool {
         || line.contains("Claude Max")
         || line.contains(".claudette/workspaces/")
         || line.contains(" @ halcyon workspaces/")
+        || line.contains("@halcyonworkspaces/")
+        || looks_like_collapsed_status_identity_line(line)
         || line.contains("auto mode on")
         || line.contains("Claude in Chrome enabled")
         || (line.contains("Explore agents") && line.contains("finished"))
@@ -1157,11 +1204,71 @@ fn is_ptywright_final_chrome_line(line: &str) -> bool {
         || line == "⎿  Done"
 }
 
+fn is_tool_activity_chrome_line(line: &str) -> bool {
+    starts_tool_activity_region(line)
+        || line == "Running..."
+        || line == "Running…"
+        || line.starts_with("... +")
+        || line.starts_with("… +")
+        || line.contains("(ctrl+o to expand)")
+        || line.starts_with('├')
+        || line.starts_with('└')
+        || line.starts_with('│')
+}
+
+fn starts_tool_activity_region(line: &str) -> bool {
+    is_tool_call_start_line(line)
+        || line.starts_with("... +")
+        || line.starts_with("… +")
+        || line.starts_with('├')
+        || line.starts_with('└')
+        || line.starts_with('│')
+}
+
+fn is_tool_call_start_line(line: &str) -> bool {
+    let stripped = line.trim_start_matches('⎿').trim_start();
+    [
+        "Bash(",
+        "Glob(",
+        "Grep(",
+        "LS(",
+        "Read(",
+        "Edit(",
+        "MultiEdit(",
+        "Write(",
+        "NotebookRead(",
+        "NotebookEdit(",
+        "WebFetch(",
+        "WebSearch(",
+        "TodoRead(",
+        "TodoWrite(",
+        "Task(",
+    ]
+    .iter()
+    .any(|prefix| stripped.starts_with(prefix))
+}
+
+fn is_assistant_text_anchor(line: &str) -> bool {
+    let Some(rest) = line
+        .strip_prefix('⏺')
+        .or_else(|| line.strip_prefix('●'))
+        .map(str::trim_start)
+    else {
+        return false;
+    };
+    !rest.is_empty()
+        && !is_tool_activity_chrome_line(rest)
+        && !(rest.contains("Explore agents") && rest.contains("finished"))
+        && !rest.contains("(ctrl+o to expand)")
+}
+
 fn is_ptywright_partial_chrome_line(line: &str) -> bool {
     let trimmed = line.trim();
+    let compact: String = trimmed.chars().filter(|ch| !ch.is_whitespace()).collect();
     trimmed.is_empty()
         || trimmed == "↑"
         || trimmed == "↓"
+        || looks_like_compact_token_progress(&compact)
         || trimmed.contains(" · thinking")
         || trimmed.contains("·thinking")
         || trimmed.contains("tokens · thinking")
@@ -1185,6 +1292,25 @@ fn is_ptywright_partial_chrome_line(line: &str) -> bool {
         || (trimmed.len() <= 3 && trimmed.chars().all(|ch| ch.is_ascii_digit()))
         || is_active_or_answer_line(trimmed)
         || is_chrome_line(trimmed)
+}
+
+fn looks_like_compact_token_progress(compact: &str) -> bool {
+    if !compact.contains("tokens") {
+        return false;
+    }
+    let without_outer = compact
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+        .unwrap_or(compact);
+    without_outer.contains('↓')
+        || without_outer.contains('↑')
+        || without_outer.contains("·thinking")
+        || without_outer.ends_with("thinking")
+}
+
+fn looks_like_collapsed_status_identity_line(line: &str) -> bool {
+    let compact: String = line.chars().filter(|ch| !ch.is_whitespace()).collect();
+    compact.contains('@') && compact.contains("workspaces/") && compact.contains('/')
 }
 
 fn latest_claude_jsonl_assistant_text(working_dir: &Path, session_id: &str) -> Option<String> {
@@ -1404,6 +1530,7 @@ fn clean_transcript_answer(transcript: &str, prompt: &str) -> Option<String> {
     let end = find_completion_marker_index(&lines, start).unwrap_or(lines.len());
     let mut cleaned = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
+    let mut suppress_until_assistant_anchor = false;
 
     for line in &lines[start..end] {
         let trimmed = line.trim();
@@ -1415,8 +1542,17 @@ fn clean_transcript_answer(transcript: &str, prompt: &str) -> Option<String> {
             continue;
         }
 
+        if starts_tool_activity_region(trimmed) {
+            suppress_until_assistant_anchor = true;
+            continue;
+        }
+        if suppress_until_assistant_anchor && !is_assistant_text_anchor(trimmed) {
+            continue;
+        }
+        suppress_until_assistant_anchor = false;
+
         if seen.insert(trimmed.to_string()) {
-            cleaned.push(line.trim_end());
+            cleaned.push(strip_answer_bullet(line.trim_end()));
         }
     }
 
@@ -1876,6 +2012,7 @@ impl Default for PtywrightToolActivityEmitter {
 struct PtywrightAssistantTextEmitter {
     started: bool,
     emitted: String,
+    last_usage: Option<(u64, u64, Option<u64>)>,
 }
 
 impl PtywrightAssistantTextEmitter {
@@ -1889,11 +2026,35 @@ impl PtywrightAssistantTextEmitter {
         broadcast_tx: &broadcast::Sender<AgentEvent>,
         turn_tx: &mpsc::Sender<AgentEvent>,
     ) {
+        self.emit_usage(state, broadcast_tx, turn_tx);
         if let Some(text) = structured_partial_turn_text(state) {
             self.emit_to(&text, broadcast_tx, turn_tx);
         } else if let Some(text) = structured_turn_text(state) {
             self.emit_to(text, broadcast_tx, turn_tx);
         }
+    }
+
+    fn emit_usage(
+        &mut self,
+        state: &ptywright::ExtensionStateSnapshot,
+        broadcast_tx: &broadcast::Sender<AgentEvent>,
+        turn_tx: &mpsc::Sender<AgentEvent>,
+    ) {
+        let Some(usage) = structured_turn_progress_usage(state) else {
+            return;
+        };
+        let key = (usage.input_tokens, usage.output_tokens, usage.total_tokens);
+        if self.last_usage == Some(key) {
+            return;
+        }
+        self.last_usage = Some(key);
+        send_event(
+            broadcast_tx,
+            turn_tx,
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::MessageDelta { usage: Some(usage) },
+            }),
+        );
     }
 
     fn finish(
@@ -2268,6 +2429,29 @@ Could you remind me what we were working on?
     }
 
     #[test]
+    fn transcript_answer_omits_tool_rows_between_assistant_segments() {
+        let transcript = "\
+❯ Explore this project and tell me about it
+⏺ I'll explore the project structure to give you a solid overview.
+Bash(ls -la /Users/jamesbrink/.claudette/workspaces/mcp-nixos/plucky-cornflower/mcp_nixos/)
+Running...
+532 tests/
+Read(mcp_nixos/server.py)
+mcp_nixos/server.py
+... +2 tool uses (ctrl+o to expand)
+⏺ The project is a FastMCP server.
+✻ Done for 4s";
+
+        assert_eq!(
+            clean_transcript_answer(transcript, "Explore this project and tell me about it")
+                .as_deref(),
+            Some(
+                "I'll explore the project structure to give you a solid overview.\nThe project is a FastMCP server."
+            )
+        );
+    }
+
+    #[test]
     fn transcript_answer_rejects_control_fragment_lines() {
         let transcript = "\
 ❯ go
@@ -2493,13 +2677,40 @@ clean line
         let mut state = ptywright::ExtensionStateSnapshot::new("thinking", 24);
         state.metadata = Some(json!({
             "turn": {
-                "partial_text": "Launching 2 Explore agents.\n✳\n✢\n✽\n(1s·thinking)\n↓ 13 tokens·thinking)\n2ought for1s)\n2)\n2 Exploreagents finishedDone↑\n↓\n25\n50"
+                "partial_text": "Launching 2 Explore agents.\n✳\n✢\n✽\n(1s·thinking)\n(1s·↓13tokens)\n↓ 13 tokens·thinking)\n2ought for1s)\n2)\n2 Exploreagents finishedDone↑\n↓\n25\n50"
             }
         }));
 
         assert_eq!(
             structured_partial_turn_text(&state),
             Some("Launching 2 Explore agents.".to_string())
+        );
+    }
+
+    #[test]
+    fn ptywright_metadata_turn_progress_reads_token_status() {
+        let mut state = ptywright::ExtensionStateSnapshot::new("thinking", 25);
+        state.metadata = Some(json!({
+            "turn": {
+                "progress": {
+                    "duration_ms": 1000,
+                    "output_tokens": 13,
+                    "total_tokens": 13
+                }
+            }
+        }));
+
+        assert_eq!(
+            structured_turn_progress_usage(&state),
+            Some(TokenUsage {
+                total_tokens: Some(13),
+                input_tokens: 0,
+                output_tokens: 13,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                model_context_window: None,
+                iterations: None,
+            })
         );
     }
 
@@ -2531,6 +2742,41 @@ clean line
                 "- The project is a FastMCP 3.x async MCP server.\n  - The test suite spans about 4,600 lines.\n\nSMOKE_AGENT_OK"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn ptywright_final_text_omits_tool_rows_between_assistant_segments() {
+        let text = "\
+⏺ I'll explore the project structure to give you a solid overview.
+
+Bash(ls -la /Users/jamesbrink/.claudette/workspaces/mcp-nixos/plucky-cornflower/mcp_nixos/)
+Running...
+532 tests/
+Read(mcp_nixos/server.py)
+mcp_nixos/server.py
+... +2 tool uses (ctrl+o to expand)
+
+⏺ The project is a FastMCP server.
+
+✻ Baked for 4s";
+
+        assert_eq!(
+            clean_final_assistant_text(text),
+            Some(
+                "I'll explore the project structure to give you a solid overview.\n\nThe project is a FastMCP server."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn ptywright_final_text_rejects_collapsed_status_identity_line() {
+        assert_eq!(
+            clean_final_assistant_text(
+                "jamesbrink@halcyonworkspaces/mcp-nixos/plucky-cornflowerjames-brink/ex..."
+            ),
+            None
         );
     }
 
