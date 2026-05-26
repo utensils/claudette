@@ -14,7 +14,7 @@ Native commands ship with the app and always work. They split into two flavors:
 | Command | Effect |
 |---|---|
 | `/clear` | Clear the chat history (UI-only). |
-| `/compact` | Compact the conversation (mirrors Claude Code's behavior). |
+| `/compact` | Compact the conversation. Works on every harness. On Claude Code the CLI handles it natively; on Codex Native Claudette issues the `thread/compact/start` JSON-RPC; on the Pi SDK harness Claudette calls Pi's native `AgentSession.compact()`. The timeline renders a compaction divider when the compaction completes. Pi also auto-compacts long sessions on its own — those land a divider too (labelled "automatic" or "context full"). A failed compaction surfaces a notice instead of a divider. |
 | `/plan` | Toggle plan mode on for the next turn. |
 | `/model` `[<model>]` | Show the active workspace model, or set it inline (`/model opus`, `/model claude-3-5-sonnet`, `/model pi/openai/gpt-5.4`, ...). |
 | `/permissions` `[readonly\|standard\|full]` | Show the current permission mode, or set it inline (`/permissions full`). Alias: `/allowed-tools`. |
@@ -36,11 +36,11 @@ Native commands ship with the app and always work. They split into two flavors:
 | `/security-review [focus]` | Seed a security-focused review of the current branch. |
 | `/pr-comments [PR# or guidance]` | Summarize PR comments for the current branch. |
 
-**Plugin management** (when **Settings > Experimental > Plugin management** is enabled):
+**Claude Code Plugins**:
 
 | Command | Effect |
 |---|---|
-| `/plugin [install\|enable\|disable\|uninstall\|update\|manage\|browse\|marketplace]` | Open or drive the Plugins panel. |
+| `/plugin [install\|enable\|disable\|uninstall\|update\|manage\|browse\|marketplace]` | Open or drive Claude Code Plugins. |
 | `/marketplace [add\|remove\|update] <source>` | Manage Claude Code marketplaces. |
 
 ## Custom commands

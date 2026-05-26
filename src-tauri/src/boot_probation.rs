@@ -1,7 +1,7 @@
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -9,14 +9,18 @@ use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tokio::sync::Notify;
 
+use claudette::process::std_command;
+
 const SENTINEL_FILE: &str = "boot-probation.json";
 const REPORT_FILE: &str = "boot-rollback-report.json";
-const DEFAULT_PROBATION_SECS: u64 = 10;
+const DEFAULT_PROBATION_SECS: u64 = 20;
 /// Hard floor / ceiling for the env-var override. A 0-second probation
-/// would never let `boot_ok` race the timer; a 10-minute probation makes
+/// would never let `boot_ok` race the timer; a 2-minute probation makes
 /// the rollback feel broken to users on the unhappy path.
 const MIN_PROBATION_SECS: u64 = 1;
 const MAX_PROBATION_SECS: u64 = 120;
+const LOG_TAIL_BYTES: u64 = 16 * 1024;
+static PROBATION_FILE_LOCK: Mutex<()> = Mutex::new(());
 /// After this many recorded launch attempts on the same sentinel, we
 /// stop arming the rollback. The user has already booted past the
 /// probation window once (otherwise we'd have rolled back on attempt
@@ -45,6 +49,12 @@ impl BootProbationState {
         self.cancel.notify_waiters();
     }
 
+    pub async fn wait_until_acknowledged(&self) {
+        while !self.is_acknowledged() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     fn is_acknowledged(&self) -> bool {
         self.acknowledged.load(Ordering::SeqCst)
     }
@@ -67,6 +77,25 @@ pub enum ProbationStatus {
     RollbackFailed,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BootStage {
+    ProcessStarted,
+    WebviewCreated,
+    ReactMounted,
+    InitialDataLoading,
+    InitialDataFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct BootStageRecord {
+    pub stage: BootStage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub recorded_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct BootProbation {
@@ -82,6 +111,12 @@ pub struct BootProbation {
     pub attempts: u32,
     pub data_dir: PathBuf,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_stage: Option<BootStageRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probation_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +127,12 @@ pub struct BootRollbackReport {
     pub download_url: String,
     pub restored: bool,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_stage: Option<BootStageRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probation_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,9 +207,40 @@ pub fn prepare_for_update(
         attempts: 0,
         data_dir: data_dir.to_path_buf(),
         created_at: chrono::Utc::now().to_rfc3339(),
+        latest_stage: None,
+        probation_secs: None,
+        log_tail: None,
     };
 
     write_probation(data_dir, &probation)
+}
+
+pub fn record_boot_stage(
+    data_dir: &Path,
+    stage: BootStage,
+    detail: Option<String>,
+) -> Result<bool, String> {
+    let _guard = PROBATION_FILE_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let path = sentinel_path(data_dir);
+    if !path.exists() {
+        return Ok(false);
+    }
+    let mut probation = match read_probation_path(&path) {
+        Ok(p) => p,
+        Err(e) => return Err(e),
+    };
+
+    if !matches!(probation.status, ProbationStatus::Pending) {
+        return Ok(false);
+    }
+
+    if !apply_boot_stage(&mut probation, stage, detail) {
+        return Ok(false);
+    }
+    write_probation(data_dir, &probation)?;
+    Ok(true)
 }
 
 /// Mark this boot as healthy so the in-memory timer is cancelled and
@@ -182,13 +254,13 @@ pub fn prepare_for_update(
 /// build. The next launch's `start_monitor` will increment `attempts`
 /// on the leaked sentinel; `MAX_PROBATION_ATTEMPTS` then bounds the
 /// retries so the leak self-heals on the second healthy boot.
-pub async fn acknowledge_boot(
-    data_dir: &Path,
-    state: &Arc<BootProbationState>,
-) -> Result<(), String> {
+pub fn acknowledge_boot(data_dir: &Path, state: &Arc<BootProbationState>) -> Result<(), String> {
     state.acknowledge();
     let path = sentinel_path(data_dir);
-    match tokio::fs::remove_file(&path).await {
+    let _guard = PROBATION_FILE_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("clear boot probation {}: {e}", path.display())),
@@ -197,6 +269,9 @@ pub async fn acknowledge_boot(
 
 pub fn start_monitor(app: AppHandle, state: Arc<BootProbationState>, data_dir: PathBuf) {
     let path = sentinel_path(&data_dir);
+    let _guard = PROBATION_FILE_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let Ok(mut probation) = read_probation_path(&path) else {
         return;
     };
@@ -213,6 +288,7 @@ pub fn start_monitor(app: AppHandle, state: Arc<BootProbationState>, data_dir: P
         return;
     }
 
+    apply_boot_stage(&mut probation, BootStage::WebviewCreated, None);
     probation.attempts = probation.attempts.saturating_add(1);
 
     // Bounded retry: once we've recorded MAX_PROBATION_ATTEMPTS launches
@@ -262,22 +338,7 @@ pub fn show_pending_report(app: &AppHandle, data_dir: &Path) {
     } else {
         "Claudette update rollback failed"
     };
-    let message = if report.restored {
-        format!(
-            "Update {} failed to start, so Claudette restored {}. Please report this at https://github.com/utensils/claudette/issues.",
-            report.failed_version, report.previous_version
-        )
-    } else {
-        format!(
-            "Update {} failed to start, but Claudette could not restore {}. Download the previous release from {} and report this at https://github.com/utensils/claudette/issues.\n\n{}",
-            report.failed_version,
-            report.previous_version,
-            report.download_url,
-            report
-                .error
-                .unwrap_or_else(|| "Unknown rollback error".to_string())
-        )
-    };
+    let message = rollback_report_message(&report);
 
     app.dialog()
         .message(message)
@@ -299,39 +360,50 @@ pub fn run_helper_from_args(args: &[String]) -> Option<Result<(), String>> {
 }
 
 async fn handle_probation_timeout(app: &AppHandle, data_dir: &Path) {
+    enum TimeoutAction {
+        Exit,
+        SpawnHelper(BootProbation),
+    }
+
     let path = sentinel_path(data_dir);
-    let mut probation = match read_probation_path(&path) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(target: "claudette::updater", error = %e, "boot probation timed out but sentinel could not be read");
-            return;
+    let action = {
+        let _guard = PROBATION_FILE_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let mut probation = match read_probation_path(&path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(target: "claudette::updater", error = %e, "boot probation timed out but sentinel could not be read");
+                return;
+            }
+        };
+
+        finalize_probation_timeout(&mut probation);
+
+        if probation.backup_path.is_none() {
+            let error = probation.backup_error.clone().unwrap_or_else(|| {
+                "No previous install backup is available for this update target.".to_string()
+            });
+            probation.status = ProbationStatus::RollbackFailed;
+            let _ = write_probation(data_dir, &probation);
+            let _ = write_report(
+                data_dir,
+                &rollback_report_from_probation(&probation, false, Some(error)),
+            );
+            TimeoutAction::Exit
+        } else {
+            probation.status = ProbationStatus::RollbackInProgress;
+            if let Err(e) = write_probation(data_dir, &probation) {
+                tracing::warn!(target: "claudette::updater", error = %e, "failed to mark boot rollback in progress");
+            }
+            TimeoutAction::SpawnHelper(probation)
         }
     };
 
-    if probation.backup_path.is_none() {
-        let error = probation.backup_error.clone().unwrap_or_else(|| {
-            "No previous install backup is available for this update target.".to_string()
-        });
-        probation.status = ProbationStatus::RollbackFailed;
-        let _ = write_probation(data_dir, &probation);
-        let _ = write_report(
-            data_dir,
-            &BootRollbackReport {
-                failed_version: probation.failed_version,
-                previous_version: probation.previous_version,
-                download_url: probation.download_url,
-                restored: false,
-                error: Some(error),
-            },
-        );
+    let TimeoutAction::SpawnHelper(probation) = action else {
         app.exit(1);
         return;
-    }
-
-    probation.status = ProbationStatus::RollbackInProgress;
-    if let Err(e) = write_probation(data_dir, &probation) {
-        tracing::warn!(target: "claudette::updater", error = %e, "failed to mark boot rollback in progress");
-    }
+    };
 
     match spawn_rollback_helper(&path) {
         Ok(()) => app.exit(1),
@@ -342,13 +414,7 @@ async fn handle_probation_timeout(app: &AppHandle, data_dir: &Path) {
             let _ = write_probation(data_dir, &failed);
             let _ = write_report(
                 data_dir,
-                &BootRollbackReport {
-                    failed_version: failed.failed_version,
-                    previous_version: failed.previous_version,
-                    download_url: failed.download_url,
-                    restored: false,
-                    error: Some(e),
-                },
+                &rollback_report_from_probation(&failed, false, Some(e)),
             );
             app.exit(1);
         }
@@ -361,20 +427,8 @@ fn run_helper(sentinel: &Path, parent_pid: u32) -> Result<(), String> {
 
     let result = restore_backup(&probation)
         .and_then(|_| relaunch(&probation))
-        .map(|_| BootRollbackReport {
-            failed_version: probation.failed_version.clone(),
-            previous_version: probation.previous_version.clone(),
-            download_url: probation.download_url.clone(),
-            restored: true,
-            error: None,
-        })
-        .unwrap_or_else(|e| BootRollbackReport {
-            failed_version: probation.failed_version.clone(),
-            previous_version: probation.previous_version.clone(),
-            download_url: probation.download_url.clone(),
-            restored: false,
-            error: Some(e),
-        });
+        .map(|_| rollback_report_from_probation(&probation, true, None))
+        .unwrap_or_else(|e| rollback_report_from_probation(&probation, false, Some(e)));
 
     if result.restored {
         let _ = std::fs::remove_file(sentinel);
@@ -408,7 +462,7 @@ fn restore_backup(probation: &BootProbation) -> Result<(), String> {
 }
 
 fn relaunch(probation: &BootProbation) -> Result<(), String> {
-    Command::new(&probation.executable_path)
+    std_command(&probation.executable_path)
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("relaunch {}: {e}", probation.executable_path.display()))
@@ -416,7 +470,7 @@ fn relaunch(probation: &BootProbation) -> Result<(), String> {
 
 fn spawn_rollback_helper(sentinel: &Path) -> Result<(), String> {
     let helper = helper_executable(sentinel)?;
-    Command::new(&helper)
+    std_command(&helper)
         .arg("--boot-rollback-helper")
         .arg(sentinel)
         .arg(std::process::id().to_string())
@@ -753,6 +807,160 @@ fn remove_path_no_follow(path: &Path) -> std::io::Result<()> {
     remove_path(path)
 }
 
+fn finalize_probation_timeout(probation: &mut BootProbation) {
+    probation.probation_secs = Some(probation_timeout().as_secs());
+    if probation.log_tail.is_none() {
+        probation.log_tail = collect_log_tail();
+    }
+}
+
+fn rollback_report_from_probation(
+    probation: &BootProbation,
+    restored: bool,
+    error: Option<String>,
+) -> BootRollbackReport {
+    BootRollbackReport {
+        failed_version: probation.failed_version.clone(),
+        previous_version: probation.previous_version.clone(),
+        download_url: probation.download_url.clone(),
+        restored,
+        error,
+        failure_stage: probation.latest_stage.clone(),
+        probation_secs: probation.probation_secs,
+        log_tail: probation.log_tail.clone(),
+    }
+}
+
+fn rollback_report_message(report: &BootRollbackReport) -> String {
+    let reason = rollback_failure_reason(report);
+    let action = if report.restored {
+        format!("Claudette restored {}.", report.previous_version)
+    } else {
+        format!(
+            "Claudette could not restore {}. Download the previous release from {}.",
+            report.previous_version, report.download_url
+        )
+    };
+    let mut message = format!(
+        "{} {}\n\nPlease report this at https://github.com/utensils/claudette/issues.",
+        reason, action
+    );
+    if !report.restored {
+        let error = report.error.as_deref().unwrap_or("Unknown rollback error");
+        message.push_str(&format!("\n\nRollback error: {error}"));
+    }
+    message
+}
+
+fn rollback_failure_reason(report: &BootRollbackReport) -> String {
+    let timeout_secs = report.probation_secs.unwrap_or(DEFAULT_PROBATION_SECS);
+    let detail = report
+        .failure_stage
+        .as_ref()
+        .and_then(|stage| stage.detail.as_deref())
+        .filter(|value| !value.is_empty());
+    match report.failure_stage.as_ref().map(|stage| &stage.stage) {
+        None | Some(BootStage::ProcessStarted) | Some(BootStage::WebviewCreated) => format!(
+            "Claudette {} couldn't display its interface within {timeout_secs}s after the update.",
+            report.failed_version
+        ),
+        Some(BootStage::ReactMounted) => format!(
+            "Claudette {} displayed its interface but didn't finish startup within {timeout_secs}s.",
+            report.failed_version
+        ),
+        Some(BootStage::InitialDataLoading) => format!(
+            "Claudette {} took longer than {timeout_secs}s to load your workspaces after the update.",
+            report.failed_version
+        ),
+        Some(BootStage::InitialDataFailed) => {
+            if let Some(detail) = detail {
+                format!(
+                    "Claudette {} couldn't load your workspaces after the update: {detail}.",
+                    report.failed_version
+                )
+            } else {
+                format!(
+                    "Claudette {} couldn't load your workspaces after the update.",
+                    report.failed_version
+                )
+            }
+        }
+    }
+}
+
+fn clean_stage_detail(detail: String) -> Option<String> {
+    let trimmed = detail.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    const MAX_DETAIL_CHARS: usize = 500;
+    Some(trimmed.chars().take(MAX_DETAIL_CHARS).collect())
+}
+
+fn apply_boot_stage(
+    probation: &mut BootProbation,
+    stage: BootStage,
+    detail: Option<String>,
+) -> bool {
+    let should_update = probation
+        .latest_stage
+        .as_ref()
+        .is_none_or(|current| boot_stage_rank(&stage) >= boot_stage_rank(&current.stage));
+    if !should_update {
+        return false;
+    }
+
+    probation.latest_stage = Some(BootStageRecord {
+        stage,
+        detail: detail.and_then(clean_stage_detail),
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+    });
+    true
+}
+
+fn boot_stage_rank(stage: &BootStage) -> u8 {
+    match stage {
+        BootStage::ProcessStarted => 0,
+        BootStage::WebviewCreated => 1,
+        BootStage::ReactMounted => 2,
+        BootStage::InitialDataLoading => 3,
+        BootStage::InitialDataFailed => 4,
+    }
+}
+
+fn collect_log_tail() -> Option<String> {
+    let log_dir = claudette::logging::log_dir()?;
+    let latest = latest_log_file(log_dir)?;
+    read_file_tail(&latest, LOG_TAIL_BYTES).ok()
+}
+
+fn latest_log_file(log_dir: &Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(log_dir).ok()?;
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            if !name.starts_with("claudette.") || !name.ends_with(".log") {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+fn read_file_tail(path: &Path, max_bytes: u64) -> Result<String, std::io::Error> {
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::with_capacity((len - start) as usize);
+    file.read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 fn read_probation_path(path: &Path) -> Result<BootProbation, String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| format!("read boot probation {}: {e}", path.display()))?;
@@ -835,6 +1043,9 @@ mod tests {
             attempts: 0,
             data_dir: data_dir.to_path_buf(),
             created_at: "2026-05-10T00:00:00Z".to_string(),
+            latest_stage: None,
+            probation_secs: None,
+            log_tail: None,
         }
     }
 
@@ -850,13 +1061,13 @@ mod tests {
         assert_eq!(got.status, ProbationStatus::Pending);
     }
 
-    #[tokio::test]
-    async fn acknowledge_clears_sentinel_and_cancels_state() {
+    #[test]
+    fn acknowledge_clears_sentinel_and_cancels_state() {
         let tmp = tempdir().unwrap();
         let state = Arc::new(BootProbationState::default());
         write_probation(tmp.path(), &sample_probation(tmp.path(), None)).unwrap();
 
-        acknowledge_boot(tmp.path(), &state).await.unwrap();
+        acknowledge_boot(tmp.path(), &state).unwrap();
 
         assert!(state.is_acknowledged());
         assert!(!sentinel_path(tmp.path()).exists());
@@ -941,6 +1152,188 @@ mod tests {
         let got = read_probation_path(&sentinel_path(tmp.path())).unwrap();
         assert_eq!(got.status, ProbationStatus::RollbackInProgress);
         assert_eq!(got.attempts, 2);
+    }
+
+    #[test]
+    fn record_boot_stage_persists_latest_progress() {
+        let tmp = tempdir().unwrap();
+        write_probation(tmp.path(), &sample_probation(tmp.path(), None)).unwrap();
+
+        record_boot_stage(tmp.path(), BootStage::ReactMounted, None).unwrap();
+        record_boot_stage(
+            tmp.path(),
+            BootStage::InitialDataFailed,
+            Some("database is locked".to_string()),
+        )
+        .unwrap();
+
+        let got = read_probation_path(&sentinel_path(tmp.path())).unwrap();
+        let stage = got.latest_stage.unwrap();
+        assert_eq!(stage.stage, BootStage::InitialDataFailed);
+        assert_eq!(stage.detail.as_deref(), Some("database is locked"));
+    }
+
+    #[test]
+    fn record_boot_stage_ignores_older_late_arrivals() {
+        let tmp = tempdir().unwrap();
+        write_probation(tmp.path(), &sample_probation(tmp.path(), None)).unwrap();
+
+        record_boot_stage(tmp.path(), BootStage::InitialDataLoading, None).unwrap();
+        record_boot_stage(tmp.path(), BootStage::ReactMounted, None).unwrap();
+
+        let got = read_probation_path(&sentinel_path(tmp.path())).unwrap();
+        assert_eq!(
+            got.latest_stage.as_ref().map(|stage| &stage.stage),
+            Some(&BootStage::InitialDataLoading)
+        );
+    }
+
+    #[test]
+    fn record_boot_stage_reports_noop_when_sentinel_is_absent() {
+        let tmp = tempdir().unwrap();
+
+        let changed = record_boot_stage(tmp.path(), BootStage::ReactMounted, None).unwrap();
+
+        assert!(!changed);
+    }
+
+    #[test]
+    fn apply_boot_stage_does_not_regress_existing_progress() {
+        let tmp = tempdir().unwrap();
+        let mut probation = sample_probation(tmp.path(), None);
+
+        assert!(apply_boot_stage(
+            &mut probation,
+            BootStage::InitialDataLoading,
+            None
+        ));
+        assert!(!apply_boot_stage(
+            &mut probation,
+            BootStage::WebviewCreated,
+            None
+        ));
+
+        assert_eq!(
+            probation.latest_stage.as_ref().map(|stage| &stage.stage),
+            Some(&BootStage::InitialDataLoading)
+        );
+    }
+
+    #[test]
+    fn rollback_report_carries_stage_timeout_and_log_tail() {
+        let tmp = tempdir().unwrap();
+        let mut probation = sample_probation(tmp.path(), None);
+        probation.latest_stage = Some(BootStageRecord {
+            stage: BootStage::InitialDataLoading,
+            detail: None,
+            recorded_at: "2026-05-20T21:22:02Z".to_string(),
+        });
+        probation.probation_secs = Some(42);
+        probation.log_tail = Some("recent updater log".to_string());
+
+        let report = rollback_report_from_probation(&probation, true, None);
+
+        assert_eq!(
+            report.failure_stage.as_ref().map(|stage| &stage.stage),
+            Some(&BootStage::InitialDataLoading)
+        );
+        assert_eq!(report.probation_secs, Some(42));
+        assert_eq!(report.log_tail.as_deref(), Some("recent updater log"));
+    }
+
+    #[test]
+    fn rollback_message_describes_initial_data_failure() {
+        let report = BootRollbackReport {
+            failed_version: "0.25.0".to_string(),
+            previous_version: "0.24.0".to_string(),
+            download_url: "https://example.invalid/download".to_string(),
+            restored: true,
+            error: None,
+            failure_stage: Some(BootStageRecord {
+                stage: BootStage::InitialDataFailed,
+                detail: Some("database is locked".to_string()),
+                recorded_at: "2026-05-20T21:22:02Z".to_string(),
+            }),
+            probation_secs: Some(20),
+            log_tail: None,
+        };
+
+        let message = rollback_report_message(&report);
+
+        assert!(message.contains("couldn't load your workspaces"));
+        assert!(message.contains("database is locked"));
+        assert!(message.contains("Claudette restored 0.24.0"));
+    }
+
+    #[test]
+    fn rollback_message_describes_slow_workspace_load() {
+        let report = BootRollbackReport {
+            failed_version: "0.25.0".to_string(),
+            previous_version: "0.24.0".to_string(),
+            download_url: "https://example.invalid/download".to_string(),
+            restored: true,
+            error: None,
+            failure_stage: Some(BootStageRecord {
+                stage: BootStage::InitialDataLoading,
+                detail: None,
+                recorded_at: "2026-05-20T21:22:02Z".to_string(),
+            }),
+            probation_secs: Some(20),
+            log_tail: None,
+        };
+
+        let message = rollback_report_message(&report);
+
+        assert!(message.contains("took longer than 20s to load your workspaces"));
+        assert!(message.contains("Claudette restored 0.24.0"));
+    }
+
+    #[test]
+    fn rollback_message_keeps_rollback_execution_error_separate() {
+        let report = BootRollbackReport {
+            failed_version: "0.25.0".to_string(),
+            previous_version: "0.24.0".to_string(),
+            download_url: "https://example.invalid/download".to_string(),
+            restored: false,
+            error: Some("backup path is missing".to_string()),
+            failure_stage: Some(BootStageRecord {
+                stage: BootStage::WebviewCreated,
+                detail: None,
+                recorded_at: "2026-05-20T21:22:02Z".to_string(),
+            }),
+            probation_secs: Some(20),
+            log_tail: Some("log tail".to_string()),
+        };
+
+        let message = rollback_report_message(&report);
+
+        assert!(message.contains("couldn't display its interface"));
+        assert!(message.contains("Download the previous release"));
+        assert!(message.contains("Rollback error: backup path is missing"));
+    }
+
+    #[test]
+    fn latest_log_file_filters_claudette_daily_logs() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("claudette.2026-05-20.txt"), "wrong suffix").unwrap();
+        std::fs::write(tmp.path().join("other.2026-05-20.log"), "wrong prefix").unwrap();
+        let expected = tmp.path().join("claudette.2026-05-20.log");
+        std::fs::write(&expected, "daily log").unwrap();
+
+        assert_eq!(
+            latest_log_file(tmp.path()).as_deref(),
+            Some(expected.as_path())
+        );
+    }
+
+    #[test]
+    fn read_file_tail_returns_bounded_suffix() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("claudette.2026-05-20.log");
+        std::fs::write(&path, "0123456789").unwrap();
+
+        assert_eq!(read_file_tail(&path, 4).unwrap(), "6789");
+        assert_eq!(read_file_tail(&path, 64).unwrap(), "0123456789");
     }
 
     /// Regression: macOS `.app` bundles routinely contain framework
@@ -1091,7 +1484,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn is_pid_alive_reports_reaped_child_dead() {
-        let mut child = std::process::Command::new("true")
+        let mut child = claudette::process::std_command("true")
             .spawn()
             .expect("spawn no-op child");
         let pid = child.id();

@@ -103,6 +103,7 @@ export default defineConfig({
           items: [
             { slug: 'features/agent-configuration' },
             { slug: 'features/plan-mode' },
+            { slug: 'features/agent-scheduling' },
             { slug: 'features/slash-commands' },
             { slug: 'features/pinned-prompts' },
             { slug: 'features/authentication' },
@@ -113,8 +114,10 @@ export default defineConfig({
           label: 'Integrations',
           items: [
             { slug: 'features/scm-providers' },
+            { slug: 'features/project-view-issues-prs' },
             { slug: 'features/mcp-servers' },
             { slug: 'features/per-repo-settings' },
+            { slug: 'features/required-inputs' },
             { slug: 'features/claude-remote-control' },
           ],
         },
@@ -122,6 +125,7 @@ export default defineConfig({
           label: 'Remote & CLI',
           items: [
             { slug: 'features/remote-workspaces' },
+            { slug: 'features/mobile-app' },
             { slug: 'features/cli-client' },
           ],
         },

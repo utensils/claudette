@@ -45,7 +45,8 @@ mod team_agents;
 
 use self::background_tasks::{
     BackgroundTaskInputTracker, append_agent_bash_output, apply_task_notification_status,
-    emit_agent_background_task_event, mirror_background_task_output, schedule_background_task_wake,
+    emit_agent_background_task_event, get_or_create_agent_shell_terminal_tab,
+    is_final_terminal_task_status, mirror_background_task_output, schedule_background_task_wake,
     should_defer_persistent_restart, terminal_text,
 };
 use self::team_agents::TeamAgentInputTracker;
@@ -65,18 +66,12 @@ fn remote_control_requested_or_active(status: &ClaudeRemoteControlStatus) -> boo
     !matches!(status.state, ClaudeRemoteControlLifecycle::Disabled)
 }
 
-fn remote_control_should_restore_for_turn(
-    feature_enabled: bool,
-    status: &ClaudeRemoteControlStatus,
-) -> bool {
-    feature_enabled && remote_control_should_survive_local_respawn(status)
+fn remote_control_should_restore_for_turn(status: &ClaudeRemoteControlStatus) -> bool {
+    remote_control_should_survive_local_respawn(status)
 }
 
-fn remote_control_requested_or_active_for_turn(
-    feature_enabled: bool,
-    status: &ClaudeRemoteControlStatus,
-) -> bool {
-    feature_enabled && remote_control_requested_or_active(status)
+fn remote_control_requested_or_active_for_turn(status: &ClaudeRemoteControlStatus) -> bool {
+    remote_control_requested_or_active(status)
 }
 
 fn env_provider_drifted(
@@ -140,6 +135,151 @@ fn queue_control_prompt(
         },
     );
     kind
+}
+
+#[derive(Debug, PartialEq)]
+enum ControlRequestSessionRoute {
+    Interactive { kind: crate::state::AttentionKind },
+    PermissionResponse { response: serde_json::Value },
+}
+
+fn route_control_request_session_state(
+    session: &mut AgentSessionState,
+    request_id: &str,
+    tool_name: &str,
+    tool_use_id: &str,
+    input: &serde_json::Value,
+) -> ControlRequestSessionRoute {
+    if matches!(tool_name, "AskUserQuestion" | "ExitPlanMode")
+        || is_codex_approval_tool_name(tool_name)
+    {
+        let kind = queue_control_prompt(
+            session,
+            request_id.to_string(),
+            tool_name.to_string(),
+            tool_use_id.to_string(),
+            input.clone(),
+        );
+        ControlRequestSessionRoute::Interactive { kind }
+    } else {
+        ControlRequestSessionRoute::PermissionResponse {
+            response: build_permission_response(
+                &session.session_allowed_tools,
+                session.session_plan_mode,
+                session.session_exited_plan,
+                tool_name,
+                input,
+            ),
+        }
+    }
+}
+
+pub(super) async fn route_turn_control_request(
+    app: &AppHandle,
+    workspace_id: &str,
+    chat_session_id: &str,
+    event: &AgentEvent,
+) -> bool {
+    let AgentEvent::Stream(StreamEvent::ControlRequest {
+        request_id,
+        request:
+            ControlRequestInner::CanUseTool {
+                tool_name,
+                tool_use_id,
+                input,
+            },
+    }) = event
+    else {
+        return false;
+    };
+
+    let app_state = app.state::<AppState>();
+    let mut agents = app_state.agents.write().await;
+    let mut permission_response = None;
+    let kind = if let Some(session) = agents.get_mut(chat_session_id) {
+        match route_control_request_session_state(
+            session,
+            request_id,
+            tool_name,
+            tool_use_id,
+            input,
+        ) {
+            ControlRequestSessionRoute::Interactive { kind } => Some(kind),
+            ControlRequestSessionRoute::PermissionResponse { response } => {
+                permission_response = session.persistent_session.clone().map(|ps| (ps, response));
+                None
+            }
+        }
+    } else if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
+        || is_codex_approval_tool_name(tool_name)
+    {
+        Some(control_prompt_attention_kind(tool_name))
+    } else {
+        None
+    };
+    drop(agents);
+
+    if let Some(kind) = kind {
+        let payload = serde_json::json!({
+            "workspace_id": workspace_id,
+            "chat_session_id": chat_session_id,
+            "tool_use_id": tool_use_id,
+            "tool_name": tool_name,
+            "input": input,
+        });
+        let _ = app.emit("agent-permission-prompt", &payload);
+
+        // Fire the system notification after the frontend has the data it
+        // needs to render the card. The task is detached, so it re-checks
+        // that the same request is still pending before notifying.
+        let app_for_notify = app.clone();
+        let ws_id_for_notify = workspace_id.to_string();
+        let session_id_for_notify = chat_session_id.to_string();
+        let tool_use_id_for_notify = tool_use_id.clone();
+        let request_id_for_notify = request_id.clone();
+        let tool_name_for_notify = tool_name.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(ATTENTION_NOTIFY_DELAY_MS)).await;
+
+            let app_state = app_for_notify.state::<AppState>();
+            let should_notify = {
+                let mut agents = app_state.agents.write().await;
+                let Some(session) = agents.get_mut(&session_id_for_notify) else {
+                    return;
+                };
+                if session.attention_notification_sent {
+                    false
+                } else {
+                    let still_pending = session
+                        .pending_permissions
+                        .get(&tool_use_id_for_notify)
+                        .is_some_and(|p| {
+                            p.request_id == request_id_for_notify
+                                && p.tool_name == tool_name_for_notify
+                        });
+                    if still_pending {
+                        session.attention_notification_sent = true;
+                    }
+                    still_pending
+                }
+            };
+
+            if should_notify {
+                crate::tray::notify_attention(&app_for_notify, &ws_id_for_notify, kind);
+            }
+        });
+    } else if let Some((ps, response)) = permission_response
+        && let Err(e) = ps.send_control_response(request_id, response).await
+    {
+        tracing::warn!(
+            target: "claudette::chat",
+            tool_name = %tool_name,
+            error = %e,
+            "failed to respond to control_request"
+        );
+    }
+
+    true
 }
 
 fn auth_failure_message_from_stderr(stderr_lines: &[String]) -> Option<String> {
@@ -335,21 +475,14 @@ fn should_reenable_remote_control_after_turn_result(
 /// next disable→enable cycle. Mirrors `should_defer_persistent_restart`'s
 /// pattern for in-flight background tasks.
 ///
-/// Gated behind the experimental feature flag — when Remote Control is
-/// disabled in settings, behavior matches the pre-feature implementation
-/// regardless of any stale lifecycle state in the agent session.
-fn remote_control_should_defer_drift_teardown_for_turn(
-    feature_enabled: bool,
-    status: &ClaudeRemoteControlStatus,
-) -> bool {
-    feature_enabled
-        && matches!(
-            status.state,
-            ClaudeRemoteControlLifecycle::Enabling
-                | ClaudeRemoteControlLifecycle::Ready
-                | ClaudeRemoteControlLifecycle::Connected
-                | ClaudeRemoteControlLifecycle::Reconnecting
-        )
+fn remote_control_should_defer_drift_teardown_for_turn(status: &ClaudeRemoteControlStatus) -> bool {
+    matches!(
+        status.state,
+        ClaudeRemoteControlLifecycle::Enabling
+            | ClaudeRemoteControlLifecycle::Ready
+            | ClaudeRemoteControlLifecycle::Connected
+            | ClaudeRemoteControlLifecycle::Reconnecting
+    )
 }
 
 fn remote_control_reconnecting_status(
@@ -447,6 +580,17 @@ fn tool_result_content_text(content: &serde_json::Value) -> String {
             .join("\n");
     }
     content.to_string()
+}
+
+fn shell_result_summary(content: &serde_json::Value) -> &'static str {
+    let exit_code = content
+        .get("exitCode")
+        .or_else(|| content.get("exit_code"))
+        .and_then(serde_json::Value::as_i64);
+    match exit_code {
+        Some(0) | None => "Command completed",
+        Some(_) => "Command failed",
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -777,6 +921,29 @@ pub(super) fn ensure_harness_accepts_attachments(
     Ok(())
 }
 
+/// True when this turn should be intercepted as a native compaction
+/// instead of a normal user turn. The Codex app-server and Pi SDK
+/// harnesses both need the intercept — each exposes a `start_compact()`
+/// that swaps in for `send_turn`. Claude Code is excluded: its CLI
+/// handles the literal `/compact` user input natively, so routing it
+/// through `start_compact()` would be wrong.
+///
+/// Routing /compact through `send_chat_message` (and only swapping
+/// `send_turn` for `start_compact` at the very last step) lets us reuse
+/// the full spawn-or-reuse machinery, so /compact works whether or not
+/// an agent process is currently alive — matching the Claude UX.
+pub(super) fn is_native_compact_intent(harness: AgentBackendRuntimeHarness, prompt: &str) -> bool {
+    if prompt.trim() != "/compact" {
+        return false;
+    }
+    match harness {
+        AgentBackendRuntimeHarness::CodexAppServer => true,
+        #[cfg(feature = "pi-sdk")]
+        AgentBackendRuntimeHarness::PiSdk => true,
+        _ => false,
+    }
+}
+
 fn cleanup_failed_steer_persistence(
     db: &Database,
     checkpoint_id: &str,
@@ -1028,6 +1195,20 @@ pub async fn send_chat_message(
         resolved_model = Some(rewritten);
     }
     ensure_harness_accepts_attachments(backend_runtime.harness, &prepared_user_send.cli_atts)?;
+    // Native `/compact` doesn't take attachments — `start_compact()`
+    // ignores them. Reject up-front so attachments never get persisted as
+    // orphan rows under the synthesized `/compact` user message (the body
+    // wouldn't reference them and the compaction RPC has no slot for
+    // them either). The check runs after attachment validation so the
+    // generic shape rules still apply first.
+    if is_native_compact_intent(backend_runtime.harness, &content)
+        && !prepared_user_send.cli_atts.is_empty()
+    {
+        return Err(
+            "/compact does not accept attachments — clear the attachments before invoking it."
+                .to_string(),
+        );
+    }
     persist_user_send(&db, &prepared_user_send)?;
     let user_msg = prepared_user_send.user_msg.clone();
     let image_attachments = prepared_user_send.cli_atts;
@@ -1122,6 +1303,7 @@ pub async fn send_chat_message(
                 mcp_bridge: None,
                 last_user_msg_id: None,
                 posted_env_trust_warning: false,
+                pending_history_prelude: None,
             };
         }
 
@@ -1154,6 +1336,7 @@ pub async fn send_chat_message(
             mcp_bridge: None,
             last_user_msg_id: None,
             posted_env_trust_warning: false,
+            pending_history_prelude: None,
         }
     });
     if session.turn_count == 0 {
@@ -1209,17 +1392,10 @@ pub async fn send_chat_message(
     // for any agent-authored attachments produced during this turn (see
     // `agent_mcp_sink::ChatBridgeSink`).
     session.last_user_msg_id = Some(user_msg.id.clone());
-    let remote_control_feature_enabled =
-        super::remote_control::remote_control_feature_enabled_for_db_path(&state.db_path)
-            .unwrap_or(false);
-    let restore_remote_control_after_respawn = remote_control_should_restore_for_turn(
-        remote_control_feature_enabled,
-        &session.claude_remote_control,
-    );
-    let remote_control_active_for_turn = remote_control_requested_or_active_for_turn(
-        remote_control_feature_enabled,
-        &session.claude_remote_control,
-    );
+    let restore_remote_control_after_respawn =
+        remote_control_should_restore_for_turn(&session.claude_remote_control);
+    let remote_control_active_for_turn =
+        remote_control_requested_or_active_for_turn(&session.claude_remote_control);
 
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
@@ -1239,10 +1415,7 @@ pub async fn send_chat_message(
             "MCP config dirty — deferring persistent session restart"
         );
     } else if session.mcp_config_dirty
-        && remote_control_should_defer_drift_teardown_for_turn(
-            remote_control_feature_enabled,
-            &session.claude_remote_control,
-        )
+        && remote_control_should_defer_drift_teardown_for_turn(&session.claude_remote_control)
     {
         tracing::info!(
             target: "claudette::chat",
@@ -1393,7 +1566,7 @@ pub async fn send_chat_message(
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
         team_agent_session_tabs_enabled: team_agent_tabs_enabled,
-        backend_runtime,
+        backend_runtime: backend_runtime.clone(),
         hook_bridge: None,
         extra_claude_flags,
     };
@@ -1451,10 +1624,8 @@ pub async fn send_chat_message(
             reason = "background_tasks_running",
             "session flags drifted — deferring persistent session restart"
         );
-    } else if remote_control_should_defer_drift_teardown_for_turn(
-        remote_control_feature_enabled,
-        &session.claude_remote_control,
-    ) && session.persistent_session.is_some()
+    } else if remote_control_should_defer_drift_teardown_for_turn(&session.claude_remote_control)
+        && session.persistent_session.is_some()
         && persistent_session_flags_drifted(
             SessionFlags {
                 plan_mode: session.session_plan_mode,
@@ -1549,12 +1720,48 @@ pub async fn send_chat_message(
     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
 
     // Expand @-file mentions into inline file content for the agent prompt.
-    let prompt = claudette::file_expand::expand_file_mentions(
+    let expanded_user_content = claudette::file_expand::expand_file_mentions(
         std::path::Path::new(&worktree_path),
         &content,
         mentioned_files.as_deref().unwrap_or(&[]),
     )
     .await;
+
+    // Cross-harness migration: if `prepare_cross_harness_migration` queued
+    // a prelude on this session, prepend the prior-conversation transcript
+    // to the user's content before it reaches the harness. The persisted
+    // `chat_messages` row stays as the bare user input (set up further
+    // above via `prepare_user_send`), so the UI doesn't show the prelude
+    // text — only the agent does. The prelude is consumed once per
+    // migration: after this turn the new harness has the full prior
+    // context in its native turn-1 input and subsequent turns flow
+    // through unchanged.
+    // Detect `/compact` against a native-compaction harness from the
+    // raw `content` (the slash command the user typed) — **before** the
+    // cross-harness migration prelude is merged below. A queued prelude
+    // would make `prompt` look like `"{prelude…}\n/compact"`, defeating
+    // the literal-string check in `is_native_compact_intent` and routing
+    // the compact intent as a regular user turn (reintroducing the
+    // original agent-narrates-/compact bug).
+    let is_native_compact = is_native_compact_intent(backend_runtime.harness, &content);
+
+    let prompt = if is_native_compact {
+        // Don't consume a pending cross-harness migration prelude for a
+        // compaction action — there's no model-visible prompt for
+        // `start_compact()` to attach the prelude to. Leave the prelude
+        // queued so the next *real* user turn picks it up. Compaction
+        // operates on the existing thread state, which already contains
+        // the prelude's intent.
+        expanded_user_content
+    } else {
+        match session.pending_history_prelude.take() {
+            Some(prelude) => claudette::agent::history_seeder::merge_prelude_with_user_message(
+                &prelude,
+                &expanded_user_content,
+            ),
+            None => expanded_user_content,
+        }
+    };
 
     let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or("");
     let default_branch = match repo.as_ref().and_then(|r| r.base_branch.as_deref()) {
@@ -1591,7 +1798,7 @@ pub async fn send_chat_message(
         let registry = state.plugins_snapshot().await;
         let (progress, output) =
             crate::commands::env::make_env_sinks(app.clone(), ws_info_for_env.id.clone());
-        claudette::env_provider::resolve_with_registry_streaming(
+        let mut resolved = claudette::env_provider::resolve_with_registry_streaming(
             &registry,
             &state.env_cache,
             std::path::Path::new(&worktree_path),
@@ -1600,7 +1807,14 @@ pub async fn send_chat_message(
             Some(&progress),
             Some(output),
         )
-        .await
+        .await;
+        // Layer the workspace's declared input values over the env-provider
+        // stack — the agent CLI subprocess sees them as plain env vars,
+        // and the drift check below treats them like any other source.
+        if let Ok(db) = Database::open(&state.db_path) {
+            crate::commands::env::merge_workspace_input_env(&db, &ws.id, &mut resolved);
+        }
+        resolved
     };
     crate::commands::env::register_resolved_with_watcher(
         &state,
@@ -1623,10 +1837,8 @@ pub async fn send_chat_message(
             workspace_id = %workspace_id,
             "env-provider output changed but background tasks are running — deferring persistent session restart"
         );
-    } else if remote_control_should_defer_drift_teardown_for_turn(
-        remote_control_feature_enabled,
-        &session.claude_remote_control,
-    ) && session.persistent_session.is_some()
+    } else if remote_control_should_defer_drift_teardown_for_turn(&session.claude_remote_control)
+        && session.persistent_session.is_some()
         && env_drifted
     {
         // Env-provider output can drift spuriously between turns when the
@@ -1748,6 +1960,12 @@ pub async fn send_chat_message(
     let ws_env_for_persistent = ws_env.clone();
     let resolved_env_for_persistent = resolved_env.clone();
     let codex_permission_level_for_persistent = codex_permission_level;
+    // Pre-cloned for the Codex rate-limit subscriber task spawned
+    // inside the persistent-session closure. The closure may be
+    // invoked more than once (initial try + resume fallback), so we
+    // can't move `app` into it directly — clone here, re-clone per
+    // invocation, then re-clone again for the spawned task.
+    let app_for_persistent = app.clone();
     #[cfg(feature = "pi-sdk")]
     let pi_sessions_root = super::pi_sessions_root(&state.db_path);
     #[cfg(feature = "pi-sdk")]
@@ -1762,6 +1980,7 @@ pub async fn send_chat_message(
                                  settings: AgentSettings| {
         let env = ws_env_for_persistent.clone();
         let resolved = resolved_env_for_persistent.clone();
+        let app_handle_for_this_call = app_for_persistent.clone();
         #[cfg(feature = "pi-sdk")]
         let pi_sessions_root = pi_sessions_root.clone();
         #[cfg(feature = "pi-sdk")]
@@ -1801,6 +2020,7 @@ pub async fn send_chat_message(
                         CodexAppServerOptions {
                             model: settings.model.clone(),
                             permission_level: codex_permission_level_for_persistent,
+                            plan_mode: settings.plan_mode,
                             fast_mode: settings.fast_mode,
                             reasoning_effort: settings.effort.clone(),
                             resume_thread_id: is_resume.then(|| sid.clone()),
@@ -1811,6 +2031,60 @@ pub async fn send_chat_message(
                         },
                     )
                     .await?;
+                    // Drain Codex's `account/rateLimits/updated` pushes
+                    // (and the one-shot seed we fire below) into
+                    // `AppState.codex_rate_limits` so the composer
+                    // usage meter shows live quota data instead of
+                    // local-aggregate token totals. The task ends
+                    // when the session is dropped — the broadcast
+                    // sender goes away and `recv()` returns Closed.
+                    //
+                    // `seed_rate_limits` is fired AFTER subscribing
+                    // so the seed value is captured by this
+                    // receiver. `start_with_options` no longer seeds
+                    // implicitly (the value would be dropped before
+                    // any subscriber existed).
+                    let mut rate_limits_rx = started.subscribe_rate_limits();
+                    started.seed_rate_limits().await;
+                    let app_handle = app_handle_for_this_call.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            match rate_limits_rx.recv().await {
+                                Ok(snapshot) => {
+                                    if let Some(state) = app_handle.try_state::<AppState>() {
+                                        *state.codex_rate_limits.write().await =
+                                            Some(snapshot.clone());
+                                        // Mirror to SQLite so the next app launch
+                                        // can render the meter instantly on Codex
+                                        // model selection, without waiting for a
+                                        // chat turn. Best-effort: log and continue.
+                                        let db_path = state.db_path.clone();
+                                        tokio::task::spawn_blocking(move || {
+                                            if let Err(err) = claudette::db::Database::open(
+                                                &db_path,
+                                            )
+                                            .and_then(|db| db.save_codex_rate_limits(&snapshot))
+                                            {
+                                                tracing::warn!(
+                                                    target: "claudette::usage",
+                                                    error = %err,
+                                                    "failed to persist Codex rate-limits snapshot",
+                                                );
+                                            }
+                                        });
+                                    }
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                    // Skipped some intermediate snapshots — fine,
+                                    // we only care about the latest value.
+                                    continue;
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    break;
+                                }
+                            }
+                        }
+                    });
                     Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_codex_app_server(
                         started,
                     )))
@@ -1841,6 +2115,8 @@ pub async fn send_chat_message(
                                 .backend_runtime
                                 .pi_provider_override
                                 .clone(),
+                            pi_provider_env:
+                                crate::commands::agent_backends::pi_auth::pi_local_secret_env()?,
                         },
                     )
                     .await?;
@@ -1859,10 +2135,13 @@ pub async fn send_chat_message(
         let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
         session.active_pid = Some(reuse_pid);
         session.remember_local_user_message_uuid(local_user_message_uuid.clone());
-        match ps
-            .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
-            .await
-        {
+        let turn_result = if is_native_compact {
+            ps.start_compact().await
+        } else {
+            ps.send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+                .await
+        };
+        match turn_result {
             Ok(handle) => handle,
             Err(e) => {
                 // Persistent session died — drop lock before async spawn to
@@ -2024,9 +2303,12 @@ pub async fn send_chat_message(
                     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                     session.remember_local_user_message_uuid(local_user_message_uuid.clone());
                 }
-                let handle = ps
-                    .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
-                    .await?;
+                let handle = if is_native_compact {
+                    ps.start_compact().await?
+                } else {
+                    ps.send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+                        .await?
+                };
 
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
@@ -2182,9 +2464,12 @@ pub async fn send_chat_message(
             let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
             session.remember_local_user_message_uuid(local_user_message_uuid.clone());
         }
-        let handle = ps
-            .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
-            .await?;
+        let handle = if is_native_compact {
+            ps.start_compact().await?
+        } else {
+            ps.send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+                .await?
+        };
 
         agents = state.agents.write().await;
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
@@ -2466,6 +2751,14 @@ pub async fn send_chat_message(
                     output_file.as_deref(),
                 )
                 .await;
+                if status == "running" && tool_use_id.as_deref() == Some(task_id.as_str()) {
+                    background_task_inputs.mark_bash_tool_started(task_id);
+                }
+                if is_final_terminal_task_status(status)
+                    && tool_use_id.as_deref() == Some(task_id.as_str())
+                {
+                    background_task_inputs.finish_bash_tool_result(task_id);
+                }
             }
 
             background_task_inputs.observe_bash_input_delta(&event);
@@ -2513,133 +2806,7 @@ pub async fn send_chat_message(
             //      without this branch "full" users see spurious denials.
             //   3. Otherwise — deny with a message that names the escalation
             //      path (the model paraphrases this to the user).
-            if let AgentEvent::Stream(StreamEvent::ControlRequest {
-                request_id,
-                request:
-                    ControlRequestInner::CanUseTool {
-                        tool_name,
-                        tool_use_id,
-                        input,
-                    },
-            }) = &event
-            {
-                if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
-                    || is_codex_approval_tool_name(tool_name)
-                {
-                    let app_state = app.state::<AppState>();
-                    let mut agents = app_state.agents.write().await;
-                    let kind = if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                        queue_control_prompt(
-                            session,
-                            request_id.clone(),
-                            tool_name.clone(),
-                            tool_use_id.clone(),
-                            input.clone(),
-                        )
-                    } else {
-                        control_prompt_attention_kind(tool_name)
-                    };
-                    drop(agents);
-                    let payload = serde_json::json!({
-                        "workspace_id": &ws_id,
-                        "chat_session_id": &chat_session_id_for_stream,
-                        "tool_use_id": tool_use_id,
-                        "tool_name": tool_name,
-                        "input": input,
-                    });
-                    let _ = app.emit("agent-permission-prompt", &payload);
-
-                    // Fire the system notification after the frontend has the
-                    // data it needs to render the card. We emit
-                    // `agent-permission-prompt` synchronously above; the
-                    // short sleep gives the webview time to pick up the event
-                    // and paint before the notification sound/banner arrives.
-                    // Tied to ControlRequest (not the earlier ContentBlockStart)
-                    // because the card is driven by this event, not the
-                    // streaming tool_use block.
-                    //
-                    // The task is detached, so it must defend against state
-                    // changes during the sleep:
-                    //   - If the user already responded (or the session was
-                    //     stopped/cleared), the matching pending_permission is
-                    //     gone and a notification would be misleading.
-                    //   - If a different pending prompt in the same cycle has
-                    //     already triggered the notification, dedupe via
-                    //     `attention_notification_sent`.
-                    let app_for_notify = app.clone();
-                    let ws_id_for_notify = ws_id.clone();
-                    let session_id_for_notify = chat_session_id_for_stream.clone();
-                    let tool_use_id_for_notify = tool_use_id.clone();
-                    let request_id_for_notify = request_id.clone();
-                    let tool_name_for_notify = tool_name.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            ATTENTION_NOTIFY_DELAY_MS,
-                        ))
-                        .await;
-
-                        let app_state = app_for_notify.state::<AppState>();
-                        let should_notify = {
-                            let mut agents = app_state.agents.write().await;
-                            let Some(session) = agents.get_mut(&session_id_for_notify) else {
-                                return;
-                            };
-                            if session.attention_notification_sent {
-                                false
-                            } else {
-                                let still_pending = session
-                                    .pending_permissions
-                                    .get(&tool_use_id_for_notify)
-                                    .is_some_and(|p| {
-                                        p.request_id == request_id_for_notify
-                                            && p.tool_name == tool_name_for_notify
-                                    });
-                                if still_pending {
-                                    session.attention_notification_sent = true;
-                                }
-                                still_pending
-                            }
-                        };
-
-                        if should_notify {
-                            crate::tray::notify_attention(&app_for_notify, &ws_id_for_notify, kind);
-                        }
-                    });
-                } else {
-                    let app_state = app.state::<AppState>();
-                    let agents = app_state.agents.read().await;
-                    let (ps, session_allowed_tools, session_plan_mode, session_exited_plan) =
-                        agents
-                            .get(&chat_session_id_for_stream)
-                            .map(|s| {
-                                (
-                                    s.persistent_session.clone(),
-                                    s.session_allowed_tools.clone(),
-                                    s.session_plan_mode,
-                                    s.session_exited_plan,
-                                )
-                            })
-                            .unwrap_or_else(|| (None, Vec::new(), false, false));
-                    drop(agents);
-                    if let Some(ps) = ps {
-                        let response = build_permission_response(
-                            &session_allowed_tools,
-                            session_plan_mode,
-                            session_exited_plan,
-                            tool_name,
-                            input,
-                        );
-                        if let Err(e) = ps.send_control_response(request_id, response).await {
-                            tracing::warn!(
-                                target: "claudette::chat",
-                                tool_name = %tool_name,
-                                error = %e,
-                                "failed to respond to control_request"
-                            );
-                        }
-                    }
-                }
-            }
+            route_turn_control_request(&app, &ws_id, &chat_session_id_for_stream, &event).await;
 
             // Detect tool calls that require user input (question, plan approval).
             // The tray state flip happens here (on ContentBlockStart) so the
@@ -2678,7 +2845,7 @@ pub async fn send_chat_message(
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event:
                     InnerStreamEvent::ContentBlockStart {
-                        content_block: Some(StartContentBlock::ToolUse { id, name }),
+                        content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
                         ..
                     },
             }) = &event
@@ -2720,7 +2887,21 @@ pub async fn send_chat_message(
                 let _ = db.insert_chat_message(&msg);
             }
 
-            if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event {
+            if let AgentEvent::Stream(StreamEvent::User {
+                message, is_replay, ..
+            }) = &event
+            {
+                // On replay (CLI's `--replay-user-messages` echo of stdin and
+                // anything the CLI re-emits from a resumed transcript) every
+                // ToolResult that already landed on disk would be re-appended
+                // to the workspace `terminal.output` and trigger another
+                // mirror spawn for any background-task binding. That is the
+                // O(n²) growth path documented in issue #937 — the
+                // workspace's terminal.output file reached 15.6 GB and the
+                // process held ~46 GB RSS before the OOM. Skip the side
+                // effects on replay; the original event already produced
+                // them and the persisted file already has the content.
+                let is_replay = *is_replay;
                 match &message.content {
                     claudette::agent::UserMessageContent::Blocks(blocks) => {
                         for block in blocks {
@@ -2731,6 +2912,10 @@ pub async fn send_chat_message(
                                 } => {
                                     let text = tool_result_content_text(content);
                                     let background_binding = parse_background_task_binding(&text);
+                                    let is_known_bash_tool_result =
+                                        background_task_inputs.is_bash_tool_result(tool_use_id);
+                                    let is_active_bash_tool_result =
+                                        background_task_inputs.is_bash_tool_active(tool_use_id);
                                     let is_trusted_background_binding =
                                         if background_binding.is_some() {
                                             let app_state = app.state::<AppState>();
@@ -2747,6 +2932,7 @@ pub async fn send_chat_message(
                                         };
                                     if let Some(binding) = background_binding
                                         && is_trusted_background_binding
+                                        && !is_replay
                                     {
                                         {
                                             let app_state = app.state::<AppState>();
@@ -2764,8 +2950,13 @@ pub async fn send_chat_message(
                                                     binding.task_id.clone(),
                                                     binding.output_path.clone(),
                                                 );
+                                                session.background_task_output_paths.insert(
+                                                    tool_use_id.clone(),
+                                                    binding.output_path.clone(),
+                                                );
                                             }
                                         }
+                                        background_task_inputs.finish_bash_tool_result(tool_use_id);
                                         let aggregate_path =
                                             claudette::agent::background::workspace_terminal_output_path(&ws_id);
                                         mirror_background_task_output(
@@ -2791,17 +2982,15 @@ pub async fn send_chat_message(
                                                 );
                                             }
                                         }
-                                    } else {
+                                    } else if is_known_bash_tool_result && !is_replay {
                                         let path =
                                             claudette::agent::background::workspace_terminal_output_path(&ws_id);
-                                        let text = terminal_text(&text);
-                                        let suffix =
-                                            if text.ends_with("\r\n") { "" } else { "\r\n" };
-                                        if let Err(err) = append_agent_bash_output(
-                                            &path,
-                                            &format!("{text}{suffix}"),
-                                        )
-                                        .await
+                                        let mut bytes = terminal_text(&text).into_bytes();
+                                        if !bytes.ends_with(b"\r\n") {
+                                            bytes.extend_from_slice(b"\r\n");
+                                        }
+                                        if let Err(err) =
+                                            append_agent_bash_output(path, bytes).await
                                         {
                                             tracing::warn!(
                                                 target: "claudette::chat",
@@ -2810,11 +2999,26 @@ pub async fn send_chat_message(
                                             );
                                         }
                                         if let Ok(db) = Database::open(&db_path) {
+                                            let status = if is_active_bash_tool_result {
+                                                "running"
+                                            } else {
+                                                "completed"
+                                            };
+                                            let summary = if is_active_bash_tool_result {
+                                                None
+                                            } else {
+                                                Some(shell_result_summary(content))
+                                            };
+                                            let _ = get_or_create_agent_shell_terminal_tab(
+                                                &db_path,
+                                                &ws_id,
+                                                &chat_session_id_for_stream,
+                                            );
                                             let _ = db.update_agent_shell_terminal_tab_status(
                                                 &chat_session_id_for_stream,
                                                 None,
-                                                "completed",
-                                                Some("Command completed"),
+                                                status,
+                                                summary,
                                             );
                                             if let Ok(Some(tab)) = db.get_agent_shell_terminal_tab(
                                                 &chat_session_id_for_stream,
@@ -2827,6 +3031,10 @@ pub async fn send_chat_message(
                                                     tab,
                                                 );
                                             }
+                                        }
+                                        if !is_active_bash_tool_result {
+                                            background_task_inputs
+                                                .finish_bash_tool_result(tool_use_id);
                                         }
                                     }
                                 }
@@ -3205,14 +3413,15 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        auth_failure_message_from_assistant_text, auth_failure_message_from_stderr,
-        ensure_harness_accepts_attachments, env_provider_drifted_parts, has_env_trust_warning,
-        pi_attachment_unsupported_message, queue_control_prompt,
-        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
+        ControlRequestSessionRoute, auth_failure_message_from_assistant_text,
+        auth_failure_message_from_stderr, ensure_harness_accepts_attachments,
+        env_provider_drifted_parts, has_env_trust_warning, pi_attachment_unsupported_message,
+        queue_control_prompt, remote_control_requested_or_active,
+        remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
-        should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
-        should_run_auto_naming,
+        route_control_request_session_state, should_reenable_remote_control_after_turn_result,
+        should_resume_persistent_session, should_run_auto_naming,
     };
     use crate::state::{
         AgentSessionState, AttentionKind, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
@@ -3269,6 +3478,7 @@ mod tests {
             mcp_bridge: None,
             last_user_msg_id: None,
             posted_env_trust_warning: false,
+            pending_history_prelude: None,
         }
     }
 
@@ -3311,6 +3521,81 @@ mod tests {
         assert_eq!(session.attention_kind, Some(AttentionKind::Plan));
         assert!(session.session_exited_plan);
         assert!(session.pending_permissions.contains_key("tool-2"));
+    }
+
+    #[test]
+    fn control_request_route_queues_interactive_prompt() {
+        let mut session = test_agent_session_state();
+
+        let route = route_control_request_session_state(
+            &mut session,
+            "request-3",
+            "AskUserQuestion",
+            "tool-3",
+            &serde_json::json!({"question": "Ship it?"}),
+        );
+
+        assert_eq!(
+            route,
+            ControlRequestSessionRoute::Interactive {
+                kind: AttentionKind::Ask
+            }
+        );
+        assert!(session.needs_attention);
+        assert_eq!(session.attention_kind, Some(AttentionKind::Ask));
+        let pending = session.pending_permissions.get("tool-3").unwrap();
+        assert_eq!(pending.request_id, "request-3");
+        assert_eq!(pending.tool_name, "AskUserQuestion");
+        assert_eq!(pending.original_input["question"], "Ship it?");
+    }
+
+    #[test]
+    fn control_request_route_allows_non_interactive_tool_in_bypass_mode() {
+        let mut session = test_agent_session_state();
+        session.session_allowed_tools = vec!["*".to_string()];
+
+        let route = route_control_request_session_state(
+            &mut session,
+            "request-4",
+            "Write",
+            "tool-4",
+            &serde_json::json!({"file_path": "README.md"}),
+        );
+
+        let ControlRequestSessionRoute::PermissionResponse { response } = route else {
+            panic!("expected permission response");
+        };
+        assert_eq!(response["behavior"], "allow");
+        assert_eq!(response["updatedInput"]["file_path"], "README.md");
+        assert!(session.pending_permissions.is_empty());
+        assert!(!session.needs_attention);
+    }
+
+    #[test]
+    fn control_request_route_denies_non_interactive_tool_during_plan_mode() {
+        let mut session = test_agent_session_state();
+        session.session_allowed_tools = vec!["*".to_string()];
+        session.session_plan_mode = true;
+
+        let route = route_control_request_session_state(
+            &mut session,
+            "request-5",
+            "Write",
+            "tool-5",
+            &serde_json::json!({"file_path": "README.md"}),
+        );
+
+        let ControlRequestSessionRoute::PermissionResponse { response } = route else {
+            panic!("expected permission response");
+        };
+        assert_eq!(response["behavior"], "deny");
+        assert!(
+            response["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("Write isn't enabled"))
+        );
+        assert!(session.pending_permissions.is_empty());
+        assert!(!session.needs_attention);
     }
 
     #[test]
@@ -3474,7 +3759,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_feature_flag_disables_turn_restore_and_active_state() {
+    fn remote_control_turn_restore_and_active_state_track_lifecycle() {
         let status = ClaudeRemoteControlStatus {
             state: ClaudeRemoteControlLifecycle::Connected,
             session_url: None,
@@ -3484,10 +3769,8 @@ mod tests {
             last_error: None,
         };
 
-        assert!(remote_control_should_restore_for_turn(true, &status));
-        assert!(remote_control_requested_or_active_for_turn(true, &status));
-        assert!(!remote_control_should_restore_for_turn(false, &status));
-        assert!(!remote_control_requested_or_active_for_turn(false, &status));
+        assert!(remote_control_should_restore_for_turn(&status));
+        assert!(remote_control_requested_or_active_for_turn(&status));
     }
 
     #[test]
@@ -3523,7 +3806,7 @@ mod tests {
             42,
             true,
         ));
-        // Restore disabled (e.g. feature flag off): no re-enable.
+        // Restore disabled: no re-enable.
         assert!(!should_reenable_remote_control_after_turn_result(
             false,
             &status,
@@ -3671,11 +3954,11 @@ mod tests {
 
         // Disabled / Error: drift teardowns proceed normally.
         assert!(!remote_control_should_defer_drift_teardown_for_turn(
-            true, &status
+            &status
         ));
         status.state = ClaudeRemoteControlLifecycle::Error;
         assert!(!remote_control_should_defer_drift_teardown_for_turn(
-            true, &status
+            &status
         ));
 
         // Live states: defer drift teardowns to keep bridge identity stable.
@@ -3687,16 +3970,14 @@ mod tests {
         ] {
             status.state = state;
             assert!(
-                remote_control_should_defer_drift_teardown_for_turn(true, &status),
+                remote_control_should_defer_drift_teardown_for_turn(&status),
                 "expected defer for state {state:?}"
             );
         }
     }
 
     #[test]
-    fn remote_control_drift_teardown_deferral_respects_feature_flag() {
-        // Feature flag off: never defer drift teardowns, even if a stale
-        // session lifecycle state somehow lingered after the flag flipped.
+    fn remote_control_drift_teardown_defers_for_connected_state() {
         let status = ClaudeRemoteControlStatus {
             state: ClaudeRemoteControlLifecycle::Connected,
             session_url: Some("https://claude.ai/code/sess-1".to_string()),
@@ -3705,12 +3986,7 @@ mod tests {
             detail: None,
             last_error: None,
         };
-        assert!(!remote_control_should_defer_drift_teardown_for_turn(
-            false, &status
-        ));
-        assert!(remote_control_should_defer_drift_teardown_for_turn(
-            true, &status
-        ));
+        assert!(remote_control_should_defer_drift_teardown_for_turn(&status));
     }
 
     fn dummy_attachment() -> FileAttachment {
@@ -3769,5 +4045,55 @@ mod tests {
             ensure_harness_accepts_attachments(AgentBackendRuntimeHarness::CodexAppServer, &atts)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn native_compact_intent_detects_literal_slash_compact() {
+        // The send pipeline checks this exactly: a native-compaction
+        // harness AND the prompt (post @-mention expansion) is literally
+        // "/compact". Anything else — whitespace around it is fine, but
+        // adding an argument like "/compact foo" is NOT a compact intent
+        // and must continue down the normal send_turn path.
+        assert!(super::is_native_compact_intent(
+            AgentBackendRuntimeHarness::CodexAppServer,
+            "/compact",
+        ));
+        assert!(super::is_native_compact_intent(
+            AgentBackendRuntimeHarness::CodexAppServer,
+            "  /compact  \n",
+        ));
+        assert!(!super::is_native_compact_intent(
+            AgentBackendRuntimeHarness::CodexAppServer,
+            "/compact please",
+        ));
+        assert!(!super::is_native_compact_intent(
+            AgentBackendRuntimeHarness::CodexAppServer,
+            "tell me about compaction",
+        ));
+    }
+
+    /// Pi exposes a native `start_compact()` too, so `/compact` against
+    /// the Pi SDK harness must be intercepted exactly like Codex.
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn native_compact_intent_detects_pi_harness() {
+        assert!(super::is_native_compact_intent(
+            AgentBackendRuntimeHarness::PiSdk,
+            "/compact",
+        ));
+        assert!(!super::is_native_compact_intent(
+            AgentBackendRuntimeHarness::PiSdk,
+            "/compact focus on the bug",
+        ));
+    }
+
+    #[test]
+    fn native_compact_intent_excludes_claude_code() {
+        // Claude Code interprets the literal `/compact` natively; we
+        // must NOT swap in start_compact for it.
+        assert!(!super::is_native_compact_intent(
+            AgentBackendRuntimeHarness::ClaudeCode,
+            "/compact",
+        ));
     }
 }

@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { SettingsSidebar } from "./SettingsSidebar";
+import { BoundedScrollPane } from "../shared/BoundedScrollPane";
 import styles from "./Settings.module.css";
 
 // Each section is split into its own chunk so cold start doesn't pay for
@@ -22,6 +23,9 @@ const AppearanceSettings = lazy(() =>
 const NotificationsSettings = lazy(() =>
   import("./sections/NotificationsSettings").then((m) => ({ default: m.NotificationsSettings })),
 );
+const AutomationSettings = lazy(() =>
+  import("./sections/AutomationSettings").then((m) => ({ default: m.AutomationSettings })),
+);
 const EditorSettings = lazy(() =>
   import("./sections/EditorSettings").then((m) => ({ default: m.EditorSettings })),
 );
@@ -32,6 +36,9 @@ const EnvironmentSettings = lazy(() =>
 );
 const DiagnosticsSettings = lazy(() =>
   import("./sections/DiagnosticsSettings").then((m) => ({ default: m.DiagnosticsSettings })),
+);
+const StorageSettings = lazy(() =>
+  import("./sections/StorageSettings").then((m) => ({ default: m.StorageSettings })),
 );
 const GitSettings = lazy(() =>
   import("./sections/GitSettings").then((m) => ({ default: m.GitSettings })),
@@ -83,19 +90,17 @@ const ClaudeFlagsSettings = lazy(() =>
 );
 
 function SectionContent({ section }: { section: string | null }) {
-  const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
-  const communityRegistryEnabled = useAppStore(
-    (s) => s.communityRegistryEnabled,
-  );
   if (!section || section === "general") return <GeneralSettings />;
   if (section === "apps") return <AppsSettings />;
   if (section === "models") return <ModelSettings />;
   if (section === "usage") return <UsageSettings />;
   if (section === "appearance") return <AppearanceSettings />;
   if (section === "notifications") return <NotificationsSettings />;
+  if (section === "automation") return <AutomationSettings />;
   if (section === "editor") return <EditorSettings />;
   if (section === "environment") return <EnvironmentSettings />;
   if (section === "diagnostics") return <DiagnosticsSettings />;
+  if (section === "storage") return <StorageSettings />;
   if (section === "git") return <GitSettings />;
   if (section === "keyboard") return <KeyboardSettings />;
   if (section === "cli") return <CliSettings />;
@@ -104,20 +109,8 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "help") return <HelpSettings />;
   if (section === "pinned-prompts") return <PinnedPromptsSettings />;
   if (section === "plugins") return <PluginsSettings />;
-  if (section === "claude-code-plugins") {
-    return pluginManagementEnabled ? (
-      <ClaudeCodePluginsSettings />
-    ) : (
-      <ExperimentalSettings />
-    );
-  }
-  if (section === "community") {
-    return communityRegistryEnabled ? (
-      <CommunitySettings />
-    ) : (
-      <ExperimentalSettings />
-    );
-  }
+  if (section === "claude-code-plugins") return <ClaudeCodePluginsSettings />;
+  if (section === "community") return <CommunitySettings />;
   if (section === "experimental") return <ExperimentalSettings />;
   if (section.startsWith("repo:"))
     return <RepoSettings repoId={section.slice(5)} />;
@@ -134,7 +127,7 @@ export function SettingsPage() {
       <div className={styles.dragRegion} data-tauri-drag-region />
       <SettingsSidebar />
       <div className={styles.contentArea}>
-        <div className={styles.content}>
+        <BoundedScrollPane className={styles.content}>
           <Suspense
             fallback={
               <div
@@ -149,7 +142,7 @@ export function SettingsPage() {
           >
             <SectionContent section={settingsSection} />
           </Suspense>
-        </div>
+        </BoundedScrollPane>
         <div className={styles.attributionBar}>{t("attribution")}</div>
       </div>
     </div>

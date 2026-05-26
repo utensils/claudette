@@ -15,6 +15,11 @@ pub enum NativeKind {
     SettingsRoute,
     /// Expands into seeded prompt text that then flows through the agent pipeline.
     PromptExpansion,
+    /// Dispatched per backend — the frontend resolves the active harness and
+    /// either short-circuits locally (e.g. Pi has no native compaction) or
+    /// falls through to the normal send pipeline with the literal slash text
+    /// for the harness to intercept (Claude CLI, Codex app-server).
+    HarnessAction,
 }
 
 /// A discovered slash command or skill.
@@ -54,28 +59,27 @@ impl SlashCommand {
 /// Each entry is fully described here (canonical name, aliases, argument hint, kind).
 /// The matching frontend `NATIVE_HANDLERS` table binds handler functions to these
 /// canonical names.
-pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashCommand> {
-    let mut commands = Vec::new();
-    if plugin_management_enabled {
-        commands.push(SlashCommand {
+pub fn native_command_registry() -> Vec<SlashCommand> {
+    let mut commands = vec![
+        SlashCommand {
             name: "plugin".to_string(),
-            description: "Browse and manage plugins in settings".to_string(),
+            description: "Browse and manage Claude Code plugins in settings".to_string(),
             source: "builtin".to_string(),
             aliases: vec!["plugins".to_string()],
             argument_hint: Some(
                 "[install|enable|disable|uninstall|update|manage|browse|marketplace …]".to_string(),
             ),
             kind: Some(NativeKind::SettingsRoute),
-        });
-        commands.push(SlashCommand {
+        },
+        SlashCommand {
             name: "marketplace".to_string(),
-            description: "Manage plugin marketplaces in settings".to_string(),
+            description: "Manage Claude Code plugin marketplaces in settings".to_string(),
             source: "builtin".to_string(),
             aliases: Vec::new(),
             argument_hint: Some("[add|remove|update] <source>".to_string()),
             kind: Some(NativeKind::SettingsRoute),
-        });
-    }
+        },
+    ];
     commands.push(SlashCommand {
         name: "review".to_string(),
         description: "Seed a code review of the current branch against its base".to_string(),
@@ -164,7 +168,7 @@ pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashComm
         source: "builtin".to_string(),
         aliases: Vec::new(),
         argument_hint: None,
-        kind: Some(NativeKind::PromptExpansion),
+        kind: Some(NativeKind::HarnessAction),
     });
     commands.push(SlashCommand {
         name: "plan".to_string(),
@@ -236,10 +240,7 @@ pub fn resolve_native<'a>(token: &str, natives: &'a [SlashCommand]) -> Option<&'
 /// Discover all available slash commands by scanning known Claude Code directories.
 ///
 /// Commands are deduplicated by name with priority: builtin > project > user > plugin.
-pub fn discover_slash_commands(
-    project_path: Option<&Path>,
-    plugin_management_enabled: bool,
-) -> Vec<SlashCommand> {
+pub fn discover_slash_commands(project_path: Option<&Path>) -> Vec<SlashCommand> {
     let mut commands: Vec<SlashCommand> = Vec::new();
 
     let home = match dirs::home_dir() {
@@ -264,7 +265,7 @@ pub fn discover_slash_commands(
     }
 
     // Native app commands must always win.
-    collect_native_commands(&mut commands, plugin_management_enabled);
+    collect_native_commands(&mut commands);
 
     // Sort by name for consistent ordering.
     commands.sort_by(|a, b| a.name.cmp(&b.name));
@@ -301,8 +302,8 @@ fn is_reserved_native_name(name: &str) -> bool {
     matches!(name, "plugin" | "plugins" | "marketplace" | "login")
 }
 
-fn collect_native_commands(commands: &mut Vec<SlashCommand>, plugin_management_enabled: bool) {
-    let natives = native_command_registry(plugin_management_enabled);
+fn collect_native_commands(commands: &mut Vec<SlashCommand>) {
+    let natives = native_command_registry();
     // For reserved natives (plugin/marketplace), drop any file-based command
     // whose name collides with the native canonical name or alias: the native
     // registry owns those slots outright.
@@ -769,7 +770,7 @@ mod tests {
     #[test]
     fn test_collect_native_commands_injects_plugin_and_marketplace() {
         let mut commands = Vec::new();
-        collect_native_commands(&mut commands, true);
+        collect_native_commands(&mut commands);
         let names: Vec<_> = commands.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"plugin"));
         assert!(names.contains(&"marketplace"));
@@ -781,13 +782,13 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_native_commands_skips_plugin_entries_when_disabled() {
+    fn test_collect_native_commands_includes_plugin_entries_unconditionally() {
         let mut commands = Vec::new();
-        collect_native_commands(&mut commands, false);
+        collect_native_commands(&mut commands);
         let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
-        assert!(!names.contains(&"plugin"));
-        assert!(!names.contains(&"marketplace"));
-        // Review workflow entries are always present regardless of the plugin flag.
+        assert!(names.contains(&"plugin"));
+        assert!(names.contains(&"marketplace"));
+        // Review workflow entries are always present too.
         assert!(names.contains(&"review"));
         assert!(names.contains(&"security-review"));
         assert!(names.contains(&"pr-comments"));
@@ -812,7 +813,7 @@ mod tests {
 
     #[test]
     fn test_native_command_registry_includes_workspace_control_commands() {
-        let natives = native_command_registry(false);
+        let natives = native_command_registry();
         for name in ["clear", "plan", "model", "permissions", "status"] {
             let cmd = natives
                 .iter()
@@ -825,7 +826,7 @@ mod tests {
 
     #[test]
     fn test_permissions_exposes_allowed_tools_alias() {
-        let natives = native_command_registry(false);
+        let natives = native_command_registry();
         let permissions = natives
             .iter()
             .find(|c| c.name == "permissions")
@@ -843,7 +844,7 @@ mod tests {
 
     #[test]
     fn test_workspace_control_commands_have_argument_hints() {
-        let natives = native_command_registry(false);
+        let natives = native_command_registry();
         // Commands that accept arguments advertise an argument hint.
         for name in ["plan", "model", "permissions"] {
             let cmd = natives.iter().find(|c| c.name == name).unwrap();
@@ -874,7 +875,7 @@ mod tests {
             SlashCommand::file_based("status".into(), "Project custom status".into(), "project"),
             SlashCommand::file_based("keep-me".into(), "Unrelated".into(), "user"),
         ];
-        collect_native_commands(&mut commands, false);
+        collect_native_commands(&mut commands);
 
         let clear = commands.iter().find(|c| c.name == "clear").unwrap();
         assert_eq!(clear.source, "user");
@@ -892,87 +893,77 @@ mod tests {
 
     #[test]
     fn test_native_command_registry_includes_review_workflow_entries() {
-        for enabled in [true, false] {
-            let natives = native_command_registry(enabled);
-            for name in ["review", "security-review", "pr-comments"] {
-                let entry = natives
-                    .iter()
-                    .find(|c| c.name == name)
-                    .unwrap_or_else(|| panic!("missing native entry `{name}` (enabled={enabled})"));
-                assert_eq!(entry.source, "builtin");
-                assert_eq!(entry.kind, Some(NativeKind::PromptExpansion));
-                assert!(
-                    entry.argument_hint.is_some(),
-                    "argument hint missing for `{name}`"
-                );
-                assert!(
-                    entry.aliases.is_empty(),
-                    "review commands expose no aliases"
-                );
-            }
+        let natives = native_command_registry();
+        for name in ["review", "security-review", "pr-comments"] {
+            let entry = natives
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("missing native entry `{name}`"));
+            assert_eq!(entry.source, "builtin");
+            assert_eq!(entry.kind, Some(NativeKind::PromptExpansion));
+            assert!(
+                entry.argument_hint.is_some(),
+                "argument hint missing for `{name}`"
+            );
+            assert!(
+                entry.aliases.is_empty(),
+                "review commands expose no aliases"
+            );
         }
     }
 
     #[test]
     fn test_native_command_registry_includes_settings_and_version_commands() {
-        for enabled in [true, false] {
-            let natives = native_command_registry(enabled);
-            let by_name: HashMap<&str, &SlashCommand> =
-                natives.iter().map(|c| (c.name.as_str(), c)).collect();
+        let natives = native_command_registry();
+        let by_name: HashMap<&str, &SlashCommand> =
+            natives.iter().map(|c| (c.name.as_str(), c)).collect();
 
-            let config = by_name.get("config").expect("config registered");
-            assert_eq!(config.kind, Some(NativeKind::SettingsRoute));
-            assert_eq!(config.aliases, vec!["configure".to_string()]);
-            assert!(config.argument_hint.is_some());
+        let config = by_name.get("config").expect("config registered");
+        assert_eq!(config.kind, Some(NativeKind::SettingsRoute));
+        assert_eq!(config.aliases, vec!["configure".to_string()]);
+        assert!(config.argument_hint.is_some());
 
-            let usage = by_name.get("usage").expect("usage registered");
-            assert_eq!(usage.kind, Some(NativeKind::SettingsRoute));
-            assert!(usage.aliases.is_empty());
+        let usage = by_name.get("usage").expect("usage registered");
+        assert_eq!(usage.kind, Some(NativeKind::SettingsRoute));
+        assert!(usage.aliases.is_empty());
 
-            let login = by_name.get("login").expect("login registered");
-            assert_eq!(login.kind, Some(NativeKind::LocalAction));
-            assert!(login.aliases.is_empty());
-            assert!(login.argument_hint.is_none());
+        let login = by_name.get("login").expect("login registered");
+        assert_eq!(login.kind, Some(NativeKind::LocalAction));
+        assert!(login.aliases.is_empty());
+        assert!(login.argument_hint.is_none());
 
-            let extra = by_name.get("extra-usage").expect("extra-usage registered");
-            assert_eq!(extra.kind, Some(NativeKind::SettingsRoute));
+        let extra = by_name.get("extra-usage").expect("extra-usage registered");
+        assert_eq!(extra.kind, Some(NativeKind::SettingsRoute));
 
-            let release = by_name
-                .get("release-notes")
-                .expect("release-notes registered");
-            assert_eq!(release.kind, Some(NativeKind::LocalAction));
-            assert_eq!(release.aliases, vec!["changelog".to_string()]);
+        let release = by_name
+            .get("release-notes")
+            .expect("release-notes registered");
+        assert_eq!(release.kind, Some(NativeKind::LocalAction));
+        assert_eq!(release.aliases, vec!["changelog".to_string()]);
 
-            let version = by_name.get("version").expect("version registered");
-            assert_eq!(version.kind, Some(NativeKind::LocalAction));
-            assert_eq!(version.aliases, vec!["about".to_string()]);
-        }
+        let version = by_name.get("version").expect("version registered");
+        assert_eq!(version.kind, Some(NativeKind::LocalAction));
+        assert_eq!(version.aliases, vec!["about".to_string()]);
     }
 
     #[test]
     fn test_native_command_registry_includes_help_and_init() {
-        for enabled in [true, false] {
-            let natives = native_command_registry(enabled);
-            let by_name: HashMap<&str, &SlashCommand> =
-                natives.iter().map(|c| (c.name.as_str(), c)).collect();
+        let natives = native_command_registry();
+        let by_name: HashMap<&str, &SlashCommand> =
+            natives.iter().map(|c| (c.name.as_str(), c)).collect();
 
-            let help = by_name
-                .get("help")
-                .unwrap_or_else(|| panic!("help missing (enabled={enabled})"));
-            assert_eq!(help.source, "builtin");
-            assert_eq!(help.kind, Some(NativeKind::LocalAction));
-            assert!(help.aliases.is_empty(), "/help exposes no aliases");
-            assert!(help.argument_hint.is_none(), "/help takes no arguments");
-            assert_eq!(help.description, "List available slash commands");
+        let help = by_name.get("help").expect("help registered");
+        assert_eq!(help.source, "builtin");
+        assert_eq!(help.kind, Some(NativeKind::LocalAction));
+        assert!(help.aliases.is_empty(), "/help exposes no aliases");
+        assert!(help.argument_hint.is_none(), "/help takes no arguments");
+        assert_eq!(help.description, "List available slash commands");
 
-            let init = by_name
-                .get("init")
-                .unwrap_or_else(|| panic!("init missing (enabled={enabled})"));
-            assert_eq!(init.source, "builtin");
-            assert_eq!(init.kind, Some(NativeKind::PromptExpansion));
-            assert!(init.aliases.is_empty(), "/init exposes no aliases");
-            assert_eq!(init.argument_hint.as_deref(), Some("[extra guidance]"));
-        }
+        let init = by_name.get("init").expect("init registered");
+        assert_eq!(init.source, "builtin");
+        assert_eq!(init.kind, Some(NativeKind::PromptExpansion));
+        assert!(init.aliases.is_empty(), "/init exposes no aliases");
+        assert_eq!(init.argument_hint.as_deref(), Some("[extra guidance]"));
     }
 
     #[test]
@@ -984,7 +975,7 @@ mod tests {
             SlashCommand::file_based("help".into(), "User custom help".into(), "user"),
             SlashCommand::file_based("init".into(), "Project custom init".into(), "project"),
         ];
-        collect_native_commands(&mut commands, false);
+        collect_native_commands(&mut commands);
 
         let help = commands.iter().find(|c| c.name == "help").unwrap();
         assert_eq!(help.source, "user");
@@ -996,7 +987,7 @@ mod tests {
 
     #[test]
     fn test_resolve_native_resolves_new_command_aliases() {
-        let natives = native_command_registry(false);
+        let natives = native_command_registry();
         assert_eq!(
             resolve_native("configure", &natives).unwrap().name,
             "config"
@@ -1022,7 +1013,7 @@ mod tests {
             SlashCommand::file_based("config".into(), "User custom config".into(), "user"),
             SlashCommand::file_based("review".into(), "Project custom review".into(), "project"),
         ];
-        collect_native_commands(&mut commands, true);
+        collect_native_commands(&mut commands);
 
         let config = commands.iter().find(|c| c.name == "config").unwrap();
         assert_eq!(config.source, "user");
@@ -1047,7 +1038,7 @@ mod tests {
             "User custom login".into(),
             "user",
         )];
-        collect_native_commands(&mut commands, false);
+        collect_native_commands(&mut commands);
 
         let login = commands.iter().find(|c| c.name == "login").unwrap();
         assert_eq!(login.source, "builtin");
@@ -1067,7 +1058,7 @@ mod tests {
             SlashCommand::file_based("config".into(), "Plugin hostile config".into(), "plugin"),
             SlashCommand::file_based("usage".into(), "Plugin hostile usage".into(), "plugin"),
         ];
-        collect_native_commands(&mut commands, true);
+        collect_native_commands(&mut commands);
 
         // The natives own these slots: both the builtin entry wins via upsert,
         // and the plugin entries get replaced in place.
@@ -1088,7 +1079,7 @@ mod tests {
             SlashCommand::file_based("plugins".into(), "Project plugins cmd".into(), "project"),
             SlashCommand::file_based("commit".into(), "Commit changes".into(), "user"),
         ];
-        collect_native_commands(&mut commands, true);
+        collect_native_commands(&mut commands);
 
         // "commit" stays, file-based "plugin"/"plugins" are replaced by the
         // native entries, and no duplicate rows remain.
@@ -1113,13 +1104,13 @@ mod tests {
             "Uppercase override".into(),
             "user",
         )];
-        collect_native_commands(&mut commands, true);
+        collect_native_commands(&mut commands);
         assert!(commands.iter().all(|c| c.name != "PLUGINS"));
     }
 
     #[test]
     fn test_resolve_native_matches_canonical_and_alias_case_insensitive() {
-        let natives = native_command_registry(true);
+        let natives = native_command_registry();
         assert_eq!(resolve_native("plugin", &natives).unwrap().name, "plugin");
         assert_eq!(resolve_native("Plugin", &natives).unwrap().name, "plugin");
         assert_eq!(resolve_native("PLUGINS", &natives).unwrap().name, "plugin");
@@ -1133,7 +1124,7 @@ mod tests {
 
     #[test]
     fn test_native_command_registry_canonicals_are_unique() {
-        let natives = native_command_registry(true);
+        let natives = native_command_registry();
         let mut names: Vec<_> = natives.iter().map(|c| c.name.clone()).collect();
         names.sort();
         let before = names.len();

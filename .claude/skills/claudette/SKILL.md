@@ -1,8 +1,8 @@
 ---
 name: claudette
-description: Drive the running Claudette desktop app from the command line — list and create workspaces, inspect chat transcripts/tool turns/attachments, answer or approve pending agent controls, send or steer prompts to chat sessions, fan out batch manifests across many workspaces, list pull requests via SCM plugins, invoke arbitrary plugin operations. Use when the user asks to list/create/archive workspaces, inspect or control Claudette chat sessions, send a message to a Claudette session, kick off a phase plan or multi-workspace fan-out, check PRs from a workspace, or otherwise interact with their open Claudette app from outside the GUI.
+description: Drive the running Claudette desktop app from the command line — list and create workspaces, inspect chat transcripts/tool turns/attachments, answer or approve pending agent controls, send or steer prompts to chat sessions, schedule recurring cron-style agent routines, fan out batch manifests across many workspaces, list pull requests via SCM plugins, invoke arbitrary plugin operations. Use when the user asks to list/create/archive workspaces, inspect or control Claudette chat sessions, send a message to a Claudette session, schedule a recurring prompt or cron routine for a session, kick off a phase plan or multi-workspace fan-out, check PRs from a workspace, or otherwise interact with their open Claudette app from outside the GUI.
 when_to_use: |
-  Trigger when the user mentions Claudette workspaces, sessions, chat transcripts, pending agent questions, plan approvals, completed turns, batch / phase plans, "send this prompt to N workspaces", "get feedback from the other agents", "list my workspaces", "what's running in Claudette", "create a workspace for X", "show me the PR for this workspace", or asks to invoke a Claudette SCM/env plugin operation. Also use proactively when the user has Claudette open and asks for operations that would obviously route through it (e.g. "fan out these 8 prompts as separate Claudette workspaces").
+  Trigger when the user mentions Claudette workspaces, sessions, chat transcripts, pending agent questions, plan approvals, completed turns, batch / phase plans, scheduled routines or wakeups, "send this prompt to N workspaces", "get feedback from the other agents", "list my workspaces", "what's running in Claudette", "create a workspace for X", "show me the PR for this workspace", "schedule a routine", "create a recurring prompt", "run this session on a cron", "list my scheduled routines", or asks to invoke a Claudette SCM/env plugin operation. Also use proactively when the user has Claudette open and asks for operations that would obviously route through it (e.g. "fan out these 8 prompts as separate Claudette workspaces").
 allowed-tools: Bash(claudette:*)
 ---
 
@@ -13,7 +13,7 @@ Drive the running Claudette desktop app over a per-user local socket. Every comm
 ## Prerequisites
 
 - The Claudette desktop app must be **open and running**. Every command discovers it via `${state_dir}/Claudette/app.json`. If it isn't running, commands exit with a clear error — do not try to start the app yourself; ask the user to launch it.
-- The `claudette` CLI must be on `PATH`. The cleanest install path: open the desktop app and use **Settings → CLI → Install on PATH** (one click; symlinks on macOS/Linux, copies + per-user PATH update on Windows). On Linux `.deb` installs the CLI is already on `/usr/bin/claudette` automatically. Standalone `claudette-cli-<platform>` release assets are also published per release for headless / CI consumers.
+- The `claudette` CLI must be on `PATH`. The cleanest install path: open the desktop app and use **Settings → CLI → Install on PATH** (one click; symlinks on macOS/Linux, copies + per-user PATH update on Windows). On Linux, `.deb` installs place the CLI at `/usr/bin/claudette` automatically. Standalone `claudette-cli-<platform>` release assets are also published per release for headless / CI consumers.
 
 ## Quick start
 
@@ -40,6 +40,10 @@ claudette chat approve-plan <session-id> <tool-use-id>
 claudette chat deny-plan <session-id> <tool-use-id> "revise the plan first"
 claudette chat steer <session-id> @prompts/followup.md
 claudette chat stop <session-id>
+
+# Schedule a recurring prompt for a session
+claudette routine create <session-id> "0 9 * * 1-5" "Check open PRs" --name weekday-prs
+claudette routine list
 ```
 
 ## Top-level commands
@@ -54,6 +58,7 @@ claudette chat stop <session-id>
 | `batch` | Run / validate a batch manifest (multi-workspace fan-out) |
 | `plugin` | List loaded plugins, invoke any operation directly |
 | `pr` | Friendly shortcut over the active SCM provider plugin |
+| `routine` | Schedule / list / run / delete cron-style recurring prompts that fire through a chat session |
 | `rpc` | Raw JSON-RPC escape hatch for methods without a typed wrapper |
 | `completion <shell>` | Generate shell completion script |
 
@@ -170,6 +175,23 @@ claudette batch run      phase-0-cleanup.claudette.yaml
 
 `prompt_file` paths resolve relative to the manifest. Validation also enforces workspace-name rules (ASCII alphanumeric + hyphens, no leading/trailing hyphen) so naming bugs surface up front.
 
+### Scheduled routines
+
+`routine` schedules cron-style prompts that fire through a chat session — the CLI surface for Claudette's native agent scheduling. A routine targets a session id and re-runs a prompt on a standard 5-field cron expression evaluated in local time:
+
+```bash
+claudette routine list                                              # always JSON — wakeups + routines
+claudette routine create <session-id> "0 9 * * 1-5" "Check open PRs" --name weekday-prs
+claudette routine create <session-id> "30 14 28 2 *" @prompts/review.md --once
+claudette routine run weekday-prs                                    # fire now, by id or name
+claudette routine delete weekday-prs                                 # delete, by id or name
+```
+
+- `create` takes `<session-id> <cron-expr> <prompt>`. The prompt accepts the same three forms as `chat send`: a literal string, `@path/to/file.md`, or `-` to read from stdin.
+- `--name` assigns a stable handle so `run` / `delete` can address the routine without its generated id.
+- `--once` fires a single time at the next matching slot, then disables the routine; omit it for a recurring schedule.
+- `routine list` always emits JSON (ad-hoc wakeups plus recurring routines), regardless of `--json`. `create` / `run` / `delete` print a short confirmation line by default and full JSON with `--json`.
+
 ### Pull requests for the current workspace
 
 `pr` resolves the active SCM provider per workspace via the GUI's plugin registry. Set `CLAUDETTE_WORKSPACE_ID` in the shell or pass `--workspace`:
@@ -230,7 +252,7 @@ Inside a Claudette workspace shell these are already set, so `claudette pr list`
 ## Output conventions
 
 - Commands with a human-readable renderer (`workspace list`, `repo list`, `pr list`, `plugin list`) default to a table-ish format and switch to JSON when `--json` is set.
-- Other commands always emit JSON regardless of `--json` because they don't have a table renderer yet (`capabilities`, `rpc`, `chat list`, `chat show`, chat control commands, `pr show`, `workspace create` / `archive`, `batch run` summary).
+- Other commands always emit JSON regardless of `--json` because they don't have a table renderer yet (`capabilities`, `rpc`, `chat list`, `chat show`, chat control commands, `pr show`, `routine list`, `workspace create` / `archive`, `batch run` summary). `routine create` / `run` / `delete` instead print a short plain-text confirmation by default and switch to JSON with `--json`.
 - Pipe `--json` output through `jq` for scripting.
 
 ## When to NOT use this skill

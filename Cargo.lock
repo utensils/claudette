@@ -850,14 +850,17 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "claudette"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "dirs",
  "flate2",
  "futures",
  "glob",
+ "futures-util",
+ "hex",
  "interprocess",
  "libc",
  "minisign-verify",
@@ -865,14 +868,17 @@ dependencies = [
  "notify",
  "open",
  "rand 0.8.5",
+ "reqwest",
  "rodio",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
  "tar",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -885,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-cli"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -902,8 +908,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "claudette-mobile"
+version = "0.25.0"
+dependencies = [
+ "chrono",
+ "claudette",
+ "gethostname",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-barcode-scanner",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "claudette-server"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -932,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-tauri"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6570,6 +6594,20 @@ dependencies = [
  "tauri-utils",
  "toml 0.9.12+spec-1.1.0",
  "walkdir",
+]
+
+[[package]]
+name = "tauri-plugin-barcode-scanner"
+version = "2.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "485cbcf227f04117e930be748ea71d835900466dcd1d455d5ec284d36107a305"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

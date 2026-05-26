@@ -19,7 +19,6 @@ import {
 function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandContext {
   return {
     repoId: "repo-1",
-    pluginManagementEnabled: true,
     usageInsightsEnabled: true,
     openPluginSettings: vi.fn<(intent: Partial<PluginSettingsIntent>) => void>(),
     repository: { name: "claudette", path: "/tmp/repos/claudette" },
@@ -30,6 +29,7 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     addLocalMessage: vi.fn<(text: string) => void>(),
     startClaudeAuthLogin: vi.fn(async () => {}),
     startCodexLogin: vi.fn(async () => {}),
+    startPiLogin: vi.fn(async () => {}),
     openUsageSettingsExternal: vi.fn<() => void>(),
     openReleaseNotes: vi.fn<() => void>(),
     workspaceId: "ws-1",
@@ -158,13 +158,6 @@ describe("plugin native handler", () => {
     );
   });
 
-  it("swallows /plugin when plugin management is disabled without opening settings", async () => {
-    const ctx = makeCtx({ pluginManagementEnabled: false });
-    const handler = resolveNativeHandler("plugin")!;
-    const result = await handler.execute(ctx, "install demo");
-    expect(result).toEqual({ kind: "handled", canonicalName: "plugin" });
-    expect(ctx.openPluginSettings).not.toHaveBeenCalled();
-  });
 });
 
 describe("dispatcher across native kinds", () => {
@@ -639,6 +632,19 @@ describe("login native handler", () => {
     expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
   });
 
+  it("opens the Pi provider picker for Pi-selected workspaces", async () => {
+    const ctx = makeCtx({ selectedModelProvider: "pi" });
+    const handler = resolveNativeHandler("login")!;
+    const result = await handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "login" });
+    expect(ctx.startPiLogin).toHaveBeenCalledTimes(1);
+    expect(ctx.startCodexLogin).not.toHaveBeenCalled();
+    expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      "Pi sign-in opened. Pick a provider, complete the flow, then retry the turn.",
+    );
+  });
+
   it("surfaces login start failures as local messages", async () => {
     const ctx = makeCtx({
       startClaudeAuthLogin: vi.fn(async () => {
@@ -772,22 +778,22 @@ describe("/clear handler", () => {
 });
 
 describe("/compact handler", () => {
-  it("is registered as prompt_expansion with no aliases", () => {
+  it("is registered as harness_action with no aliases", () => {
     const handler = resolveNativeHandler("compact")!;
     expect(handler).toBeDefined();
     expect(handler.name).toBe("compact");
-    expect(handler.kind).toBe("prompt_expansion");
+    expect(handler.kind).toBe("harness_action");
     expect(handler.aliases).toEqual([]);
   });
 
-  it("expands to /compact prompt text for the CLI", async () => {
+  it("returns a harness_action that the chat send pipeline dispatches per backend", async () => {
     const ctx = makeCtx();
     const handler = resolveNativeHandler("compact")!;
     const result = await handler.execute(ctx, "");
     expect(result).toEqual({
-      kind: "expand",
+      kind: "harness_action",
       canonicalName: "compact",
-      prompt: "/compact",
+      action: "compact",
     });
   });
 
@@ -1310,7 +1316,7 @@ describe("formatHelpMessage", () => {
     const withAngles: SlashCommand[] = [
       {
         name: "marketplace",
-        description: "Manage plugin marketplaces in settings",
+        description: "Manage Claude Code plugin marketplaces in settings",
         source: "builtin",
         aliases: [],
         argument_hint: "[add|remove|update] <source>",

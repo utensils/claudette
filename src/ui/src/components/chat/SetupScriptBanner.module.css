@@ -37,18 +37,18 @@
 /* Danger treatment for failed / timed-out runs — kept on the collapsed chip
    too so the failure draws the eye even after the user collapses it. */
 .failed {
-  border-color: var(--error-border);
-  background: var(--error-bg);
+  border-color: var(--accent-error-border);
+  background: var(--accent-error-bg);
 }
 
 .failed:hover {
-  border-color: var(--error-border);
-  background: var(--error-hover);
+  border-color: var(--accent-error-border);
+  background: var(--accent-error-hover);
 }
 
 .failed.expanded {
-  border-color: var(--error-border);
-  background: var(--error-hover);
+  border-color: var(--accent-error-border);
+  background: var(--accent-error-hover);
 }
 
 /* ── Header (always visible — collapsed pill) ── */
@@ -187,7 +187,7 @@
 }
 
 .failed .body {
-  border-top-color: var(--error-border);
+  border-top-color: var(--accent-error-border);
 }
 
 @keyframes setupBannerReveal {

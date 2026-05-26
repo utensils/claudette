@@ -1,0 +1,280 @@
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.filterLabel {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.filterChoices {
+  display: inline-flex;
+  gap: 4px;
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.filterChip,
+.filterChipActive {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.filterChip:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.filterChipActive {
+  background: var(--selected-bg);
+  color: var(--text-primary);
+}
+
+/* Keep the native radio input in the DOM (so keyboard navigation +
+   screen-reader announcement come for free via the browser's radiogroup
+   semantics) but visually present it as a chip. The label wraps the
+   input so click anywhere selects the radio. */
+.filterRadio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.filterRadio:focus-visible + * {
+  outline: 2px solid var(--accent-bg);
+  outline-offset: 2px;
+}
+
+/* When the input is :focus-visible, give the wrapping label a focus
+   ring. Two-step rule because `:focus-visible` lives on the input and
+   we want the visible outline on the label. */
+.filterChip:has(.filterRadio:focus-visible),
+.filterChipActive:has(.filterRadio:focus-visible) {
+  outline: 2px solid var(--accent-bg);
+  outline-offset: 2px;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.selectAllLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.counter {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.row {
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+}
+
+.rowLabel {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.rowSize {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 56px;
+  text-align: right;
+}
+
+.rowName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.rowBranch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.rowAge {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 60px;
+  text-align: right;
+}
+
+.rowError {
+  padding: 4px 12px 8px 36px;
+  font-size: 11px;
+  color: var(--status-stopped);
+}
+
+.rowPending {
+  padding: 4px 12px 8px 36px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Per-repo group header in cleanup-all mode. Renders as a thin label
+   bar above each repo's row block. */
+.repoHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+/* Indent rows beneath a repo header so the visual hierarchy reads as
+   "repo → its workspaces" rather than a flat list mixing the two. */
+.repoSection {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Status icon column added to rowLabel when a run is in flight. The
+   grid template grows by one column on .rowLabelRunning so checkboxes
+   slide right to make room for the spinner / check / X. */
+.rowLabelRunning {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  cursor: default;
+  min-width: 0;
+}
+
+.rowStatus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.rowStatusDeleted {
+  color: var(--status-running);
+}
+
+.rowStatusFailed {
+  color: var(--status-stopped);
+}
+
+.rowStatusCancelled {
+  color: var(--text-faint);
+}
+
+/* Pure-CSS spinner used while a row is still being processed. */
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--divider);
+  border-top-color: var(--text-primary);
+  border-radius: 50%;
+  animation: bulkCleanupSpin 0.8s linear infinite;
+}
+
+@keyframes bulkCleanupSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Respect reduced-motion: same convention as SetupScriptBanner /
+   SessionStatusIcon. The spinner becomes a static border ring so
+   the user still sees a visual indicator for "pending" without the
+   rotation. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+/* Live progress counter shown in the header row while a run is in
+   flight ("X of N deleted, Y failed"). Replaces the selection counter
+   for the duration of the run. */
+.progressCounter {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}

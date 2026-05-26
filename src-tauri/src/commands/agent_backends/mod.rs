@@ -4,14 +4,28 @@
 //! into focused submodules. See each `mod` declaration's owning file
 //! for the relevant cluster.
 
-use tauri::State;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::resolve_codex_path;
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendRuntimeHarness};
 use claudette::db::Database;
-use claudette::plugin::{delete_secure_secret, save_secure_secret};
+use claudette::env_provider::ResolvedEnv;
+use claudette::plugin::{delete_secure_secret, load_secure_secret, save_secure_secret};
+use claudette::plugin_runtime::host_api::WorkspaceInfo;
 
 use crate::state::AppState;
+
+const CODEX_LOGIN_COMPLETE_EVENT: &str = "codex://login-complete";
+
+#[derive(Clone, Serialize)]
+struct CodexLoginComplete {
+    success: bool,
+    error: Option<String>,
+}
 
 mod auto_detect;
 mod codex_auth;
@@ -20,6 +34,8 @@ mod config;
 mod discovery;
 mod gateway;
 mod gateway_translate;
+#[cfg(feature = "pi-sdk")]
+pub mod pi_auth;
 mod runtime_dispatch;
 
 pub use gateway::BackendGateway;
@@ -41,6 +57,16 @@ use config::{
     resolve_backend_list_default, save_backend_configs,
 };
 use discovery::{codex_cli_command, discover_models, test_backend_connectivity};
+
+/// Read the stored secret (typically an API key / bearer token) for a
+/// configured agent backend. Returns `Ok(None)` when nothing is stored
+/// for that backend id. Exposed as a small public surface so sibling
+/// command modules (`commands::usage`) can resolve a backend's secret
+/// without needing visibility into the `agent_backends::config` bucket
+/// constant or the keychain plumbing in `claudette::plugin`.
+pub fn load_backend_secret(backend_id: &str) -> Result<Option<String>, String> {
+    load_secure_secret(SECRET_BUCKET, backend_id)
+}
 
 #[tauri::command]
 pub async fn list_agent_backends(
@@ -328,19 +354,252 @@ pub async fn test_agent_backend(
 }
 
 #[tauri::command]
-pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn launch_codex_login(
+    workspace_id: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     ensure_native_codex_enabled(&db)?;
+    drop(db);
+
     let codex_path = resolve_codex_path().await;
-    let mut command = codex_cli_command(codex_path);
+    let workspace_env = resolve_codex_login_workspace_env(&state, workspace_id.as_deref()).await?;
+    let mut command = build_codex_login_command(codex_path.as_os_str(), workspace_env.as_ref());
     let mut child = command
-        .arg("login")
         .spawn()
         .map_err(|e| format!("Failed to launch `codex login`: {e}"))?;
+    // After `codex login` exits successfully, drop every persistent
+    // Codex app-server session held in AppState. The browser flow
+    // rotates the refresh token on disk, but any codex-app-server
+    // subprocess we already spawned still holds the old credentials
+    // in memory and would 401 on every subsequent `turn/start`. Setting
+    // `persistent_session = None` makes the next `send_chat_message`
+    // respawn a fresh subprocess that picks up the new tokens.
+    //
+    // Dropping the `Arc<AgentSession>` is *not* enough on its own —
+    // the session's stdout/stderr reader and exit-watcher tasks own
+    // their own handles to `tokio::process::Child` and stdio, so they
+    // outlive the Arc and keep the subprocess alive. The pattern
+    // established in `chat/send.rs` (MCP-config teardown ~L1253, plan
+    // mode ~L1510, env-drift ~L1658) is: capture PIDs under the lock,
+    // null out `persistent_session` + `active_pid`, *release the
+    // lock*, then call `agent::stop_agent_graceful(pid)` for each.
+    // Mirror that here so we don't orphan a doomed app-server that
+    // keeps retrying its 401s, holding fds and a thread pool worker
+    // until Claudette quits.
+    //
+    // Non-zero exits (user cancelled the browser flow, etc.) leave
+    // existing sessions alone — the user can retry without losing
+    // their working session.
     tokio::spawn(async move {
-        let _ = child.wait().await;
+        let status = child.wait().await;
+        let success = match status.as_ref() {
+            Ok(s) if s.success() => true,
+            Ok(s) => {
+                // User cancelled the browser flow or `codex login`
+                // exited non-zero for any other reason — leave
+                // existing sessions alone, but record the exit so
+                // anyone debugging "why didn't /login take effect?"
+                // can correlate.
+                tracing::info!(
+                    target: "claudette::agent",
+                    code = ?s.code(),
+                    "`codex login` exited non-zero; skipping Codex session sweep"
+                );
+                let _ = app.emit(
+                    CODEX_LOGIN_COMPLETE_EVENT,
+                    CodexLoginComplete {
+                        success: false,
+                        error: Some(format!("`codex login` exited with {s}")),
+                    },
+                );
+                false
+            }
+            Err(err) => {
+                // wait() failure is rare (e.g. the Child handle was
+                // taken or the process was reaped under us) but it
+                // surfaces here as the *same* silent skip path as a
+                // user-cancel. Logging keeps the failure mode visible
+                // — without this, the sweep gets quietly bypassed
+                // and the user re-types /login wondering what changed.
+                tracing::warn!(
+                    target: "claudette::agent",
+                    error = %err,
+                    "failed to wait for `codex login` child; skipping Codex session sweep"
+                );
+                let _ = app.emit(
+                    CODEX_LOGIN_COMPLETE_EVENT,
+                    CodexLoginComplete {
+                        success: false,
+                        error: Some(format!("Failed to wait on `codex login`: {err}")),
+                    },
+                );
+                false
+            }
+        };
+        if !success {
+            return;
+        }
+        let state = app.state::<AppState>();
+        let stale_pids: Vec<(String, u32)> = {
+            let mut agents = state.agents.write().await;
+            let mut collected = Vec::new();
+            for (chat_session_id, session_state) in agents.iter_mut() {
+                let codex_pid = session_state.persistent_session.as_ref().and_then(|s| {
+                    (s.kind() == claudette::agent::AgentHarnessKind::CodexAppServer)
+                        .then(|| s.pid())
+                });
+                if let Some(pid) = codex_pid {
+                    tracing::info!(
+                        target: "claudette::agent",
+                        chat_session_id = %chat_session_id,
+                        pid,
+                        "dropping Codex persistent session after successful `codex login` so next turn picks up fresh tokens"
+                    );
+                    session_state.persistent_session = None;
+                    session_state.active_pid = None;
+                    collected.push((chat_session_id.clone(), pid));
+                }
+            }
+            collected
+        };
+        // Lock released — now kill the orphaned subprocesses.
+        for (chat_session_id, pid) in stale_pids {
+            if let Err(err) = claudette::agent::stop_agent_graceful(pid).await {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    chat_session_id = %chat_session_id,
+                    pid,
+                    error = %err,
+                    "failed to stop stale codex-app-server after `codex login`"
+                );
+            }
+        }
+        let _ = app.emit(
+            CODEX_LOGIN_COMPLETE_EVENT,
+            CodexLoginComplete {
+                success: true,
+                error: None,
+            },
+        );
     });
     Ok(())
+}
+
+struct CodexLoginWorkspaceEnv {
+    worktree: PathBuf,
+    resolved: ResolvedEnv,
+}
+
+async fn resolve_codex_login_workspace_env(
+    state: &AppState,
+    workspace_id: Option<&str>,
+) -> Result<Option<CodexLoginWorkspaceEnv>, String> {
+    let Some(workspace_id) = workspace_id else {
+        return Ok(None);
+    };
+    let (worktree, ws_info, disabled) = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        let workspace = db
+            .list_workspaces()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|workspace| workspace.id == workspace_id)
+            .ok_or("Workspace not found")?;
+        let Some(worktree) = codex_login_worktree_path(&workspace) else {
+            return Ok(None);
+        };
+        let repo = db
+            .get_repository(&workspace.repository_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Repository not found")?;
+        let repo_id = workspace.repository_id.clone();
+        let disabled = crate::commands::env::load_disabled_providers(&db, &repo_id);
+        let ws_info = WorkspaceInfo {
+            id: workspace.id,
+            name: workspace.name,
+            branch: workspace.branch_name,
+            worktree_path: worktree.to_string_lossy().into_owned(),
+            repo_path: repo.path,
+            repo_id: Some(repo_id.clone()),
+        };
+        (worktree, ws_info, disabled)
+    };
+
+    let registry = state.plugins_snapshot().await;
+    let resolved = claudette::env_provider::resolve_with_registry_streaming(
+        &registry,
+        &state.env_cache,
+        &worktree,
+        &ws_info,
+        &disabled,
+        None,
+        None,
+    )
+    .await;
+    Ok(Some(CodexLoginWorkspaceEnv { worktree, resolved }))
+}
+
+fn codex_login_worktree_path(workspace: &claudette::model::Workspace) -> Option<PathBuf> {
+    workspace.worktree_path.as_deref().map(PathBuf::from)
+}
+
+fn build_codex_login_command(
+    codex_path: &OsStr,
+    workspace_env: Option<&CodexLoginWorkspaceEnv>,
+) -> tokio::process::Command {
+    let login_arg = "login".to_string();
+    if let Some(ctx) = workspace_env
+        && let Some(argv) = claudette::env_provider::nix_develop_command_wrap(
+            &ctx.worktree,
+            &ctx.resolved,
+            codex_path,
+            std::slice::from_ref(&login_arg),
+        )
+    {
+        return codex_login_command_from_argv(argv, Some(&ctx.worktree));
+    }
+
+    let mut command = codex_cli_command(codex_path);
+    command.arg(login_arg);
+    apply_resolved_env_to_codex_login(&mut command, workspace_env);
+    command
+}
+
+fn codex_login_command_from_argv(
+    argv: Vec<OsString>,
+    worktree: Option<&Path>,
+) -> tokio::process::Command {
+    let mut iter = argv.into_iter();
+    let program = iter
+        .next()
+        .expect("nix develop command wrapper should include a program");
+    let mut command = codex_cli_command(program);
+    command.args(iter);
+    if let Some(worktree) = worktree {
+        command.current_dir(worktree);
+    }
+    command
+}
+
+fn apply_resolved_env_to_codex_login(
+    command: &mut tokio::process::Command,
+    workspace_env: Option<&CodexLoginWorkspaceEnv>,
+) {
+    if let Some(CodexLoginWorkspaceEnv { worktree, resolved }) = workspace_env {
+        command.current_dir(worktree);
+        resolved.apply(command);
+        command.env(
+            "PATH",
+            match resolved.vars.get("PATH") {
+                Some(Some(provider_path)) => {
+                    claudette::env::merge_path_with_enriched(provider_path)
+                }
+                _ => claudette::env::enriched_path(),
+            },
+        );
+    }
 }
 
 #[cfg(test)]
@@ -408,9 +667,9 @@ mod tests {
         );
 
         // Rust does not expose a stable getter for Windows creation flags on
-        // `Command`, so keep a source-level tripwire around the helper that
-        // protects startup refresh, Settings refresh, and login-status probes
-        // from allocating black cmd.exe windows in release builds.
+        // `Command`, so keep a source-level tripwire around the constructor
+        // that protects startup refresh, Settings refresh, and login-status
+        // probes from allocating black cmd.exe windows in release builds.
         let source = include_str!("discovery.rs");
         let helper_start = source
             .find("fn codex_cli_command")
@@ -420,9 +679,141 @@ mod tests {
             .expect("helper should stay before the OpenAI model filter")
             + helper_start;
         assert!(
-            source[helper_start..helper_end].contains(".no_console_window()"),
-            "Codex CLI helper must suppress Windows console windows",
+            source[helper_start..helper_end].contains("claudette::process::command(program)"),
+            "Codex CLI helper must use the Windows-safe process constructor",
         );
+    }
+
+    #[test]
+    fn codex_login_without_workspace_uses_default_codex_home() {
+        let command = build_codex_login_command(OsStr::new("codex"), None);
+
+        assert_eq!(command.as_std().get_current_dir(), None);
+        assert_eq!(command.as_std().get_program(), "codex");
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            vec![OsStr::new("login")]
+        );
+        assert!(
+            !command
+                .as_std()
+                .get_envs()
+                .any(|(key, _)| key == "CODEX_HOME"),
+            "global login should not override the user's default CODEX_HOME",
+        );
+    }
+
+    #[test]
+    fn codex_login_missing_worktree_falls_back_to_default_codex_home() {
+        let workspace = claudette::model::Workspace {
+            id: "workspace-1".to_string(),
+            repository_id: "repo-1".to_string(),
+            name: "Restoring workspace".to_string(),
+            branch_name: "main".to_string(),
+            worktree_path: None,
+            status: claudette::model::WorkspaceStatus::Active,
+            agent_status: claudette::model::AgentStatus::Idle,
+            status_line: String::new(),
+            created_at: "2026-05-22T00:00:00.000Z".to_string(),
+            sort_order: 0,
+            input_values: None,
+        };
+
+        assert_eq!(codex_login_worktree_path(&workspace), None);
+        let command = build_codex_login_command(OsStr::new("codex"), None);
+
+        assert_eq!(command.as_std().get_current_dir(), None);
+        assert!(
+            !command
+                .as_std()
+                .get_envs()
+                .any(|(key, _)| key == "CODEX_HOME"),
+            "missing-worktree login should fall back to the user's default CODEX_HOME",
+        );
+    }
+
+    #[test]
+    fn codex_login_with_workspace_uses_repo_local_codex_home() {
+        let worktree = PathBuf::from("/tmp/speckit-worktree");
+        let ctx = CodexLoginWorkspaceEnv {
+            worktree: worktree.clone(),
+            resolved: ResolvedEnv {
+                vars: HashMap::from([("CODEX_HOME".to_string(), Some(".codex".to_string()))]),
+                sources: Vec::new(),
+            },
+        };
+
+        let command = build_codex_login_command(OsStr::new("codex"), Some(&ctx));
+
+        assert_eq!(command.as_std().get_program(), "codex");
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            vec![OsStr::new("login")]
+        );
+        assert_eq!(command.as_std().get_current_dir(), Some(worktree.as_path()));
+        let codex_home = command
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| (key == "CODEX_HOME").then_some(value))
+            .flatten();
+        assert_eq!(codex_home, Some(std::ffi::OsStr::new(".codex")));
+    }
+
+    #[test]
+    fn codex_login_with_nix_devshell_uses_app_server_wrap() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
+        let ctx = CodexLoginWorkspaceEnv {
+            worktree: tmp.path().to_path_buf(),
+            resolved: ResolvedEnv {
+                vars: HashMap::from([("CODEX_HOME".to_string(), Some(".codex".to_string()))]),
+                sources: vec![claudette::env_provider::ResolvedSource {
+                    plugin_name: "env-nix-devshell".to_string(),
+                    detected: true,
+                    vars_contributed: 1,
+                    cached: false,
+                    evaluated_at: std::time::SystemTime::now(),
+                    error: None,
+                }],
+            },
+        };
+
+        let command = build_codex_login_command(OsStr::new("codex"), Some(&ctx));
+
+        assert_eq!(command.as_std().get_current_dir(), Some(tmp.path()));
+        if claudette::env::which_in_enriched_path("nix").is_ok() {
+            assert!(
+                command
+                    .as_std()
+                    .get_program()
+                    .to_string_lossy()
+                    .ends_with("nix"),
+                "devshell Codex login should use the same nix develop wrapper as app-server"
+            );
+            assert_eq!(
+                command
+                    .as_std()
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["develop", "--command", "codex", "login"]
+            );
+            assert!(
+                !command
+                    .as_std()
+                    .get_envs()
+                    .any(|(key, _)| key == "CODEX_HOME"),
+                "wrapped login should let the devshell provide CODEX_HOME just like app-server"
+            );
+            return;
+        }
+
+        let codex_home = command
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| (key == "CODEX_HOME").then_some(value))
+            .flatten();
+        assert_eq!(codex_home, Some(std::ffi::OsStr::new(".codex")));
     }
 
     #[test]

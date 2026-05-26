@@ -1,12 +1,22 @@
 .container {
   position: fixed;
-  bottom: 16px;
+  top: 16px;
   right: 16px;
   z-index: 9999;
   display: flex;
   flex-direction: column;
   gap: 8px;
   pointer-events: none;
+}
+
+/* macOS draws an overlay title bar (`titleBarStyle: "Overlay"`) — the
+   top ~38px strip is an OS-owned drag region. Push the toast stack
+   below it so toasts never overlap the drag region (which would steal
+   window-drag from those pixels) and keep the same 16px breathing room
+   the non-mac platforms get from the window edge. 38px matches the
+   title-bar clearance hardcoded elsewhere (sidebar/settings headers). */
+[data-platform="mac"] .container {
+  top: 54px;
 }
 
 .toast {
@@ -48,7 +58,7 @@
 @keyframes toastIn {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(-8px);
   }
   to {
     opacity: 1;

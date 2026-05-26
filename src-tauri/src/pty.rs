@@ -89,9 +89,6 @@ pub async fn spawn_pty(
     // no extra args are needed; cmd honours its registry-based AutoRun
     // for the same reason.
     let (shell_path, _shell_type) = detect_user_shell();
-    let mut cmd = CommandBuilder::new(&shell_path);
-    cmd.cwd(&working_dir);
-    configure_pty_env(&mut cmd);
 
     // Resolve the env-provider layer for this workspace.
     // Unlike the agent spawn path, the PTY hosts an interactive shell that
@@ -136,7 +133,7 @@ pub async fn spawn_pty(
         repo_path: root_path.clone(),
         repo_id: repo_id_opt,
     };
-    let resolved_env = {
+    let mut resolved_env = {
         // Snapshot the plugin registry — `plugins_snapshot` releases
         // the outer RwLock immediately so opening the Plugins
         // settings page (which awaits `list_claudette_plugins`) is
@@ -155,20 +152,82 @@ pub async fn spawn_pty(
         )
         .await
     };
+    // Layer the workspace's declared input values over the env-provider
+    // stack so the interactive shell (and anything the user runs in it)
+    // sees them. Reopening the DB here mirrors the rest of pty.rs — every
+    // Tauri command opens its own `rusqlite::Connection` because the type
+    // isn't `Send`.
+    if let Ok(db) = claudette::db::Database::open(&state.db_path) {
+        crate::commands::env::merge_workspace_input_env(&db, &workspace_id, &mut resolved_env);
+    }
     crate::commands::env::register_resolved_with_watcher(
         &state,
         std::path::Path::new(&working_dir),
         &resolved_env.sources,
     )
     .await;
-    for (k, v) in &resolved_env.vars {
-        match v {
-            Some(val) => cmd.env(k, val),
-            // portable-pty's CommandBuilder inherits the base env, so
-            // None-valued entries must be explicitly removed rather
-            // than just skipped — otherwise the interactive shell
-            // silently picks up the parent-process value.
-            None => cmd.env_remove(k),
+
+    // When the env-nix-devshell provider detects a devshell for this
+    // workspace, spawn the terminal as plain `nix develop` so it lands in
+    // the workspace's own devshell — not whatever devshell the Claudette
+    // process inherited at launch. The wrap fires whenever the provider
+    // is enabled and a `flake.nix` / `shell.nix` is present;
+    // `nix_develop_wrap` returns `None` (plain shell) only when there is
+    // genuinely nothing to enter — the provider is disabled, `nix` is
+    // missing, or there's no flake. It is deliberately NOT gated on the
+    // env-var probe succeeding: a flake that fails to evaluate surfaces
+    // its error in the terminal rather than silently dropping the user
+    // into a plain shell with the wrong toolchain.
+    //
+    // The wrap runs `nix develop` with NO `--command`, so it opens the
+    // devshell's *own* shell. It must not launch the user's personal
+    // interactive shell inside the devshell: that re-runs their full
+    // shell profile (oh-my-zsh, `nix-daemon.sh`, and on nix-darwin the
+    // `/etc/zshenv` `set-environment` reset), which hard-overwrites
+    // `PATH` and strips the devshell back out. See issue #915.
+    let nix_develop_argv = claudette::env_provider::nix_develop_wrap(
+        std::path::Path::new(&working_dir),
+        &resolved_env,
+    );
+    let wrapped_in_nix_develop = nix_develop_argv.is_some();
+    let mut cmd = match nix_develop_argv {
+        Some(argv) => {
+            let mut c = CommandBuilder::new(&argv[0]);
+            c.args(&argv[1..]);
+            c
+        }
+        None => CommandBuilder::new(&shell_path),
+    };
+    cmd.cwd(&working_dir);
+    configure_pty_env(&mut cmd);
+
+    if !wrapped_in_nix_develop {
+        for (k, v) in &resolved_env.vars {
+            match v {
+                // A provider-emitted PATH is merged with the app's enriched
+                // PATH rather than applied verbatim. Otherwise a provider
+                // that emits a narrow PATH would strip the terminal of
+                // system tools — and before #915, env-nix-devshell emitted
+                // no PATH at all, so the devshell toolchain never reached
+                // the terminal. Mirrors the agent spawn path's
+                // `apply_resolved_env_to_command`.
+                Some(val) if k.as_str() == "PATH" => {
+                    cmd.env("PATH", claudette::env::merge_path_with_enriched(val));
+                }
+                // A provider that *unsets* PATH must not leave the terminal
+                // with no PATH at all (a broken interactive shell). Fall
+                // back to the enriched base — the same way the agent spawn
+                // path's `agent_path` ignores a PATH removal.
+                None if k.as_str() == "PATH" => {
+                    cmd.env("PATH", claudette::env::enriched_path());
+                }
+                Some(val) => cmd.env(k, val),
+                // portable-pty's CommandBuilder inherits the base env, so
+                // None-valued entries must be explicitly removed rather
+                // than just skipped — otherwise the interactive shell
+                // silently picks up the parent-process value.
+                None => cmd.env_remove(k),
+            }
         }
     }
 

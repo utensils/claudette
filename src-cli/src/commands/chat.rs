@@ -142,14 +142,14 @@ pub enum Action {
         thinking: bool,
         #[arg(long = "no-thinking", overrides_with = "thinking", hide = true)]
         no_thinking: bool,
-        /// Enable fast mode (lower-latency model variant when supported).
-        /// Pair: `--no-fast` forces off.
+        /// Enable fast mode (lower-latency variant; built-in support:
+        /// Opus 4.6). Pair: `--no-fast` forces off.
         #[arg(long, overrides_with = "no_fast")]
         fast: bool,
         #[arg(long = "no-fast", overrides_with = "fast", hide = true)]
         no_fast: bool,
         /// Effort level: `low`, `medium`, `high`, `xhigh`, `max`
-        /// (`max` requires Opus 4.6).
+        /// (`xhigh` requires Opus 4.7).
         #[arg(long)]
         effort: Option<String>,
         /// Enable Chrome browser mode for this session. Pair: `--no-chrome`
@@ -492,7 +492,7 @@ fn build_send_params(input: SendParamInput<'_>) -> serde_json::Value {
 /// - `@path` reads from the named file (most common for batch use)
 /// - `-` reads from stdin (pipe-friendly)
 /// - anything else is used verbatim
-fn resolve_prompt(arg: &str) -> Result<String, Box<dyn Error>> {
+pub(crate) fn resolve_prompt(arg: &str) -> Result<String, Box<dyn Error>> {
     if arg == "-" {
         let mut buf = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;

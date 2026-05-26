@@ -1,6 +1,14 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useRef,
+  useCallback,
+  useDeferredValue,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
-import { Search, ChevronLeft } from "lucide-react";
+import { Search, ChevronLeft, File } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { applyTheme, applyUserFonts, findTheme, loadAllThemes, cacheThemePreference, getThemeDataAttr } from "../../utils/theme";
 import {
@@ -17,11 +25,15 @@ import {
   createWorkspace as createWorkspaceService,
   getRepoConfig,
   runWorkspaceSetup,
-  listWorkspaceFiles,
 } from "../../services/tauri";
 import { applySelectedModel } from "../chat/applySelectedModel";
 import { useModelRegistry } from "../chat/useModelRegistry";
 import { runAndRecordSetupScript } from "../../utils/setupScriptMessage";
+import {
+  getCachedWorkspaceFiles,
+  getStaleWorkspaceFiles,
+  loadWorkspaceFilesCached,
+} from "../../utils/workspaceFileCache";
 import type { ThemeDefinition } from "../../types/theme";
 import { scoreCommand } from "./searchScore";
 import {
@@ -29,19 +41,48 @@ import {
   buildThemeCommands,
   buildModelCommands,
   buildEffortCommands,
-  buildFileCommands,
-  CATEGORY_ORDER,
-  CATEGORY_LABELS,
-  type Command,
-  type CommandCategory,
+  groupCommandsByCategory,
   type FileEntry,
+  type GroupedCommands,
 } from "./commands";
+import {
+  DEFAULT_FILE_SEARCH_LIMIT,
+  prepareFileSearchIndex,
+  searchFileIndex,
+  type FileSearchResult,
+} from "./fileFuzzySearch";
 import styles from "./CommandPalette.module.css";
 
-interface GroupedCommands {
-  category: CommandCategory;
-  label: string;
-  commands: Command[];
+const FILE_RESULT_ROW_HEIGHT = 52;
+const FILE_RESULT_OVERSCAN = 6;
+
+function renderHighlightedText(text: string, matches: readonly number[]) {
+  if (matches.length === 0) return text;
+  const matchSet = new Set(matches);
+  const chunks: ReactNode[] = [];
+  let plainStart = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (!matchSet.has(index)) continue;
+    if (plainStart < index) {
+      chunks.push(text.slice(plainStart, index));
+    }
+    chunks.push(
+      <mark key={`${index}-${text[index]}`} className={styles.matchHighlight}>
+        {text[index]}
+      </mark>,
+    );
+    plainStart = index + 1;
+  }
+  if (plainStart < text.length) {
+    chunks.push(text.slice(plainStart));
+  }
+  return chunks;
+}
+
+function dirnameMatches(result: FileSearchResult): number[] {
+  const dirnameLength = result.entry.dirname.length;
+  if (dirnameLength === 0) return [];
+  return result.pathMatches.filter((index) => index < dirnameLength);
 }
 
 export function CommandPalette() {
@@ -53,6 +94,11 @@ export function CommandPalette() {
   const toggleFuzzyFinder = useAppStore((s) => s.toggleFuzzyFinder);
   const openModal = useAppStore((s) => s.openModal);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const selectedWorkspaceFilesRefreshNonce = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? (s.fileTreeRefreshNonceByWorkspace[s.selectedWorkspaceId] ?? 0)
+      : 0,
+  );
   // Active chat session within the selected workspace. Agent-scoped
   // commands (stop, reset, model-change teardown) run against a session
   // id, not the workspace id.
@@ -114,9 +160,19 @@ export function CommandPalette() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [themes, setThemes] = useState<ThemeDefinition[]>([]);
   const [mode, setMode] = useState<"main" | "theme" | "model" | "effort" | "file">("main");
+  // Snapshot the mode the palette was opened in (main via Cmd+Shift+P,
+  // file via Cmd+P). Escape closes when we're back at the entry mode;
+  // otherwise it pops up one level to main. Read once via getState() so
+  // we capture the initial mode synchronously at mount, before the
+  // effect below clears `commandPaletteInitialMode`.
+  const [entryMode] = useState<"main" | "file">(() =>
+    useAppStore.getState().commandPaletteInitialMode === "file" ? "file" : "main",
+  );
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesLoadError, setFilesLoadError] = useState<string | null>(null);
+  const [resultsScrollTop, setResultsScrollTop] = useState(0);
+  const [resultsViewportHeight, setResultsViewportHeight] = useState(0);
   // Monotonic token bumped on each `enterFileMode` invocation so a late
   // `listWorkspaceFiles` response from a previous workspace can detect it's
   // stale and skip overwriting `fileEntries` with the wrong list.
@@ -128,6 +184,36 @@ export function CommandPalette() {
   useEffect(() => {
     loadAllThemes().then(setThemes).catch(console.error);
   }, []);
+
+  // `autoFocus` is best-effort: in the Tauri webview the palette can mount
+  // while the OS still has focus elsewhere, so the search input never picks
+  // it up and Arrow keys fall through to the document. Schedule an explicit
+  // focus on mount and after each sub-mode transition so the keyboard
+  // handler on the input is the one that fires.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [mode]);
+
+  useEffect(() => {
+    const el = resultsRef.current;
+    if (!el) return;
+    const updateHeight = () => setResultsViewportHeight(el.clientHeight);
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateHeight);
+      return () => window.removeEventListener("resize", updateHeight);
+    }
+    const resizeObserver = new ResizeObserver(updateHeight);
+    resizeObserver.observe(el);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const el = resultsRef.current;
+    if (el) el.scrollTop = 0;
+    setResultsScrollTop(0);
+  }, [mode, query]);
 
   const close = toggleCommandPalette;
 
@@ -244,10 +330,24 @@ export function CommandPalette() {
     setMode("file");
     setQuery("");
     setSelectedIndex(0);
-    setFilesLoading(true);
     setFilesLoadError(null);
+    const cached = getCachedWorkspaceFiles(
+      selectedWorkspaceId,
+      selectedWorkspaceFilesRefreshNonce,
+    );
+    const stale = cached ?? getStaleWorkspaceFiles(selectedWorkspaceId);
+    if (stale) {
+      setFileEntries(stale);
+      setFilesLoading(false);
+    } else {
+      setFileEntries([]);
+      setFilesLoading(true);
+    }
     const version = ++filesLoadVersionRef.current;
-    listWorkspaceFiles(selectedWorkspaceId)
+    loadWorkspaceFilesCached(
+      selectedWorkspaceId,
+      selectedWorkspaceFilesRefreshNonce,
+    )
       .then((entries) => {
         if (version !== filesLoadVersionRef.current) return;
         setFileEntries(entries);
@@ -256,11 +356,11 @@ export function CommandPalette() {
       .catch((err) => {
         if (version !== filesLoadVersionRef.current) return;
         console.error("[CommandPalette] Failed to load workspace files:", err);
-        setFileEntries([]);
+        if (!stale) setFileEntries([]);
         setFilesLoadError(String(err));
         setFilesLoading(false);
       });
-  }, [selectedWorkspaceId]);
+  }, [selectedWorkspaceId, selectedWorkspaceFilesRefreshNonce]);
 
   // If the palette was opened with an initial file mode (e.g. via Cmd+O), enter it.
   useEffect(() => {
@@ -384,28 +484,29 @@ export function CommandPalette() {
     [selectedModel, selectedModelProvider, effortLevel, selectedSessionId, t],
   );
 
-  const fileCommands = useMemo(
-    () =>
-      buildFileCommands(
-        fileEntries,
-        (path) => {
-          if (selectedWorkspaceId) openFileTab(selectedWorkspaceId, path);
-        },
-        close,
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fileEntries, selectedWorkspaceId],
+  const fileSearchIndex = useMemo(
+    () => prepareFileSearchIndex(fileEntries),
+    [fileEntries],
   );
+  const deferredFileQuery = useDeferredValue(mode === "file" ? query : "");
+  const fileResults = useMemo(
+    () =>
+      mode === "file"
+        ? searchFileIndex(fileSearchIndex, deferredFileQuery, DEFAULT_FILE_SEARCH_LIMIT)
+        : [],
+    [deferredFileQuery, fileSearchIndex, mode],
+  );
+  const fileSearchSettled = mode !== "file" || deferredFileQuery === query;
 
   // Active command list based on mode
   const activeCommands =
     mode === "theme" ? themeCommands
     : mode === "model" ? modelCommands
     : mode === "effort" ? effortCommands
-    : mode === "file" ? fileCommands
     : mainCommands;
 
   const filteredCommands = useMemo(() => {
+    if (mode === "file") return [];
     if (!query.trim()) return activeCommands;
 
     const scored = activeCommands
@@ -417,7 +518,7 @@ export function CommandPalette() {
       .sort((a, b) => b.score - a.score);
 
     return scored.map(({ cmd }) => cmd);
-  }, [activeCommands, query]);
+  }, [activeCommands, mode, query]);
 
   const grouped = useMemo<GroupedCommands[]>(() => {
     if (mode === "theme") {
@@ -426,9 +527,7 @@ export function CommandPalette() {
         : [];
     }
     if (mode === "file") {
-      return filteredCommands.length > 0
-        ? [{ category: "navigation", label: "Files", commands: filteredCommands }]
-        : [];
+      return [];
     }
     // When searching, show a flat ranked list (no category grouping)
     // so the relevance sort isn't overridden by category order.
@@ -437,28 +536,40 @@ export function CommandPalette() {
         ? [{ category: "general", label: "Results", commands: filteredCommands }]
         : [];
     }
-    const map = new Map<CommandCategory, Command[]>();
-    for (const cmd of filteredCommands) {
-      const arr = map.get(cmd.category) ?? [];
-      arr.push(cmd);
-      map.set(cmd.category, arr);
-    }
-    return CATEGORY_ORDER.filter((cat) => map.has(cat)).map((cat) => ({
-      category: cat,
-      label: CATEGORY_LABELS[cat],
-      commands: map.get(cat)!,
-    }));
+    return groupCommandsByCategory(filteredCommands);
   }, [filteredCommands, mode]);
+
+  // Rendered (visual) order — what arrow keys must index into so the
+  // highlighted row and the command executed on Enter always agree.
+  // Without this, browsing the main mode (no query) would highlight the
+  // category-sorted row N but Enter would fire activeCommands[N].
+  const flatCommands = useMemo(
+    () => grouped.flatMap((g) => g.commands),
+    [grouped],
+  );
+  const resultCount = mode === "file" ? fileResults.length : flatCommands.length;
+
+  // Keep the highlight within bounds when filtering shrinks the list
+  // (e.g. typing extra characters that remove matches under the cursor).
+  useEffect(() => {
+    if (resultCount === 0) {
+      if (selectedIndex !== 0) setSelectedIndex(0);
+      return;
+    }
+    if (selectedIndex > resultCount - 1) {
+      setSelectedIndex(resultCount - 1);
+    }
+  }, [resultCount, selectedIndex]);
 
   // Theme live preview on arrow navigation (only in theme mode)
   useEffect(() => {
     if (mode !== "theme" || themes.length === 0) return;
-    const cmd = filteredCommands[selectedIndex];
+    const cmd = flatCommands[selectedIndex];
     if (cmd?.id.startsWith("theme:")) {
       const themeId = cmd.id.slice("theme:".length);
       applyThemeWithFonts(themeId);
     }
-  }, [selectedIndex, filteredCommands, themes, mode]);
+  }, [selectedIndex, flatCommands, themes, mode]);
 
   // Revert theme on unmount (safety net)
   useEffect(() => {
@@ -476,32 +587,60 @@ export function CommandPalette() {
 
   // Scroll selected item into view
   useEffect(() => {
+    if (mode === "file") {
+      const el = resultsRef.current;
+      if (!el) return;
+      const top = selectedIndex * FILE_RESULT_ROW_HEIGHT;
+      const bottom = top + FILE_RESULT_ROW_HEIGHT;
+      if (top < el.scrollTop) {
+        el.scrollTop = top;
+      } else if (bottom > el.scrollTop + el.clientHeight) {
+        el.scrollTop = bottom - el.clientHeight;
+      }
+      return;
+    }
     const el = resultsRef.current?.querySelector(`[data-index="${selectedIndex}"]`);
     el?.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex]);
+  }, [mode, selectedIndex]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIndex((i) => Math.min(i + 1, filteredCommands.length - 1));
+      setSelectedIndex((i) =>
+        resultCount === 0 ? 0 : Math.min(i + 1, resultCount - 1),
+      );
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIndex((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter" && filteredCommands[selectedIndex]) {
+    } else if (e.key === "Enter" && mode === "file") {
       e.preventDefault();
-      filteredCommands[selectedIndex].execute();
+      const currentResults = fileSearchSettled
+        ? fileResults
+        : searchFileIndex(fileSearchIndex, query, DEFAULT_FILE_SEARCH_LIMIT);
+      const selectedResult = currentResults[selectedIndex] ?? currentResults[0];
+      if (!selectedResult) return;
+      if (selectedWorkspaceId) {
+        openFileTab(selectedWorkspaceId, selectedResult.entry.path);
+      }
+      close();
+    } else if (e.key === "Enter" && flatCommands[selectedIndex]) {
+      e.preventDefault();
+      flatCommands[selectedIndex].execute();
     } else if (e.key === "Escape") {
       e.preventDefault();
       // Stop propagation so the global keyboard shortcut handler doesn't
       // also close the palette when we just want to exit theme mode.
       e.nativeEvent.stopImmediatePropagation();
-      if (mode !== "main") {
-        exitSubMenu();
-      } else {
+      // Close when we're at the mode the palette opened in. Otherwise
+      // pop one level back to main. This makes Cmd+P → Esc dismiss the
+      // palette instead of revealing the Cmd+Shift+P main menu.
+      if (mode === entryMode) {
         if (themes.length > 0) {
           applyThemeWithFonts(originalThemeIdRef.current);
         }
         close();
+      } else {
+        exitSubMenu();
       }
     } else if (e.key === "Backspace" && query === "" && mode !== "main") {
       // Backspace on empty input in sub-menu → go back
@@ -516,11 +655,60 @@ export function CommandPalette() {
     close();
   };
 
+  // Fallback keydown for the whole card: result rows preventDefault on
+  // mousedown so the input keeps focus, but any other focus drift (browser
+  // weirdness, an injected button taking focus) would leave arrow keys
+  // dead. Re-dispatch them through the same handler, and for any printable
+  // key bounce focus back to the input AND apply the character so the
+  // triggering keystroke isn't dropped.
+  const handleCardKeyDown = (e: React.KeyboardEvent) => {
+    if (e.target === inputRef.current) return;
+    if (
+      e.key === "ArrowDown" ||
+      e.key === "ArrowUp" ||
+      e.key === "Enter" ||
+      e.key === "Escape" ||
+      e.key === "Backspace"
+    ) {
+      handleKeyDown(e);
+      return;
+    }
+    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      inputRef.current?.focus();
+      setQuery((q) => q + e.key);
+      setSelectedIndex(0);
+    }
+  };
+
+  const visibleFileRange = useMemo(() => {
+    if (mode !== "file") return { start: 0, end: 0 };
+    const viewport = resultsViewportHeight || 360;
+    const start = Math.max(
+      0,
+      Math.floor(resultsScrollTop / FILE_RESULT_ROW_HEIGHT) - FILE_RESULT_OVERSCAN,
+    );
+    const visibleCount = Math.ceil(viewport / FILE_RESULT_ROW_HEIGHT) + FILE_RESULT_OVERSCAN * 2;
+    return {
+      start,
+      end: Math.min(fileResults.length, start + visibleCount),
+    };
+  }, [fileResults.length, mode, resultsScrollTop, resultsViewportHeight]);
+  const visibleFileResults = useMemo(
+    () => fileResults.slice(visibleFileRange.start, visibleFileRange.end),
+    [fileResults, visibleFileRange.end, visibleFileRange.start],
+  );
+  const fileResultsHeight = fileResults.length * FILE_RESULT_ROW_HEIGHT;
+
   let flatIndex = 0;
 
   return (
     <div className={styles.backdrop} onClick={handleBackdropClick}>
-      <div className={styles.card} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={styles.card}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleCardKeyDown}
+      >
         <div className={styles.inputRow}>
           {mode !== "main" ? (
             <button
@@ -551,6 +739,10 @@ export function CommandPalette() {
               : "Type a command..."
             }
             autoFocus
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
           />
           {mode !== "main" && (
             <span className={styles.modeBadge}>
@@ -562,14 +754,64 @@ export function CommandPalette() {
           )}
         </div>
 
-        <div className={styles.results} ref={resultsRef}>
-          {filteredCommands.length === 0 ? (
+        <div
+          className={styles.results}
+          ref={resultsRef}
+          onScroll={(e) => {
+            if (mode === "file") {
+              setResultsScrollTop(e.currentTarget.scrollTop);
+            }
+          }}
+        >
+          {resultCount === 0 ? (
             <div className={styles.empty}>
               {mode === "theme" ? "No matching themes"
                 : mode === "model" ? "No matching models"
                 : mode === "effort" ? "No matching levels"
                 : mode === "file" ? (filesLoading ? "Loading files..." : filesLoadError ? `Failed to load files: ${filesLoadError}` : "No matching files")
                 : "No matching commands"}
+            </div>
+          ) : mode === "file" ? (
+            <div
+              className={styles.virtualFileList}
+              style={{ height: fileResultsHeight }}
+            >
+              {visibleFileResults.map((result, offset) => {
+                const idx = visibleFileRange.start + offset;
+                const dirname = result.entry.dirname;
+                return (
+                  <div
+                    key={result.entry.path}
+                    data-index={idx}
+                    className={`${styles.result} ${styles.fileResult} ${idx === selectedIndex ? styles.resultSelected : ""}`}
+                    style={{
+                      height: FILE_RESULT_ROW_HEIGHT,
+                      transform: `translateY(${idx * FILE_RESULT_ROW_HEIGHT}px)`,
+                    }}
+                    onClick={() => {
+                      if (!fileSearchSettled) return;
+                      if (selectedWorkspaceId) {
+                        openFileTab(selectedWorkspaceId, result.entry.path);
+                      }
+                      close();
+                    }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setSelectedIndex(idx)}
+                  >
+                    <File size={18} className={styles.resultIcon} />
+                    <div className={styles.resultBody}>
+                      <div className={styles.resultName}>
+                        {renderHighlightedText(result.entry.basename, result.basenameMatches)}
+                      </div>
+                      {dirname && (
+                        <div className={styles.resultDescription}>
+                          {renderHighlightedText(dirname, dirnameMatches(result))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             grouped.map((group) => {
@@ -590,6 +832,7 @@ export function CommandPalette() {
                     data-index={idx}
                     className={`${styles.result} ${idx === selectedIndex ? styles.resultSelected : ""}`}
                     onClick={() => cmd.execute()}
+                    onMouseDown={(e) => e.preventDefault()}
                     onMouseEnter={() => setSelectedIndex(idx)}
                   >
                     {themeColor ? (

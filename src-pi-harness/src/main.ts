@@ -11,12 +11,23 @@ import {
   SettingsManager,
   createAgentSession,
   defineTool,
+  estimateTokens,
   getAgentDir,
   type AgentSession,
   type AgentSessionEvent,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+  cancelOAuth,
+  clearApiKey,
+  handleOAuthInput,
+  listProviders,
+  oauthStart,
+  setApiKey,
+  type ProviderAuthDeps,
+} from "./provider-auth.js";
+import { renderProviderErrorMarkdown } from "./format-error.js";
 
 type RequestMessage = {
   id?: string;
@@ -34,6 +45,7 @@ type HarnessState = {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   pendingTools: Map<string, PendingTool>;
+  activeTurnStartedAt?: number;
   // True when Claudette's permission level is `full` — i.e. the user
   // ran `/permissions full` and Claudette's tools-for-level resolver
   // returned the wildcard sentinel `["*"]`. In that mode the bash /
@@ -43,6 +55,10 @@ type HarnessState = {
   // tracks `/permissions` toggles that trigger a sidecar respawn via
   // the `allowed_tools_changed` drift path.
   bypassPermissions: boolean;
+  // Wall-clock start of the in-flight compaction, set on
+  // `compaction_start` and consumed by `compaction_end` to report a
+  // `durationMs`. Cleared once the end event is emitted.
+  compactionStartedAt?: number;
 };
 
 const state: HarnessState = {
@@ -55,6 +71,19 @@ const state: HarnessState = {
 
 function send(message: Record<string, unknown>): void {
   output.write(`${JSON.stringify(message)}\n`);
+}
+
+/** Snapshot the harness state's AuthStorage / ModelRegistry into the
+ *  ProviderAuthDeps shape the `provider-auth.ts` handlers expect. Both
+ *  references are replaced on every `start_session` (so a re-auth or a
+ *  cwd change picks up new credentials), which is why we read them
+ *  fresh on each call rather than caching at startup. */
+function providerAuthDeps(): ProviderAuthDeps {
+  return {
+    authStorage: state.authStorage,
+    modelRegistry: state.modelRegistry,
+    send,
+  };
 }
 
 function respond(id: unknown, command: string, success: boolean, data?: unknown, error?: unknown): void {
@@ -556,6 +585,29 @@ function makeStreamCapture(limitBytes: number) {
   };
 }
 
+/**
+ * Run a command and capture its stdout/stderr to a per-stream cap.
+ *
+ * Resolves on the child's `'exit'` event, NOT `'close'`. `'close'` waits
+ * for the child AND every stdio pipe FD to reach EOF — a grandchild that
+ * inherited stdout/stderr (the textbook example: `bash -c "codex exec …"`,
+ * where `codex` forks helper processes) keeps the pipe open, so `'close'`
+ * never fires and the tool call hangs forever even though the visible
+ * command has finished.
+ *
+ * We listen to both `'exit'` (process terminated) and the streams' `'end'`
+ * (EOF reached on the pipe). On exit we yield one event-loop tick via
+ * `setImmediate` so libuv delivers any `'data'` callbacks already queued
+ * for the just-died child, then if a pipe is still open — a descendant is
+ * holding it — we forcibly destroy our read end. The descendant gets
+ * EPIPE on its next write, which is correct: its parent died, it has no
+ * standing to keep writing to our captured stream.
+ *
+ * This intentionally has no wall-clock timeout. Users press Stop to
+ * cancel a genuinely stuck command; an arbitrary cap would either
+ * interrupt legitimate long jobs (builds, large test suites) or be loose
+ * enough to be useless.
+ */
 function runCommand(program: string, args: string[], cwd: string, signal?: AbortSignal) {
   return new Promise<{
     stdout: string;
@@ -571,16 +623,67 @@ function runCommand(program: string, args: string[], cwd: string, signal?: Abort
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => stdout.push(chunk));
     child.stderr.on("data", (chunk: string) => stderr.push(chunk));
-    child.on("error", reject);
-    child.on("close", (exitCode) =>
+
+    let exited = false;
+    let exitCode: number | null = null;
+    let stdoutEnded = false;
+    let stderrEnded = false;
+    let resolved = false;
+    // Set if we had to force-close a stream that hadn't reached EOF.
+    // Means a descendant inherited the pipe (the case this whole
+    // rewrite exists for) OR the child wrote enough output that libuv
+    // hadn't finished draining before our `setImmediate` ran. Either
+    // way the caller deserves a truthful "we may have cut off tail
+    // output" flag instead of a silent partial result.
+    let forcedClose = false;
+
+    const finalize = () => {
+      if (resolved) return;
+      // Only finalize once we know the process exited. The `setImmediate`
+      // path below handles the case where exit fires but the pipes never
+      // EOF (descendant holding the FD).
+      if (!exited) return;
+      resolved = true;
       resolveCommand({
         stdout: stdout.text(),
         stderr: stderr.text(),
         exitCode,
-        truncated: stdout.wasTruncated() || stderr.wasTruncated(),
+        truncated: stdout.wasTruncated() || stderr.wasTruncated() || forcedClose,
         limitBytes: MAX_COMMAND_OUTPUT_BYTES,
-      }),
-    );
+      });
+    };
+
+    child.stdout.on("end", () => {
+      stdoutEnded = true;
+      finalize();
+    });
+    child.stderr.on("end", () => {
+      stderrEnded = true;
+      finalize();
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      exited = true;
+      exitCode = code;
+      // Yield to libuv so any `'data'` callbacks already queued for
+      // bytes the child wrote before it died get delivered to our
+      // capture before we close. `setImmediate` runs after the current
+      // I/O phase — no arbitrary delay, just the standard
+      // "drain pending callbacks" idiom.
+      setImmediate(() => {
+        if (!stdoutEnded) {
+          forcedClose = true;
+          child.stdout.destroy();
+        }
+        if (!stderrEnded) {
+          forcedClose = true;
+          child.stderr.destroy();
+        }
+        // If a descendant is holding the pipe, the streams won't emit
+        // `'end'` — finalize directly.
+        finalize();
+      });
+    });
   });
 }
 
@@ -840,6 +943,229 @@ function findModel(value: string) {
   return state.modelRegistry.getAll().find((model) => model.id === modelId);
 }
 
+/**
+ * Pull a human-readable error out of pi-agent-core's `agent_end` event.
+ *
+ * The event carries `messages: AgentMessage[]` (no top-level
+ * errorMessage). The actual failure lives on the last assistant
+ * message's `errorMessage` when its `stopReason` is "error" or
+ * "aborted". We walk the tail of the array because the final message
+ * is always the assistant's last attempt — earlier messages may be
+ * tool results or successful assistant turns from this same run.
+ *
+ * Returns `undefined` when the run ended cleanly (no error to
+ * surface). Defensive about shape because Pi may change this event
+ * later — we only need a string when there's one to surface.
+ */
+function extractAgentEndError(event: { messages?: unknown }): string | undefined {
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") continue;
+    const m = message as {
+      role?: string;
+      stopReason?: string;
+      errorMessage?: unknown;
+    };
+    if (m.role !== "assistant") continue;
+    const failed = m.stopReason === "error" || m.stopReason === "aborted";
+    if (!failed) return undefined;
+    if (typeof m.errorMessage === "string" && m.errorMessage.trim()) {
+      return m.errorMessage.trim();
+    }
+    // Failure flagged but no human-readable message — return a stub
+    // so Rust still produces a turn_end with an error indicator
+    // rather than silently succeeding.
+    return `Pi turn ${m.stopReason ?? "failed"}`;
+  }
+  return undefined;
+}
+
+type PiIterationUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** End-of-turn context occupancy. Sourced from
+   * `AgentSession.getContextUsage().tokens` when available — that is Pi's
+   * authoritative figure (uses the last assistant usage and walks any
+   * trailing messages), which is also what Pi itself uses to decide
+   * whether auto-compaction should fire. Falls back to the last
+   * assistant message's `usage.totalTokens` when the session API
+   * returns null (e.g. right after a compaction, before the next LLM
+   * response). */
+  totalTokens?: number;
+  /** Runtime context window for the current model. Lets the meter use
+   * the model's actual capacity rather than the static value baked into
+   * the UI's model registry. */
+  modelContextWindow?: number;
+};
+
+type PiAggregateUsage = {
+  /** Sum of `input` across every assistant message in this turn. */
+  inputTokens: number;
+  /** Sum of `output` across every assistant message in this turn. */
+  outputTokens: number;
+  /** Sum of `cacheRead` across every assistant message in this turn. */
+  cacheReadTokens: number;
+  /** Sum of `cacheWrite` across every assistant message in this turn. */
+  cacheCreationTokens: number;
+  /** Sum of `totalTokens` across every assistant message in this turn,
+   *  falling back to `input+output+cacheRead+cacheWrite` per message
+   *  when the provider didn't populate it. */
+  totalTokens?: number;
+};
+
+type PiTurnUsage = {
+  /** Cumulative usage across every assistant message in the turn.
+   *  Drives `TokenUsage`'s top-level fields, which the TurnFooter /
+   *  CompletedTurn surface as "total work for this Claudette-level
+   *  turn". Documented by `pickMeterUsageFromResult` as the aggregate
+   *  semantics. Multi-iteration turns (agent loop with tool calls)
+   *  must use the cumulative figure here, not the final-call snapshot,
+   *  otherwise the footer under-reports. */
+  aggregate?: PiAggregateUsage;
+  /** Per-final-call snapshot — populates `TokenUsage.iterations[0]`,
+   *  which `pickMeterUsageFromResult` reads in preference to the
+   *  top-level aggregate for the ContextMeter's end-of-turn occupancy
+   *  reading. */
+  iteration?: PiIterationUsage;
+  /** Cumulative cost across all assistant messages in the turn. Drives
+   *  the USAGE popover; not used by the context meter. */
+  totalCostUsd: number;
+  durationMs?: number;
+};
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Resolve the per-final-call usage snapshot the context meter reads.
+ *
+ * Pi's `AssistantMessage.usage` is per-call (not cumulative); summing
+ * across messages — which the harness used to do — produces a figure
+ * that grows roughly as `num_iterations × actual_context`, hitting
+ * megatokens on long tool-use chains. The meter needs the size of the
+ * model's most recent prompt, which is exactly the last assistant
+ * message's usage block.
+ *
+ * For `totalTokens` we prefer `session.getContextUsage()` because Pi
+ * computes it the same way auto-compaction does (last-assistant usage
+ * plus an estimate for any trailing non-assistant messages) and
+ * handles the post-compaction "no usage yet" baseline by returning
+ * `tokens: null`. When the session API is unavailable (no session, or
+ * returned undefined) we fall back to the last assistant's
+ * `usage.totalTokens` so the meter still shows something useful.
+ */
+function buildIterationUsage(event: { messages?: unknown }): PiIterationUsage | undefined {
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") continue;
+    const m = message as {
+      role?: string;
+      usage?: {
+        input?: unknown;
+        output?: unknown;
+        cacheRead?: unknown;
+        cacheWrite?: unknown;
+        totalTokens?: unknown;
+      };
+    };
+    if (m.role !== "assistant" || !m.usage) continue;
+    const input = finiteNumber(m.usage.input) ?? 0;
+    const output = finiteNumber(m.usage.output) ?? 0;
+    const cacheRead = finiteNumber(m.usage.cacheRead) ?? 0;
+    const cacheWrite = finiteNumber(m.usage.cacheWrite) ?? 0;
+    const lastTotal = finiteNumber(m.usage.totalTokens);
+
+    let sessionTokens: number | undefined;
+    let sessionContextWindow: number | undefined;
+    try {
+      const usage = state.session?.getContextUsage();
+      if (usage) {
+        sessionTokens = finiteNumber(usage.tokens);
+        sessionContextWindow = finiteNumber(usage.contextWindow);
+      }
+    } catch {
+      // `getContextUsage()` reads internal session state; if Pi changes
+      // its shape under us, fall through to the last-assistant fallback.
+    }
+
+    return {
+      inputTokens: input,
+      outputTokens: output,
+      cacheReadTokens: cacheRead,
+      cacheCreationTokens: cacheWrite,
+      totalTokens: sessionTokens ?? lastTotal,
+      modelContextWindow: sessionContextWindow,
+    };
+  }
+  return undefined;
+}
+
+function extractAgentEndUsage(
+  event: { messages?: unknown },
+  startedAt?: number,
+): PiTurnUsage | undefined {
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  let totalCostUsd = 0;
+  let sawUsage = false;
+  const aggregate: PiAggregateUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+  };
+  let aggregateTotal = 0;
+  let sawAggregateTotal = false;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const m = message as {
+      role?: string;
+      usage?: {
+        input?: unknown;
+        output?: unknown;
+        cacheRead?: unknown;
+        cacheWrite?: unknown;
+        totalTokens?: unknown;
+        cost?: { total?: unknown };
+      };
+    };
+    if (m.role !== "assistant" || !m.usage) continue;
+    sawUsage = true;
+    const input = finiteNumber(m.usage.input) ?? 0;
+    const output = finiteNumber(m.usage.output) ?? 0;
+    const cacheRead = finiteNumber(m.usage.cacheRead) ?? 0;
+    const cacheWrite = finiteNumber(m.usage.cacheWrite) ?? 0;
+    aggregate.inputTokens += input;
+    aggregate.outputTokens += output;
+    aggregate.cacheReadTokens += cacheRead;
+    aggregate.cacheCreationTokens += cacheWrite;
+    const messageTotal = finiteNumber(m.usage.totalTokens);
+    if (messageTotal !== undefined) {
+      aggregateTotal += messageTotal;
+      sawAggregateTotal = true;
+    } else {
+      aggregateTotal += input + output + cacheRead + cacheWrite;
+    }
+    totalCostUsd += finiteNumber(m.usage.cost?.total) ?? 0;
+  }
+  if (sawAggregateTotal || aggregateTotal > 0) {
+    aggregate.totalTokens = aggregateTotal;
+  }
+  const iteration = buildIterationUsage(event);
+  if (!sawUsage && !iteration) return undefined;
+  const out: PiTurnUsage = { totalCostUsd };
+  if (sawUsage) out.aggregate = aggregate;
+  if (iteration) out.iteration = iteration;
+  if (startedAt !== undefined) {
+    out.durationMs = Math.max(0, Date.now() - startedAt);
+  }
+  return out;
+}
+
 function routeSessionEvent(event: AgentSessionEvent): void {
   switch (event.type) {
     // Pi distinguishes the agent-loop boundary (`agent_start` /
@@ -851,10 +1177,17 @@ function routeSessionEvent(event: AgentSessionEvent): void {
     // the per-LLM-turn events so a multi-round agent doesn't emit N
     // duplicate `Result` events on the Rust side.
     case "agent_start":
+      state.activeTurnStartedAt = Date.now();
       send({ type: "turn_start" });
       break;
     case "message_update": {
-      const update = event.assistantMessageEvent as { type?: string; delta?: string; text?: string };
+      const update = event.assistantMessageEvent as {
+        type?: string;
+        delta?: string;
+        text?: string;
+        reason?: string;
+        error?: { errorMessage?: string };
+      };
       // Pi SDK `AssistantMessageEvent` is a tagged union covering text,
       // thinking, and tool-call streaming. Each tool call streams its
       // raw JSON arguments as a series of `toolcall_delta` events; if
@@ -877,9 +1210,21 @@ function routeSessionEvent(event: AgentSessionEvent): void {
         if (delta) send({ type: "assistant_delta", delta });
         break;
       }
+      if (type === "error") {
+        // `AssistantMessageEvent` `error` variant fires when the LLM
+        // call fails mid-turn (e.g. a Copilot model returns 401 or a
+        // provider 5xxs). The error message lives on the carried
+        // partial AssistantMessage. Format with the shared markdown
+        // renderer so the chat doesn't render raw provider JSON.
+        const errorMessage = update.error?.errorMessage?.trim();
+        const raw =
+          errorMessage ?? `Pi model call failed (${update.reason ?? "error"})`;
+        send({ type: "turn_error", error: renderProviderErrorMarkdown(raw) });
+        break;
+      }
       // start / text_start / text_end / thinking_start / thinking_end /
-      // toolcall_start / toolcall_delta / toolcall_end / done / error
-      // carry no user-visible chat text — drop them.
+      // toolcall_start / toolcall_delta / toolcall_end / done — no
+      // user-visible chat text. Drop them.
       break;
     }
     case "tool_execution_start":
@@ -909,12 +1254,109 @@ function routeSessionEvent(event: AgentSessionEvent): void {
         isError: event.isError,
       });
       break;
-    case "agent_end":
+    case "agent_end": {
+      // pi-agent-core's `agent_end` does NOT carry a top-level
+      // `errorMessage` (only `messages: AgentMessage[]`). The
+      // `"errorMessage" in event` check therefore always failed and
+      // every turn_end propagated with `error: undefined`, leaving
+      // the chat silent when a model call 401'd / 5xx'd. Walk the
+      // tail of `messages` for the last assistant entry and forward
+      // its errorMessage when `stopReason` is "error" or "aborted".
+      const raw = extractAgentEndError(event as { messages?: unknown });
+      const usage = extractAgentEndUsage(
+        event as { messages?: unknown },
+        state.activeTurnStartedAt,
+      );
+      state.activeTurnStartedAt = undefined;
       send({
         type: "turn_end",
-        error: "errorMessage" in event ? event.errorMessage : undefined,
+        error: raw ? renderProviderErrorMarkdown(raw) : undefined,
+        ...usage,
       });
       break;
+    }
+    case "auto_retry_start": {
+      // Surface "retrying after <reason>" as a turn-thinking line so
+      // users seeing a long pause know Pi is re-trying instead of
+      // assuming the agent froze. Best-effort — the reason live on
+      // the event's errorMessage in current Pi versions.
+      const reason = "errorMessage" in event ? (event as { errorMessage?: string }).errorMessage : undefined;
+      const attempt = (event as { attempt?: number }).attempt;
+      const max = (event as { maxAttempts?: number }).maxAttempts;
+      if (reason) {
+        send({
+          type: "thinking_delta",
+          delta: `[Pi retry ${attempt ?? "?"}/${max ?? "?"}] ${reason}\n`,
+        });
+      }
+      break;
+    }
+    case "auto_retry_end": {
+      // Final retry failed: surface `finalError` as a turn_error so
+      // it reaches the chat even if `agent_end` walks back into the
+      // no-errorMessage path. Run through the formatter so a JSON
+      // envelope from the provider gets unwrapped into a friendly
+      // line just like the other error paths.
+      const finalError = (event as { finalError?: string }).finalError?.trim();
+      const success = (event as { success?: boolean }).success;
+      if (success === false && finalError) {
+        send({
+          type: "turn_error",
+          error: renderProviderErrorMarkdown(finalError),
+        });
+      }
+      break;
+    }
+    case "compaction_start": {
+      // Record the start so `compaction_end` can report a duration.
+      // The Rust side flips the UI to "Compacting" for a manual
+      // /compact; auto-compaction (threshold/overflow) rides an active
+      // turn that already owns the status indicator.
+      state.compactionStartedAt = Date.now();
+      send({ type: "compaction_start", reason: event.reason });
+      break;
+    }
+    case "compaction_end": {
+      // Translate Pi's native compaction completion into a structured
+      // event the Rust harness maps onto Claudette's compact_boundary
+      // divider. Flatten `result` so the deserializer needs no nested
+      // struct. A run that produced no `result` — explicit abort OR a
+      // generic failure carrying `errorMessage` — freed no context, so
+      // flag it `aborted` and let the Rust side surface a notice rather
+      // than a misleading divider.
+      const startedAt = state.compactionStartedAt;
+      state.compactionStartedAt = undefined;
+      const succeeded =
+        !event.aborted && event.result != null && !event.errorMessage;
+      const payload: Record<string, unknown> = {
+        type: "compaction_end",
+        reason: event.reason,
+        aborted: !succeeded,
+        willRetry: event.willRetry === true,
+      };
+      if (startedAt !== undefined) {
+        payload.durationMs = Date.now() - startedAt;
+      }
+      if (succeeded && event.result) {
+        payload.tokensBefore = event.result.tokensBefore;
+        // CompactionResult carries no post-compaction count. Pi's
+        // internal `estimateContextTokens` isn't in the package's
+        // public exports, so reconstruct its spirit: sum the exported
+        // chars/4 `estimateTokens` heuristic over the reloaded message
+        // list (`messages` already holds the post-compaction context
+        // by the time `compaction_end` fires on the success path).
+        if (state.session) {
+          payload.tokensAfter = state.session.messages.reduce(
+            (sum, message) => sum + estimateTokens(message),
+            0,
+          );
+        }
+      } else if (event.errorMessage) {
+        payload.errorMessage = event.errorMessage.trim();
+      }
+      send(payload);
+      break;
+    }
     // Per-LLM-turn boundaries fire N times inside the agent loop —
     // intentionally swallowed here (see the `agent_start` case for
     // the full rationale). Listed explicitly so a future SDK upgrade
@@ -923,13 +1365,9 @@ function routeSessionEvent(event: AgentSessionEvent): void {
     // the double-Result bug.
     case "turn_start":
     case "turn_end":
-    case "auto_retry_start":
-    case "compaction_start":
-    case "compaction_end":
     case "queue_update":
     case "session_info_changed":
     case "thinking_level_changed":
-    case "auto_retry_end":
       break;
     default:
       break;
@@ -963,6 +1401,30 @@ async function handle(message: RequestMessage): Promise<void> {
       runTurn(state.session.steer(asPromptString(message.prompt) ?? ""));
       respond(message.id, message.type, true);
       break;
+    case "compact": {
+      if (!state.session) throw new Error("Pi session has not started");
+      // Pi's `compact()` aborts any current operation, runs the
+      // summarization, and reports its lifecycle via the
+      // `compaction_start` / `compaction_end` events on the session
+      // subscription. Don't await — the response here is just the
+      // action-accepted ack, mirroring `prompt` / `steer`.
+      // `customInstructions` biases the summary (Pi's CLI `/compact
+      // <focus>`); Claudette rejects `/compact` arguments today, so
+      // this is always undefined for now but the slot is wired.
+      const customInstructions =
+        typeof message.customInstructions === "string"
+          ? message.customInstructions
+          : undefined;
+      void state.session.compact(customInstructions).catch((error) => {
+        // `compact()` emits `compaction_end` before it re-throws, so the
+        // structured event the Rust per-turn pump terminates on has
+        // already been sent. Swallow the rejection (surfaced via `error`
+        // for the logs) to avoid an unhandled-promise crash.
+        send({ type: "error", error: `Pi compaction failed: ${String(error)}` });
+      });
+      respond(message.id, message.type, true);
+      break;
+    }
     case "abort":
       // Resolve any pending approval prompts so the corresponding
       // tool `execute()` calls don't keep awaiting after Pi has been
@@ -991,6 +1453,44 @@ async function handle(message: RequestMessage): Promise<void> {
         models: listAvailableModels().length,
         authFile: join(getAgentDir(), "auth.json"),
       });
+      break;
+    case "list_providers":
+      respond(message.id, message.type, true, listProviders(providerAuthDeps()));
+      break;
+    case "set_api_key":
+      setApiKey(
+        providerAuthDeps(),
+        asString(message.providerId) ?? "",
+        asString(message.key) ?? "",
+      );
+      respond(message.id, message.type, true);
+      break;
+    case "clear_api_key":
+      clearApiKey(providerAuthDeps(), asString(message.providerId) ?? "");
+      respond(message.id, message.type, true);
+      break;
+    case "oauth_start":
+      // Don't `await` — Pi's `login()` resolves only after the user
+      // finishes the browser flow. Returning immediately lets the UI
+      // receive the synchronous response while the device-code events
+      // stream asynchronously via `oauth_challenge` / `oauth_complete`.
+      void oauthStart(
+        providerAuthDeps(),
+        asString(message.providerId) ?? "",
+        asString(message.challengeId) ?? "",
+      );
+      respond(message.id, message.type, true);
+      break;
+    case "oauth_input":
+      handleOAuthInput(
+        asString(message.challengeId) ?? "",
+        typeof message.value === "string" ? message.value : "",
+      );
+      respond(message.id, message.type, true);
+      break;
+    case "oauth_cancel":
+      cancelOAuth(asString(message.challengeId) ?? "");
+      respond(message.id, message.type, true);
       break;
     case "approve_tool": {
       const requestId = asString(message.requestId);

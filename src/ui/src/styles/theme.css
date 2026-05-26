@@ -15,13 +15,19 @@
    Coral accent on warm charcoal.
    ============================================================ */
 :root {
-  /* ---- Brand accent (coral) ---- */
+  /* ---- Brand accent (coral) ----
+     accent-bg/-bg-strong/-glow derive from --accent-primary via
+     color-mix(), so a theme (or Base16 import) that only sets
+     --accent-primary still gets matching surfaces and glow. Per-theme
+     blocks below can override the derived layers with literal rgba
+     to nudge alpha (default-light prefers a softer glow, etc.) — those
+     overrides win over the cascade-derived defaults. */
   --accent-primary:      #e07850;
   --accent-primary-rgb:  224, 120, 80;
   --accent-dim:          #c45a35;
-  --accent-bg:           rgba(224, 120, 80, 0.08);
-  --accent-bg-strong:    rgba(224, 120, 80, 0.15);
-  --accent-glow:         0 0 12px rgba(224, 120, 80, 0.25);
+  --accent-bg:           color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  --accent-bg-strong:    color-mix(in srgb, var(--accent-primary) 15%, transparent);
+  --accent-glow:         0 0 12px color-mix(in srgb, var(--accent-primary) 25%, transparent);
   /* Text color to pair with an --accent-primary background. Dark text on
      our bright/medium accents; light themes override below. */
   --on-accent:           #1c1815;
@@ -88,6 +94,108 @@
   --badge-plan:          #8cb8e0;
   --badge-ask:           #f5a0b8;
 
+  /* ---- Semantic accents — success / warning / error / info.
+     Each family aliases an existing palette token (where one exists)
+     and derives bg/border/hover/fg via color-mix(). This means a theme
+     that overrides ONLY the upstream token (--badge-done, --status-stopped,
+     --badge-plan) automatically gets a matching semantic family — the
+     additive compatibility contract holds end-to-end.
+
+     For warning there's no equivalent legacy token, so it stays a literal;
+     themes override --accent-warning directly when they need a different
+     hue. color-mix(in srgb, X N%, transparent) produces an N%-alpha
+     version of X — the modern replacement for the old rgba(var(--*-rgb),
+     N) pattern that required maintaining a separate `-rgb` triplet
+     token. */
+  --accent-success:        var(--badge-done);
+  --accent-success-bg:     color-mix(in srgb, var(--accent-success) 10%, transparent);
+  --accent-success-border: color-mix(in srgb, var(--accent-success) 30%, transparent);
+  --accent-success-hover:  color-mix(in srgb, var(--accent-success) 15%, transparent);
+  --accent-success-fg:     var(--accent-success);
+
+  --accent-warning:        #f0a050;
+  --accent-warning-bg:     color-mix(in srgb, var(--accent-warning) 10%, transparent);
+  --accent-warning-border: color-mix(in srgb, var(--accent-warning) 30%, transparent);
+  --accent-warning-hover:  color-mix(in srgb, var(--accent-warning) 15%, transparent);
+  --accent-warning-fg:     var(--accent-warning);
+
+  --accent-error:          var(--status-stopped);
+  --accent-error-bg:       color-mix(in srgb, var(--accent-error) 10%, transparent);
+  --accent-error-border:   color-mix(in srgb, var(--accent-error) 30%, transparent);
+  --accent-error-hover:    color-mix(in srgb, var(--accent-error) 15%, transparent);
+  --accent-error-fg:       var(--accent-error);
+
+  --accent-info:           var(--badge-plan);
+  --accent-info-bg:        color-mix(in srgb, var(--accent-info) 10%, transparent);
+  --accent-info-border:    color-mix(in srgb, var(--accent-info) 30%, transparent);
+  --accent-info-hover:     color-mix(in srgb, var(--accent-info) 15%, transparent);
+  --accent-info-fg:        var(--accent-info);
+
+  /* ---- UI-role tokens — neutral emphasis + secondary/tertiary brand accents.
+     Secondary aliases the existing --mascot-pink. Tertiary is a literal
+     because there's no upstream source. Both expose the full chip triplet
+     (bg/border/fg) derived via color-mix. */
+  --accent-neutral:        var(--text-muted);
+
+  --accent-secondary:        var(--mascot-pink);
+  --accent-secondary-bg:     color-mix(in srgb, var(--accent-secondary) 10%, transparent);
+  --accent-secondary-border: color-mix(in srgb, var(--accent-secondary) 30%, transparent);
+  --accent-secondary-fg:     var(--accent-secondary);
+
+  --accent-tertiary:         #c0a0f0;
+  --accent-tertiary-bg:      color-mix(in srgb, var(--accent-tertiary) 10%, transparent);
+  --accent-tertiary-border:  color-mix(in srgb, var(--accent-tertiary) 30%, transparent);
+  --accent-tertiary-fg:      var(--accent-tertiary);
+
+  /* ---- Category slots A–H — eight distinguishable hues for "item N of a
+     set" UI like plugin badges, env-provider chips, future workspace
+     tags. Each slot ships bg/border/fg directly (no -rgb here, no
+     consumer expected to layer custom alpha).
+     The default palette below is brand-invariant by design — a category
+     identity stays recognizable across most themes so muscle memory
+     holds. Themes with a strong native palette (Rosé Pine, Solarized)
+     CAN override these in their [data-theme] block when the palette's
+     identity is itself part of the theme experience; see the per-theme
+     blocks below for examples. */
+  --category-a-bg:     rgba(232, 88, 88, 0.12);
+  --category-a-border: rgba(232, 88, 88, 0.32);
+  --category-a-fg:     #e85858;
+  --category-b-bg:     rgba(240, 160, 80, 0.12);
+  --category-b-border: rgba(240, 160, 80, 0.32);
+  --category-b-fg:     #f0a050;
+  --category-c-bg:     rgba(230, 200, 77, 0.12);
+  --category-c-border: rgba(230, 200, 77, 0.32);
+  --category-c-fg:     #e6c84d;
+  --category-d-bg:     rgba(108, 204, 128, 0.12);
+  --category-d-border: rgba(108, 204, 128, 0.32);
+  --category-d-fg:     #6ccc80;
+  --category-e-bg:     rgba(108, 200, 184, 0.12);
+  --category-e-border: rgba(108, 200, 184, 0.32);
+  --category-e-fg:     #6cc8b8;
+  --category-f-bg:     rgba(108, 182, 255, 0.12);
+  --category-f-border: rgba(108, 182, 255, 0.32);
+  --category-f-fg:     #6cb6ff;
+  --category-g-bg:     rgba(192, 160, 240, 0.12);
+  --category-g-border: rgba(192, 160, 240, 0.32);
+  --category-g-fg:     #c0a0f0;
+  --category-h-bg:     rgba(245, 160, 184, 0.12);
+  --category-h-border: rgba(245, 160, 184, 0.32);
+  --category-h-fg:     #f5a0b8;
+
+  /* ---- Syntax highlight palette — mirrors base16 base08–base0F roles so
+     base16 themes can map directly. Intentionally brand-invariant (like the
+     --tool-* tokens above): the default-dark palette ships these to :root
+     and themes inherit unless they have a specific reason to override
+     (e.g. high-contrast bumps saturation). */
+  --syntax-keyword:      #c0a0f0;
+  --syntax-string:       #6ccc80;
+  --syntax-number:       #f0a050;
+  --syntax-comment:      var(--text-faint);
+  --syntax-function:     #8cb8e0;
+  --syntax-type:         #e0c050;
+  --syntax-variable:     #f07070;
+  --syntax-operator:     #6cb6ff;
+
   /* ---- Tool activity — per-category hues used in chat tool chips.
      Intentionally brand-invariant: tool chips keep the same hue across
      every theme so users build a stable read/write/bash/etc. muscle
@@ -151,6 +259,13 @@
   --terminal-fg:         var(--text-primary);
   --terminal-cursor:     var(--accent-primary);
   --terminal-selection:  rgba(var(--accent-primary-rgb), 0.25);
+  /* Terminal-search decorations. The xterm search addon requires literal
+     #RRGGBB strings — no alpha channel and no var() chain it can't resolve
+     itself, so these stay as solid hex values rather than mixing with the
+     terminal background. Active match tracks the live accent; inactive
+     matches keep a neutral gray that reads on both light and dark themes. */
+  --terminal-search-match-bg:        #5a5a5a;
+  --terminal-search-active-match-bg: var(--accent-primary);
 
   /* ---- Elevation ---- */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -283,6 +398,12 @@
   --badge-plan: #6848a8;
   --badge-ask:  #a04828;
 
+  /* --accent-success/-error/-info derive from --badge-done/--status-stopped/
+     --badge-plan via :root color-mix(), so they pick up the overrides
+     above automatically. Only --accent-warning needs a per-theme override
+     (no upstream source), and a deeper orange for cream paper. */
+  --accent-warning:       #c27430;
+
   --diff-added-bg:   rgba(26, 127, 55, 0.10);
   --diff-removed-bg: rgba(196, 32, 32, 0.10);
   --diff-added-text: #1a7f37;
@@ -346,6 +467,7 @@
   --badge-done: #99ad6a;
   --badge-plan: #8fbfdc;
   --badge-ask:  #fad07a;
+  --accent-warning: #fad07a;  /* warning has no upstream source; track --badge-ask hue */
 
   --diff-added-bg: rgba(67, 112, 25, 0.25);
   --diff-removed-bg: rgba(112, 0, 9, 0.25);
@@ -381,6 +503,21 @@
   --badge-done: #00ffdd;
   --badge-plan: #66bbff;
   --badge-ask:  #ffbb44;
+
+  /* Max-saturation warning + secondary + tertiary for legibility on near-black.
+     success/error/info derive from --badge-done/--status-stopped/--badge-plan. */
+  --accent-warning:   #ffaa00;
+  --accent-secondary: #ff66cc;
+  --accent-tertiary:  #d090ff;
+
+  --syntax-keyword:     #d090ff;
+  --syntax-string:      #44ff44;
+  --syntax-number:      #ffaa00;
+  --syntax-comment:     #888899;
+  --syntax-function:    #66bbff;
+  --syntax-type:        #ffdd00;
+  --syntax-variable:    #ff4444;
+  --syntax-operator:    #00ffdd;
 }
 
 /* ============================================================
@@ -411,9 +548,12 @@
   --text-separator: #403d52;
   --divider: #26233a;
 
-  --hover-bg: #21202e;
-  --selected-bg: rgba(196, 167, 231, 0.14);
-  --toolbar-active: rgba(196, 167, 231, 0.14);
+  /* hover-bg / selected-bg use Rosé Pine's prescribed Highlight Low/Med
+     layers instead of arbitrary accent-rgba — matches the canonical
+     palette's "highlight" role per rosepinetheme.com/palette/ingredients. */
+  --hover-bg: #21202e;          /* Highlight Low  */
+  --selected-bg: #403d52;       /* Highlight Med  */
+  --toolbar-active: #403d52;
   --toolbar-active-text: #c4a7e7;
 
   --status-running: #9ccfd8;
@@ -421,8 +561,43 @@
   --badge-done: #31748f;
   --badge-plan: #9ccfd8;
   --badge-ask:  #f6c177;
+  --accent-warning: #f6c177;  /* warning has no upstream source */
 
   --mascot-pink: #ebbcba;
+
+  /* Category slots A–F = the six named Rosé Pine accents in the order
+     Love/Gold/Rose/Pine/Foam/Iris. Slots G/H stay on the default-dark
+     palette since Rosé Pine doesn't ship a canonical hue for them. */
+  --category-a-fg: #eb6f92;  /* Love  */
+  --category-a-bg: color-mix(in srgb, #eb6f92 12%, transparent);
+  --category-a-border: color-mix(in srgb, #eb6f92 32%, transparent);
+  --category-b-fg: #f6c177;  /* Gold  */
+  --category-b-bg: color-mix(in srgb, #f6c177 12%, transparent);
+  --category-b-border: color-mix(in srgb, #f6c177 32%, transparent);
+  --category-c-fg: #ebbcba;  /* Rose  */
+  --category-c-bg: color-mix(in srgb, #ebbcba 12%, transparent);
+  --category-c-border: color-mix(in srgb, #ebbcba 32%, transparent);
+  --category-d-fg: #31748f;  /* Pine  */
+  --category-d-bg: color-mix(in srgb, #31748f 12%, transparent);
+  --category-d-border: color-mix(in srgb, #31748f 32%, transparent);
+  --category-e-fg: #9ccfd8;  /* Foam  */
+  --category-e-bg: color-mix(in srgb, #9ccfd8 12%, transparent);
+  --category-e-border: color-mix(in srgb, #9ccfd8 32%, transparent);
+  --category-f-fg: #c4a7e7;  /* Iris  */
+  --category-f-bg: color-mix(in srgb, #c4a7e7 12%, transparent);
+  --category-f-border: color-mix(in srgb, #c4a7e7 32%, transparent);
+
+  /* Syntax tokens follow the community-consensus Rosé Pine mapping (used
+     by official Neovim/VSCode plugins): Iris for keywords/types, Gold for
+     strings, Rose for numbers, Foam for functions, Muted for comments. */
+  --syntax-keyword:  #c4a7e7;  /* Iris   */
+  --syntax-string:   #f6c177;  /* Gold   */
+  --syntax-number:   #ebbcba;  /* Rose   */
+  --syntax-comment:  #6e6a86;  /* Muted  */
+  --syntax-function: #9ccfd8;  /* Foam   */
+  --syntax-type:     #9ccfd8;  /* Foam   */
+  --syntax-variable: #e0def4;  /* Text   */
+  --syntax-operator: #908caa;  /* Subtle */
 
   --diff-added-bg:   rgba(49, 116, 143, 0.22);
   --diff-removed-bg: rgba(235, 111, 146, 0.18);
@@ -460,9 +635,10 @@
   --text-separator: #44415a;
   --divider: #393552;
 
-  --hover-bg: #2a283e;
-  --selected-bg: rgba(196, 167, 231, 0.14);
-  --toolbar-active: rgba(196, 167, 231, 0.14);
+  /* Highlight Low/Med per the Moon variant of the canonical palette. */
+  --hover-bg: #2a283e;     /* Highlight Low (Moon) */
+  --selected-bg: #44415a;  /* Highlight Med (Moon) */
+  --toolbar-active: #44415a;
   --toolbar-active-text: #c4a7e7;
 
   --status-running: #9ccfd8;
@@ -470,8 +646,40 @@
   --badge-done: #3e8fb0;
   --badge-plan: #9ccfd8;
   --badge-ask:  #f6c177;
+  --accent-warning: #f6c177;  /* warning has no upstream source */
 
   --mascot-pink: #ea9a97;
+
+  /* Category slots A–F = Love/Gold/Rose/Pine/Foam/Iris. The Moon variant
+     uses a different Rose hue (#ea9a97 vs main's #ebbcba) per spec. */
+  --category-a-fg: #eb6f92;
+  --category-a-bg: color-mix(in srgb, #eb6f92 12%, transparent);
+  --category-a-border: color-mix(in srgb, #eb6f92 32%, transparent);
+  --category-b-fg: #f6c177;
+  --category-b-bg: color-mix(in srgb, #f6c177 12%, transparent);
+  --category-b-border: color-mix(in srgb, #f6c177 32%, transparent);
+  --category-c-fg: #ea9a97;  /* Rose (Moon)  */
+  --category-c-bg: color-mix(in srgb, #ea9a97 12%, transparent);
+  --category-c-border: color-mix(in srgb, #ea9a97 32%, transparent);
+  --category-d-fg: #3e8fb0;  /* Pine (Moon)  */
+  --category-d-bg: color-mix(in srgb, #3e8fb0 12%, transparent);
+  --category-d-border: color-mix(in srgb, #3e8fb0 32%, transparent);
+  --category-e-fg: #9ccfd8;
+  --category-e-bg: color-mix(in srgb, #9ccfd8 12%, transparent);
+  --category-e-border: color-mix(in srgb, #9ccfd8 32%, transparent);
+  --category-f-fg: #c4a7e7;
+  --category-f-bg: color-mix(in srgb, #c4a7e7 12%, transparent);
+  --category-f-border: color-mix(in srgb, #c4a7e7 32%, transparent);
+
+  /* Syntax tokens mirror rose-pine-main with Moon's tuned Rose/Pine. */
+  --syntax-keyword:  #c4a7e7;
+  --syntax-string:   #f6c177;
+  --syntax-number:   #ea9a97;  /* Rose (Moon) */
+  --syntax-comment:  #6e6a86;
+  --syntax-function: #9ccfd8;
+  --syntax-type:     #9ccfd8;
+  --syntax-variable: #e0def4;
+  --syntax-operator: #908caa;
 
   --diff-added-bg:   rgba(62, 143, 176, 0.22);
   --diff-removed-bg: rgba(235, 111, 146, 0.18);
@@ -512,9 +720,10 @@
   --text-separator: #dfdad9;
   --divider: #f2e9e1;
 
-  --hover-bg: #f4ede8;
-  --selected-bg: rgba(144, 122, 169, 0.14);
-  --toolbar-active: rgba(144, 122, 169, 0.14);
+  /* Highlight Low/Med per Dawn — pale parchment tints. */
+  --hover-bg: #f4ede8;     /* Highlight Low (Dawn) */
+  --selected-bg: #dfdad9;  /* Highlight Med (Dawn) */
+  --toolbar-active: #dfdad9;
   --toolbar-active-text: #907aa9;
 
   --status-running: #56949f;
@@ -522,6 +731,38 @@
   --badge-done: #286983;
   --badge-plan: #56949f;
   --badge-ask:  #ea9d34;
+  --accent-warning: #ea9d34;  /* warning has no upstream source */
+
+  /* Category slots A–F = Love/Gold/Rose/Pine/Foam/Iris (Dawn variant
+     ships darker/more saturated values so chips read on cream paper). */
+  --category-a-fg: #b4637a;  /* Love (Dawn)  */
+  --category-a-bg: color-mix(in srgb, #b4637a 14%, transparent);
+  --category-a-border: color-mix(in srgb, #b4637a 34%, transparent);
+  --category-b-fg: #ea9d34;  /* Gold (Dawn)  */
+  --category-b-bg: color-mix(in srgb, #ea9d34 14%, transparent);
+  --category-b-border: color-mix(in srgb, #ea9d34 34%, transparent);
+  --category-c-fg: #d7827e;  /* Rose (Dawn)  */
+  --category-c-bg: color-mix(in srgb, #d7827e 14%, transparent);
+  --category-c-border: color-mix(in srgb, #d7827e 34%, transparent);
+  --category-d-fg: #286983;  /* Pine (Dawn)  */
+  --category-d-bg: color-mix(in srgb, #286983 14%, transparent);
+  --category-d-border: color-mix(in srgb, #286983 34%, transparent);
+  --category-e-fg: #56949f;  /* Foam (Dawn)  */
+  --category-e-bg: color-mix(in srgb, #56949f 14%, transparent);
+  --category-e-border: color-mix(in srgb, #56949f 34%, transparent);
+  --category-f-fg: #907aa9;  /* Iris (Dawn)  */
+  --category-f-bg: color-mix(in srgb, #907aa9 14%, transparent);
+  --category-f-border: color-mix(in srgb, #907aa9 34%, transparent);
+
+  /* Syntax tokens — Dawn-tuned palette mirrors community plugins. */
+  --syntax-keyword:  #907aa9;  /* Iris (Dawn)  */
+  --syntax-string:   #ea9d34;  /* Gold (Dawn)  */
+  --syntax-number:   #d7827e;  /* Rose (Dawn)  */
+  --syntax-comment:  #9893a5;  /* Muted (Dawn) */
+  --syntax-function: #56949f;  /* Foam (Dawn)  */
+  --syntax-type:     #56949f;  /* Foam (Dawn)  */
+  --syntax-variable: #575279;  /* Text (Dawn)  */
+  --syntax-operator: #797593;  /* Subtle (Dawn)*/
 
   --mascot-pink: #d7827e;
 
@@ -573,8 +814,52 @@
   --badge-done: #859900;
   --badge-plan: #2aa198;
   --badge-ask:  #b58900;
+  --accent-warning: #b58900;  /* warning has no upstream source */
 
   --mascot-pink: #d33682;
+
+  /* Per Ethan Schoonover's canonical Solarized spec (ethanschoonover.com/
+     solarized), the 8 accent hues stay identical between dark and light
+     variants — only the base ramp inverts. Mapping all 8 onto category
+     slots A–H in spectral order surfaces orange and violet (previously
+     unused in Claudette) and gives users 8 distinct, hand-tuned tags. */
+  --category-a-fg: #dc322f;  /* red     */
+  --category-a-bg: color-mix(in srgb, #dc322f 14%, transparent);
+  --category-a-border: color-mix(in srgb, #dc322f 34%, transparent);
+  --category-b-fg: #cb4b16;  /* orange  */
+  --category-b-bg: color-mix(in srgb, #cb4b16 14%, transparent);
+  --category-b-border: color-mix(in srgb, #cb4b16 34%, transparent);
+  --category-c-fg: #b58900;  /* yellow  */
+  --category-c-bg: color-mix(in srgb, #b58900 14%, transparent);
+  --category-c-border: color-mix(in srgb, #b58900 34%, transparent);
+  --category-d-fg: #859900;  /* green   */
+  --category-d-bg: color-mix(in srgb, #859900 14%, transparent);
+  --category-d-border: color-mix(in srgb, #859900 34%, transparent);
+  --category-e-fg: #2aa198;  /* cyan    */
+  --category-e-bg: color-mix(in srgb, #2aa198 14%, transparent);
+  --category-e-border: color-mix(in srgb, #2aa198 34%, transparent);
+  --category-f-fg: #268bd2;  /* blue    */
+  --category-f-bg: color-mix(in srgb, #268bd2 14%, transparent);
+  --category-f-border: color-mix(in srgb, #268bd2 34%, transparent);
+  --category-g-fg: #6c71c4;  /* violet  */
+  --category-g-bg: color-mix(in srgb, #6c71c4 14%, transparent);
+  --category-g-border: color-mix(in srgb, #6c71c4 34%, transparent);
+  --category-h-fg: #d33682;  /* magenta */
+  --category-h-bg: color-mix(in srgb, #d33682 14%, transparent);
+  --category-h-border: color-mix(in srgb, #d33682 34%, transparent);
+
+  /* Syntax tokens follow Schoonover's loose role mapping: green for
+     keywords/operators, cyan for strings, magenta for numbers, base01
+     for comments (the canonical "optional emphasis" tone), blue for
+     functions, yellow for types, orange for variables. */
+  --syntax-keyword:  #859900;  /* green   */
+  --syntax-string:   #2aa198;  /* cyan    */
+  --syntax-number:   #d33682;  /* magenta */
+  --syntax-comment:  #586e75;  /* base01  */
+  --syntax-function: #268bd2;  /* blue    */
+  --syntax-type:     #b58900;  /* yellow  */
+  --syntax-variable: #cb4b16;  /* orange  */
+  --syntax-operator: #859900;  /* green   */
 
   --diff-added-bg:   rgba(133, 153, 0, 0.18);
   --diff-removed-bg: rgba(220, 50, 47, 0.18);
@@ -625,8 +910,47 @@
   --badge-done: #859900;
   --badge-plan: #2aa198;
   --badge-ask:  #b58900;
+  --accent-warning: #b58900;  /* warning has no upstream source */
 
   --mascot-pink: #d33682;
+
+  /* Solarized's accent palette is identical light↔dark by design
+     (only the base ramp inverts), so the category-slot and syntax-token
+     mappings exactly mirror solarized-dark above. See the comment there
+     for the spectral order. */
+  --category-a-fg: #dc322f;  /* red     */
+  --category-a-bg: color-mix(in srgb, #dc322f 14%, transparent);
+  --category-a-border: color-mix(in srgb, #dc322f 34%, transparent);
+  --category-b-fg: #cb4b16;  /* orange  */
+  --category-b-bg: color-mix(in srgb, #cb4b16 14%, transparent);
+  --category-b-border: color-mix(in srgb, #cb4b16 34%, transparent);
+  --category-c-fg: #b58900;  /* yellow  */
+  --category-c-bg: color-mix(in srgb, #b58900 14%, transparent);
+  --category-c-border: color-mix(in srgb, #b58900 34%, transparent);
+  --category-d-fg: #859900;  /* green   */
+  --category-d-bg: color-mix(in srgb, #859900 14%, transparent);
+  --category-d-border: color-mix(in srgb, #859900 34%, transparent);
+  --category-e-fg: #2aa198;  /* cyan    */
+  --category-e-bg: color-mix(in srgb, #2aa198 14%, transparent);
+  --category-e-border: color-mix(in srgb, #2aa198 34%, transparent);
+  --category-f-fg: #268bd2;  /* blue    */
+  --category-f-bg: color-mix(in srgb, #268bd2 14%, transparent);
+  --category-f-border: color-mix(in srgb, #268bd2 34%, transparent);
+  --category-g-fg: #6c71c4;  /* violet  */
+  --category-g-bg: color-mix(in srgb, #6c71c4 14%, transparent);
+  --category-g-border: color-mix(in srgb, #6c71c4 34%, transparent);
+  --category-h-fg: #d33682;  /* magenta */
+  --category-h-bg: color-mix(in srgb, #d33682 14%, transparent);
+  --category-h-border: color-mix(in srgb, #d33682 34%, transparent);
+
+  --syntax-keyword:  #859900;
+  --syntax-string:   #2aa198;
+  --syntax-number:   #d33682;
+  --syntax-comment:  #93a1a1;  /* base1 — readable on cream */
+  --syntax-function: #268bd2;
+  --syntax-type:     #b58900;
+  --syntax-variable: #cb4b16;
+  --syntax-operator: #859900;
 
   --diff-added-bg:   rgba(133, 153, 0, 0.14);
   --diff-removed-bg: rgba(220, 50, 47, 0.14);
@@ -674,6 +998,8 @@
   --badge-done: #85dacc;
   --badge-plan: #a8a9eb;
   --badge-ask:  #f38d70;
+  --accent-warning:   #f9cc6c;  /* warning has no upstream source */
+  --accent-secondary: #f38d70;  /* overrides --mascot-pink alias */
 
   --mascot-pink: #fd6883;
 
@@ -723,6 +1049,7 @@
   --badge-done: #829868;
   --badge-plan: #7aa8c0;
   --badge-ask:  #d4b880;
+  --accent-warning: #d4b880;  /* warning has no upstream source */
 
   --mascot-pink: #b56a53;
 
@@ -772,6 +1099,11 @@
   --badge-done: #4a9eff;
   --badge-plan: rgb(100, 160, 240);
   --badge-ask:  #f0a050;
+  /* Midnight Blue ships a brighter green for success than --badge-done would
+     give (which here is the brand blue) so successes stay distinguishable
+     from neutral activity. */
+  --accent-success: rgb(80, 220, 120);
+  --accent-warning: #f0a050;
 
   --mascot-pink: #f05080;
 
@@ -822,6 +1154,8 @@
   --badge-plan: rgb(120, 170, 230);
   --badge-ask:  #f0a050;
 
+  --accent-warning: #f0a050;  /* warning has no upstream source */
+
   --mascot-pink: #e85080;
 
   --diff-added-bg:   rgba(0, 180, 80, 0.12);
@@ -871,6 +1205,9 @@
   --badge-done: #08a363;
   --badge-plan: #8adcff;
   --badge-ask:  #ffba75;
+
+  --accent-warning:  #ffba75;  /* warning has no upstream source */
+  --accent-tertiary: #dcaeff;  /* sidekick's signature pale violet */
 
   --mascot-pink: #ed87ae;
 
@@ -1106,30 +1443,12 @@ select:disabled {
 }
 
 /*
- * Shiki dual-theme code highlighting.
+ * Shiki code highlighting.
  *
- * The Shiki worker emits each token span with both `--shiki-light` and
- * `--shiki-dark` CSS variables and no inline `color`. The rules below pick
- * the correct variable based on the active color scheme. Built-in themes
- * are matched by `[data-theme]`; user themes signal their scheme via an
- * inline `color-scheme: light|dark` on `<html>` (set in theme.ts:applyTheme).
- *
- * Selector targets only the Shiki-emitted token spans (those carrying the
- * `--shiki-light` custom property inline) regardless of ancestor. The
- * diff viewer mounts Shiki HTML directly inside a `<span>` (no
- * `<pre><code>` wrapper), so an ancestor-constrained selector misses
- * those tokens and they render with no token color. The line-wrapper
- * spans Shiki also emits don't carry the inline property and so
- * harmlessly miss this rule and inherit `currentColor`. Using the
- * inline-style attribute selector keeps the rule independent of
- * CSS-module class hashing.
+ * The Shiki worker uses a single Claudette theme whose foreground colors
+ * are `var(--syntax-*)` references (see styles/shikiClaudetteTheme.ts).
+ * Token spans render with inline `style="color: var(--syntax-keyword)"`
+ * etc., which the cascade resolves per-theme — no JS-side dual-theme
+ * switching needed. Light/dark adaptation comes from each theme's
+ * `--syntax-*` declarations in this file.
  */
-[style*="--shiki-light"] {
-  color: var(--shiki-dark);
-}
-[data-theme="default-light"] [style*="--shiki-light"],
-[data-theme="rose-pine-dawn"] [style*="--shiki-light"],
-[data-theme="solarized-light"] [style*="--shiki-light"],
-html[style*="color-scheme: light"] [style*="--shiki-light"] {
-  color: var(--shiki-light);
-}

@@ -67,6 +67,7 @@ export const TOOL_METADATA: Readonly<Record<string, ToolDisplayMeta>> = {
   Skill: { contentField: "skill" },
   AskUserQuestion: { contentField: "question" },
   TodoWrite: { contentField: "todos" }, // array; renderer falls back to count
+  update_plan: { contentField: "plan" }, // array; renderer falls back to count
   ToolSearch: { contentField: "query" },
   CronCreate: { contentField: "schedule" },
 
@@ -144,7 +145,8 @@ const TOOL_NAME_HEURISTICS: ReadonlyArray<{
 
   // Browser automation / JS evaluation
   {
-    test: (n) => n.startsWith("mcp__") && /__(evaluate|run_code|exec_js)/.test(n),
+    test: (n) =>
+      n.startsWith("mcp__") && /__(evaluate|run_code|exec_js)/.test(n),
     meta: { contentField: "code", contentLang: "javascript" },
   },
 
@@ -161,7 +163,9 @@ const TOOL_NAME_HEURISTICS: ReadonlyArray<{
  * wins; later entries are tie-broken by registry order. If no known
  * field matches, callers fall back to the longest string-valued field.
  */
-const FIELD_NAME_HEURISTICS: ReadonlyArray<[field: string, lang: string | null]> = [
+const FIELD_NAME_HEURISTICS: ReadonlyArray<
+  [field: string, lang: string | null]
+> = [
   ["sql", "sql"],
   ["code", "javascript"],
   ["function", "javascript"],
@@ -228,7 +232,11 @@ export function resolveToolSummary(
   // Layer 1: exact-name registry.
   const exact = TOOL_METADATA[toolName];
   if (exact) {
-    const display = displayFromField(record, exact.contentField, exact.contentLang ?? null);
+    const display = displayFromField(
+      record,
+      exact.contentField,
+      exact.contentLang ?? null,
+    );
     if (display) return display;
   }
 

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronRight } from "lucide-react";
 import {
   deleteAppSetting,
   getAppSetting,
@@ -21,10 +20,7 @@ import {
   normalizeReasoningLevel,
   reasoningVariantForModel,
 } from "../../chat/reasoningControls";
-import {
-  groupPiDiscoveredModels,
-  resolveModelSelection,
-} from "../../chat/modelRegistry";
+import { resolveModelSelection } from "../../chat/modelRegistry";
 import { useModelRegistry } from "../../chat/useModelRegistry";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
@@ -40,6 +36,7 @@ import {
 } from "../codexBackendMigration";
 import { shouldShowBackendTestButton } from "../agentBackendStartupRefresh";
 import { ClaudeCodeAuthSetting } from "../../auth/ClaudeCodeAuthSetting";
+import { PiCardBody } from "../PiCardBody";
 import styles from "../Settings.module.css";
 
 const BACKEND_AUTO_DETECT_DISABLED_PREFIX = "agent_backend_auto_detect_disabled:";
@@ -938,25 +935,35 @@ function BackendCard({
             </label>
           )}
         </div>
-        <div className={styles.backendForm}>
-          {discoveryBackend && (
-            // Same a11y concern: the Pi variant renders expandable
-            // `<button>` headers, which don't belong inside a `<label>`.
-            // Use a `<div>` + labeled span and connect them via aria.
-            <div
-              className={styles.backendField}
-              role="group"
-              aria-labelledby={`${draft.id}-discovered-models-label`}
-            >
-              <span
-                id={`${draft.id}-discovered-models-label`}
-                className={styles.backendFieldLabel}
+        {draft.kind === "pi_sdk" ? (
+          // Pi card uses a stacked, full-width layout (not the 3-col
+          // `backendForm` grid) so provider rows have enough space
+          // for label + description + source pill + buttons without
+          // truncating. Discovered models + manual models become
+          // collapsed disclosures below the provider list.
+          <PiCardBody
+            discoveredModels={discoveredModels}
+            manualModelText={manualModelText}
+            onChangeManualModels={updateModels}
+            onProviderConfigured={refresh}
+          />
+        ) : (
+          <div className={styles.backendForm}>
+            {discoveryBackend && (
+              // Same a11y concern: the Pi variant renders expandable
+              // `<button>` headers, which don't belong inside a `<label>`.
+              // Use a `<div>` + labeled span and connect them via aria.
+              <div
+                className={styles.backendField}
+                role="group"
+                aria-labelledby={`${draft.id}-discovered-models-label`}
               >
-                {t("models_backend_discovered_models")}
-              </span>
-              {draft.kind === "pi_sdk" ? (
-                <PiDiscoveredModelsList models={discoveredModels} />
-              ) : (
+                <span
+                  id={`${draft.id}-discovered-models-label`}
+                  className={styles.backendFieldLabel}
+                >
+                  {t("models_backend_discovered_models")}
+                </span>
                 <div className={styles.modelChipList}>
                   {discoveredModels.length > 0 ? (
                     discoveredModels.map((model) => (
@@ -966,33 +973,33 @@ function BackendCard({
                     <span className={styles.modelChipEmpty}>{t("models_backend_no_discovered_models")}</span>
                   )}
                 </div>
-              )}
-            </div>
-          )}
-          {showManualModels && (
-            <label className={styles.backendField}>
-              <span className={styles.backendFieldLabel}>{t("models_backend_manual_models")}</span>
-              <input
-                className={styles.input}
-                value={manualModelText}
-                placeholder={t("models_backend_manual_models_placeholder")}
-                onChange={(e) => updateModels(e.target.value)}
-              />
-            </label>
-          )}
-          {showSecret && (
-            <label className={styles.backendField}>
-              <span className={styles.backendFieldLabel}>{t("models_backend_secret")}</span>
-              <input
-                className={styles.input}
-                type="password"
-                value={secret}
-                placeholder={draft.has_secret ? t("models_backend_secret_saved") : t("models_backend_secret")}
-                onChange={(e) => setSecret(e.target.value)}
-              />
-            </label>
-          )}
-        </div>
+              </div>
+            )}
+            {showManualModels && (
+              <label className={styles.backendField}>
+                <span className={styles.backendFieldLabel}>{t("models_backend_manual_models")}</span>
+                <input
+                  className={styles.input}
+                  value={manualModelText}
+                  placeholder={t("models_backend_manual_models_placeholder")}
+                  onChange={(e) => updateModels(e.target.value)}
+                />
+              </label>
+            )}
+            {showSecret && (
+              <label className={styles.backendField}>
+                <span className={styles.backendFieldLabel}>{t("models_backend_secret")}</span>
+                <input
+                  className={styles.input}
+                  type="password"
+                  value={secret}
+                  placeholder={draft.has_secret ? t("models_backend_secret_saved") : t("models_backend_secret")}
+                  onChange={(e) => setSecret(e.target.value)}
+                />
+              </label>
+            )}
+          </div>
+        )}
       </div>
       <div className={styles.settingControl}>
         <div className={styles.backendActions}>
@@ -1017,15 +1024,13 @@ function BackendCard({
               {t("models_backend_login")}
             </button>
           )}
-          {usesPiAuth && (
-            <button
-              className={styles.iconBtn}
-              onClick={() => setStatus(t("models_backend_pi_auth_guidance", "Run `pi auth` in a terminal, then refresh Pi models."))}
-              disabled={busy}
-            >
-              {t("models_backend_pi_login")}
-            </button>
-          )}
+          {/* Pi auth UX moved into the inline `PiProviderManager`
+              above — see the `draft.kind === "pi_sdk"` block at the
+              top of `.backendForm`. Per-provider login lives there
+              (Configure / Sign in buttons), and the redundant card-
+              footer button used to confuse users into thinking
+              there's a single "Pi login" instead of N per-provider
+              flows. */}
         </div>
       </div>
     </div>
@@ -1061,75 +1066,7 @@ function isDiscoveryBackend(backend: AgentBackendConfig) {
   );
 }
 
-function PiDiscoveredModelsList({
-  models,
-}: {
-  models: AgentBackendConfig["discovered_models"];
-}) {
-  const { t } = useTranslation("settings");
-  const groups = useMemo(() => groupPiDiscoveredModels(models), [models]);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-
-  if (models.length === 0) {
-    return (
-      <div className={styles.modelChipList}>
-        <span className={styles.modelChipEmpty}>
-          {t("models_backend_no_discovered_models")}
-        </span>
-      </div>
-    );
-  }
-
-  function toggle(key: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-
-  return (
-    <div className={styles.piDiscoveredList}>
-      <div className={styles.piDiscoveredSummary}>
-        {t("models_backend_pi_discovered_summary", {
-          providers: groups.length,
-          models: models.length,
-          defaultValue: "{{providers}} providers · {{models}} models",
-        })}
-      </div>
-      {groups.map((group) => {
-        const isOpen = expanded.has(group.key);
-        return (
-          <div key={group.key} className={styles.piDiscoveredGroup}>
-            <button
-              type="button"
-              className={styles.piDiscoveredHeader}
-              aria-expanded={isOpen}
-              onClick={() => toggle(group.key)}
-            >
-              <ChevronRight
-                size={12}
-                className={`${styles.piDiscoveredChevron} ${isOpen ? styles.piDiscoveredChevronOpen : ""}`}
-                aria-hidden
-              />
-              <span className={styles.piDiscoveredGroupLabel}>{group.label}</span>
-              <span className={styles.piDiscoveredGroupCount}>
-                {group.models.length}
-              </span>
-            </button>
-            {isOpen && (
-              <div className={styles.piDiscoveredChips}>
-                {group.models.map((model) => (
-                  <span key={model.id} className={styles.modelChip} title={model.id}>
-                    {model.label || model.id}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+// `PiDiscoveredModelsList` removed — the Pi card's discovered-models
+// view now lives inside `PiCardBody`'s "Available models" disclosure.
+// `groupPiDiscoveredModels` is still used by the chat-side model
+// picker registry (`modelRegistry.ts`) and by `PiCardBody`.

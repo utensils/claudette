@@ -114,11 +114,19 @@ struct WatcherState {
 impl EnvWatcher {
     /// Build a watcher. The callback fires on every detected change
     /// to any registered path, once per `(worktree, plugin)` key that
-    /// was subscribed to it. Typical implementation:
+    /// was subscribed to it. A filesystem event is necessary but not
+    /// sufficient for eviction — `touch` / `git checkout` /
+    /// save-on-noop bump mtimes without changing bytes — so the
+    /// callback should funnel through `EnvCache::invalidate_if_stale`
+    /// (content-aware) rather than `invalidate` (unconditional), and
+    /// only notify the UI when it actually evicted. Typical
+    /// implementation:
     ///
     /// ```ignore
     /// EnvWatcher::new(Arc::new(move |worktree, plugin| {
-    ///     cache.invalidate(worktree, Some(plugin));
+    ///     if !cache.invalidate_if_stale(worktree, plugin) {
+    ///         return;
+    ///     }
     ///     let _ = app_handle.emit("env-cache-invalidated",
     ///         EnvCacheInvalidatedPayload {
     ///             worktree_path: worktree.to_string_lossy().into(),
@@ -182,6 +190,19 @@ impl EnvWatcher {
             // re-acquire the lock).
             drop(state);
             for (worktree, plugin) in fired {
+                // One line per invalidation so a "direnv reloaded but I
+                // changed nothing" report can be traced back to the
+                // exact watched path that fired. `event.paths` is the
+                // raw backend report; the matched key is what the
+                // callback evicts.
+                tracing::debug!(
+                    target: "claudette::env-watcher",
+                    worktree = %worktree.display(),
+                    plugin = %plugin,
+                    paths = ?event.paths,
+                    kind = ?event.kind,
+                    "watched path changed; invalidating env cache",
+                );
                 cb(&worktree, &plugin);
             }
         };

@@ -32,8 +32,8 @@
 }
 
 .bannerFailed {
-  background: var(--error-bg);
-  --checks-panel-bg: color-mix(in srgb, var(--status-stopped) 16%, var(--chat-header-bg));
+  background: var(--accent-error-bg);
+  --checks-panel-bg: color-mix(in srgb, var(--accent-error) 16%, var(--chat-header-bg));
 }
 
 .bannerMerged {

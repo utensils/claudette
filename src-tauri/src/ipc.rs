@@ -74,6 +74,7 @@ const METHODS: &[&str] = &[
     "archive_chat_session",
     "create_workspace",
     "archive_workspace",
+    "delete_workspaces_bulk",
     "send_chat_message",
     "steer_queued_chat_message",
     "stop_agent",
@@ -82,6 +83,11 @@ const METHODS: &[&str] = &[
     "submit_agent_answer",
     "submit_agent_approval",
     "submit_plan_approval",
+    "schedule_wakeup",
+    "routine.create",
+    "routine.list",
+    "routine.delete",
+    "routine.run",
     "plugin.list",
     "plugin.invoke",
     "scm.detect_provider",
@@ -409,6 +415,7 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
         "archive_chat_session" => handle_archive_chat_session(app, &req.params).await,
         "create_workspace" => handle_create_workspace(app, &req.params).await,
         "archive_workspace" => handle_archive_workspace(app, &req.params).await,
+        "delete_workspaces_bulk" => handle_delete_workspaces_bulk(app, &req.params).await,
         "send_chat_message" => handle_send_chat_message(app, &req.params).await,
         "steer_queued_chat_message" => handle_steer_queued_chat_message(app, &req.params).await,
         "stop_agent" => handle_stop_agent(app, &req.params).await,
@@ -417,6 +424,11 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
         "submit_agent_answer" => handle_submit_agent_answer(app, &req.params).await,
         "submit_agent_approval" => handle_submit_agent_approval(app, &req.params).await,
         "submit_plan_approval" => handle_submit_plan_approval(app, &req.params).await,
+        "schedule_wakeup" => handle_schedule_wakeup(app, &req.params).await,
+        "routine.create" => handle_routine_create(app, &req.params).await,
+        "routine.list" => handle_routine_list(app).await,
+        "routine.delete" => handle_routine_delete(app, &req.params).await,
+        "routine.run" => handle_routine_run(app, &req.params).await,
         "plugin.list" => handle_plugin_list(app).await,
         "plugin.invoke" => handle_plugin_invoke(app, &req.params).await,
         "scm.detect_provider" => handle_scm_detect_provider(app, &req.params).await,
@@ -471,11 +483,23 @@ async fn handle_create_workspace(
 
     let state = app_state(app)?;
 
+    // The CLI / batch fan-out path doesn't yet surface required inputs
+    // (deferred to v1.x). When a repo has declared inputs, the shared
+    // `ops::workspace::create_inner` raises a clear error from
+    // `validate_repository_inputs` rather than silently creating a
+    // workspace with missing env. Until the CLI grows `--input KEY=VALUE`
+    // flags, batch runs against an input-declaring repo will need to be
+    // created from the GUI.
+    let input_values: Option<std::collections::HashMap<String, String>> = params
+        .get("input_values")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
     let result = crate::commands::workspace::create_workspace_inner(
         repo_id,
         name,
         skip_setup,
         preserve_supplied_name,
+        input_values,
         app,
         &state,
     )
@@ -495,6 +519,14 @@ fn param_chat_session_id(params: &serde_json::Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .map(String::from)
         .ok_or_else(|| "missing session_id".to_string())
+}
+
+fn string_param(params: &serde_json::Value, key: &str) -> Result<String, String> {
+    params
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| format!("missing {key}"))
 }
 
 fn hydrate_session(
@@ -900,6 +932,86 @@ async fn handle_send_chat_message(
     Ok(json!({ "ok": true }))
 }
 
+async fn handle_schedule_wakeup(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let session_id = string_param(params, "session_id")
+        .or_else(|_| string_param(params, "chat_session_id"))
+        .or_else(|_| string_param(params, "session"))?;
+    let prompt = string_param(params, "prompt")?;
+    let delay_seconds = params
+        .get("delay_seconds")
+        .or_else(|| params.get("delaySeconds"))
+        .and_then(|v| v.as_i64());
+    let fire_at = params
+        .get("fire_at")
+        .or_else(|| params.get("fireAt"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let reason = params
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let state = app_state(app)?;
+    let value = crate::commands::scheduling::schedule_wakeup(
+        session_id,
+        delay_seconds,
+        fire_at,
+        prompt,
+        reason,
+        state,
+    )
+    .await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+async fn handle_routine_create(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let session_id = string_param(params, "session_id")
+        .or_else(|_| string_param(params, "chat_session_id"))
+        .or_else(|_| string_param(params, "session"))?;
+    let cron_expr = string_param(params, "cron_expr").or_else(|_| string_param(params, "cron"))?;
+    let prompt = string_param(params, "prompt")?;
+    let name = params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let recurring = params.get("recurring").and_then(|v| v.as_bool());
+    let state = app_state(app)?;
+    let value = crate::commands::scheduling::create_cron_routine(
+        session_id, name, cron_expr, prompt, recurring, state,
+    )
+    .await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+async fn handle_routine_list(app: &AppHandle) -> Result<serde_json::Value, String> {
+    let state = app_state(app)?;
+    let value = crate::commands::scheduling::list_scheduled_routines(state).await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+async fn handle_routine_delete(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
+    let state = app_state(app)?;
+    crate::commands::scheduling::delete_scheduled_routine(id, state).await
+}
+
+async fn handle_routine_run(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
+    let state = app_state(app)?;
+    crate::commands::scheduling::run_scheduled_routine(id, app.clone(), state).await
+}
+
 /// Every agent setting the GUI's chat input bar can flip, modeled here
 /// so the IPC surface (and therefore the `claudette` CLI) can drive a
 /// turn with the same fidelity as the GUI's "Send" button. Mirrors
@@ -1138,6 +1250,37 @@ async fn handle_archive_workspace(
     }))
 }
 
+/// Delegates to the shared `commands::workspace::delete_workspaces_bulk_inner`
+/// helper so CLI-driven `workspace purge` runs the same agent teardown,
+/// git cleanup, env-watcher reconciliation, and MCP supervisor update
+/// the GUI uses. Validation (Archived-status guard) is done inside the
+/// helper, so this surface stays trivial.
+async fn handle_delete_workspaces_bulk(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let ids: Vec<String> = match params.get("ids") {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("invalid `ids`: {e}"))?,
+        None => return Err("missing `ids`".to_string()),
+    };
+
+    let state = app_state(app)?;
+    let supervisor = app
+        .try_state::<Arc<claudette::mcp_supervisor::McpSupervisor>>()
+        .ok_or_else(|| "McpSupervisor not initialised".to_string())?;
+
+    let result = crate::commands::workspace::delete_workspaces_bulk_inner(
+        &ids,
+        None,
+        app,
+        &state,
+        &supervisor,
+    )
+    .await?;
+
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
 /// `plugin.list` IPC method — snapshot of every discovered Lua plugin
 /// the running GUI knows about. The CLI uses this to populate generic
 /// `plugin invoke` tab-completion hints and to surface friendly per-kind
@@ -1318,6 +1461,7 @@ mod tests {
             archive_script_auto_run: false,
             base_branch: None,
             default_remote: None,
+            required_inputs: None,
             path_valid: true,
         }
     }
@@ -1334,6 +1478,7 @@ mod tests {
             status_line: String::new(),
             created_at: String::new(),
             sort_order: 0,
+            input_values: None,
         }
     }
 
@@ -1410,6 +1555,7 @@ mod tests {
             mcp_bridge: None,
             last_user_msg_id: None,
             posted_env_trust_warning: false,
+            pending_history_prelude: None,
         }
     }
 

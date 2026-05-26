@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ensureAndValidateMcps } from "../../../services/mcp";
 import {
@@ -257,6 +258,7 @@ function ExternalBrowserLink({
 }
 
 export function ClaudeCodePluginsSettings() {
+  const { t } = useTranslation("settings");
   const repositories = useAppStore((state) => state.repositories);
   const pluginSettingsTab = useAppStore((state) => state.pluginSettingsTab);
   const setPluginSettingsTab = useAppStore((state) => state.setPluginSettingsTab);
@@ -663,7 +665,7 @@ export function ClaudeCodePluginsSettings() {
 
   return (
     <div>
-      <h1 className={styles.sectionTitle}>Plugins</h1>
+      <h1 className={styles.sectionTitle}>{t("nav_claude_code_plugins")}</h1>
       <div className={styles.settingDescription}>
         Browse marketplace plugins, manage installed ones, and refresh marketplace metadata using the real Claude CLI.
       </div>

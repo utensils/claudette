@@ -73,6 +73,71 @@ impl OpsHooks for TauriHooks {
         let _ = self.app.emit("workspaces-changed", payload);
     }
 
+    /// Override note: this implementation **intentionally diverges from
+    /// the default trait impl** (which loops per-row over
+    /// [`workspace_changed`]). The reason is amortization — the 72-row
+    /// motivating case would do 72 tray rebuilds + 72 DB re-opens + 72
+    /// `list_workspaces` scans otherwise.
+    ///
+    /// Contract: this method must produce the same observable side
+    /// effects as N calls to [`workspace_changed`] would — same tray
+    /// state, same set of `workspaces-changed` events on the frontend,
+    /// same notification semantics. If a new side effect is ever added
+    /// to [`workspace_changed`], it must also be added here (or pulled
+    /// out into a shared helper that both call). The bulk variant is
+    /// not a "subset of per-row side effects" — it's the same surface
+    /// computed more cheaply.
+    fn workspaces_changed_bulk(&self, workspace_ids: &[String], kind: WorkspaceChangeKind) {
+        if workspace_ids.is_empty() {
+            return;
+        }
+
+        // One tray rebuild for the whole batch — the 72-archived case
+        // (the motivating example for bulk cleanup) used to fire 72
+        // rebuilds + 72 DB re-opens inside one IPC call.
+        rebuild_tray(&self.app);
+
+        // One DB query to look up every still-extant workspace row
+        // referenced by the batch. For `Deleted` the rows are gone, so
+        // we skip the lookup entirely and emit `{ workspace: null }`.
+        let workspaces_by_id = if kind == WorkspaceChangeKind::Deleted {
+            None
+        } else {
+            self.app
+                .try_state::<AppState>()
+                .and_then(|state| {
+                    claudette::db::Database::open(&state.db_path)
+                        .ok()
+                        .and_then(|db| db.list_workspaces().ok())
+                })
+                .map(|all| {
+                    all.into_iter()
+                        .map(|w| (w.id.clone(), w))
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+        };
+
+        let kind_str = match kind {
+            WorkspaceChangeKind::Created => "created",
+            WorkspaceChangeKind::Archived => "archived",
+            WorkspaceChangeKind::Restored => "restored",
+            WorkspaceChangeKind::Deleted => "deleted",
+            WorkspaceChangeKind::Renamed => "renamed",
+        };
+
+        for id in workspace_ids {
+            let workspace = workspaces_by_id
+                .as_ref()
+                .and_then(|map| map.get(id).cloned());
+            let payload = WorkspacesChangedEvent {
+                kind: kind_str,
+                workspace_id: id.clone(),
+                workspace,
+            };
+            let _ = self.app.emit("workspaces-changed", payload);
+        }
+    }
+
     fn notification(&self, event: OpsNotificationEvent) {
         let state = self.app.try_state::<AppState>();
         if let Some(state) = state {

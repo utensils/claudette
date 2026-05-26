@@ -9,15 +9,36 @@ local function gh(args)
 end
 
 function M.list_pull_requests(args)
+    -- Two call-sites:
+    --   1. per-workspace branch lookup (args.branch set) — feeds the
+    --      sidebar PR badge. Keep the existing --state all behaviour so
+    --      a merged/closed PR on a branch still resolves.
+    --   2. project-view aggregation (args.scope set, no branch) —
+    --      always open PRs, filtered by scope.
+    local limit = tostring(args.limit or 30)
     local gh_args = {
         "pr", "list",
-        "--state", "all",
         "--json", "number,title,state,url,author,headRefName,baseRefName,isDraft,statusCheckRollup",
-        "--limit", "30",
+        "--limit", limit,
     }
     if args.branch then
+        table.insert(gh_args, "--state")
+        table.insert(gh_args, "all")
         table.insert(gh_args, "--head")
         table.insert(gh_args, args.branch)
+    elseif args.scope == "mine" then
+        table.insert(gh_args, "--state")
+        table.insert(gh_args, "open")
+        table.insert(gh_args, "--author")
+        table.insert(gh_args, "@me")
+    elseif args.scope == "review_requested" then
+        -- `gh pr list --search` overrides --state, so embed the filter.
+        table.insert(gh_args, "--search")
+        table.insert(gh_args, "is:open is:pr review-requested:@me")
+    else
+        -- Default scope = "open" (also matches a missing scope arg).
+        table.insert(gh_args, "--state")
+        table.insert(gh_args, "open")
     end
     local data = gh(gh_args)
     local prs = {}
@@ -57,6 +78,78 @@ function M.list_pull_requests(args)
         })
     end
     return prs
+end
+
+function M.list_issues(args)
+    -- `gh issue list` excludes pull requests (unlike the REST /issues
+    -- endpoint), so no extra filtering is needed. State defaults to
+    -- open; callers can override via args.state.
+    local limit = tostring(args.limit or 25)
+    local state = args.state or "open"
+    local gh_args = {
+        "issue", "list",
+        "--state", state,
+        "--limit", limit,
+        "--json", "number,title,url,state,author,labels,comments,createdAt,updatedAt",
+    }
+    -- Three scope options surface on the Issues tab:
+    --   "mine"     → authored by the current user (--author @me)
+    --   "assigned" → assigned to the current user (--assignee @me)
+    --   anything else (incl. nil) → no extra filter ("Open")
+    if args.scope == "mine" then
+        table.insert(gh_args, "--author")
+        table.insert(gh_args, "@me")
+    elseif args.scope == "assigned" then
+        table.insert(gh_args, "--assignee")
+        table.insert(gh_args, "@me")
+    end
+    local ok, data = pcall(gh, gh_args)
+    if not ok then
+        error(data)
+    end
+    local issues = {}
+    for _, item in ipairs(data) do
+        local labels = {}
+        for _, lbl in ipairs(item.labels or {}) do
+            table.insert(labels, {
+                name = lbl.name,
+                color = lbl.color or "",
+            })
+        end
+        local author = nil
+        if item.author and item.author.login then
+            author = item.author.login
+        end
+        -- `gh issue list --json comments` returns the comments array
+        -- itself, not a count. Use the array length so we send Rust a
+        -- u32 (passing a table here makes the Issue fail to deserialize
+        -- on the Rust side and silently drops every row).
+        local comment_count = 0
+        if type(item.comments) == "table" then
+            comment_count = #item.comments
+        elseif type(item.comments) == "number" then
+            comment_count = item.comments
+        end
+        local issue = {
+            number = item.number,
+            title = item.title,
+            url = item.url,
+            state = string.lower(item.state or "open"),
+            author = author,
+            comment_count = comment_count,
+            created_at = item.createdAt or "",
+            updated_at = item.updatedAt or "",
+        }
+        -- mlua serializes empty Lua tables as JSON `{}` not `[]`, which
+        -- fails Rust's Vec<IssueLabel> deserialization and silently
+        -- drops the entire issue. Only attach `labels` when we have at
+        -- least one entry; missing key + serde default = empty vec.
+        if #labels > 0 then
+            issue.labels = labels
+        end
+        table.insert(issues, issue)
+    end
+    return issues
 end
 
 function M.get_pull_request(args)
@@ -171,7 +264,12 @@ function M.ci_status(args)
         "--json", "name,state,link,startedAt",
     })
     if not ok then
-        host.log("warn", "ci_status failed for branch " .. tostring(args.branch) .. ": " .. tostring(data))
+        local message = tostring(data)
+        local level = "warn"
+        if string.find(message, "no pull requests found", 1, true) then
+            level = "debug"
+        end
+        host.log(level, "ci_status failed for branch " .. tostring(args.branch) .. ": " .. message)
         return {}
     end
     local checks = {}
@@ -184,6 +282,78 @@ function M.ci_status(args)
         })
     end
     return checks
+end
+
+local MAX_LOG_CHARS = 4000
+-- Hard cap on how many failing runs we fetch logs for in one poll
+-- tick. Each `gh run view --log-failed` is a sequential network call,
+-- and the SCM polling semaphore caps workspace concurrency but not
+-- per-workspace fan-out. 3 is enough for typical CI fan-out without
+-- stretching a single poll into minutes.
+local MAX_FAILED_RUNS = 3
+
+local function fetch_run_log(run, logs)
+    local result = host.exec("gh", {
+        "run", "view", tostring(run.databaseId), "--log-failed",
+    })
+    if result.code ~= 0 then
+        host.log("warn", "ci_failure_logs failed for GitHub run "
+            .. tostring(run.databaseId) .. ": " .. tostring(result.stderr or ""))
+        return
+    end
+    local log_text = result.stdout or ""
+    if #log_text > MAX_LOG_CHARS then
+        -- Take tail: CI errors are at the end of the log.
+        log_text = string.sub(log_text, -MAX_LOG_CHARS)
+    end
+    if #log_text > 0 then
+        table.insert(logs, {
+            check_name = run.name,
+            log = log_text,
+            url = run.url,
+        })
+    end
+end
+
+function M.ci_failure_logs(args)
+    local ok, runs = pcall(gh, {
+        "run", "list",
+        "--branch", args.branch,
+        "--status", "failure",
+        "--json", "databaseId,name,url",
+        "--limit", "10",
+    })
+    if not ok then
+        return {}
+    end
+
+    local wanted = {}
+    for _, name in ipairs(args.failed_checks or {}) do
+        wanted[name] = true
+    end
+    local has_wanted = next(wanted) ~= nil
+
+    local logs = {}
+    for _, run in ipairs(runs) do
+        if #logs >= MAX_FAILED_RUNS then break end
+        if (not has_wanted) or wanted[run.name] then
+            fetch_run_log(run, logs)
+        end
+    end
+
+    -- Fallback: `gh pr checks` returns job/check names while `gh run
+    -- list` returns workflow names, so exact-name matching often
+    -- misses (e.g. job "Lint" inside workflow "CI"). When we know
+    -- there were failed checks but matched none, pull logs from the
+    -- most recent failed runs as a best-effort signal.
+    if has_wanted and #logs == 0 then
+        for _, run in ipairs(runs) do
+            if #logs >= MAX_FAILED_RUNS then break end
+            fetch_run_log(run, logs)
+        end
+    end
+
+    return logs
 end
 
 return M

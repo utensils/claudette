@@ -341,6 +341,34 @@ describe("terminalKeyAction", () => {
     });
   });
 
+  describe("open-search", () => {
+    it("macOS: Cmd+F (physical KeyF) returns open-search", () => {
+      expect(terminalKeyAction(mk({ code: "KeyF", key: "f", metaKey: true })))
+        .toEqual({ kind: "open-search" });
+      expect(terminalKeyAction(mk({ code: "KeyF", key: "F", metaKey: true })))
+        .toEqual({ kind: "open-search" });
+    });
+
+    it("Linux/Windows: Ctrl+F (physical KeyF) returns open-search", () => {
+      expect(terminalKeyAction(mk({ code: "KeyF", key: "f", ctrlKey: true })))
+        .toEqual({ kind: "open-search" });
+    });
+
+    it("does NOT intercept bare F or Cmd+Shift+F", () => {
+      expect(terminalKeyAction(mk({ code: "KeyF", key: "f" }))).toBeNull();
+      expect(
+        terminalKeyAction(
+          mk({ code: "KeyF", key: "F", metaKey: true, shiftKey: true }),
+        ),
+      ).toBeNull();
+    });
+
+    it("works via code even when key differs (Dvorak: physical F = 'y')", () => {
+      expect(terminalKeyAction(mk({ code: "KeyF", key: "y", metaKey: true })))
+        .toEqual({ kind: "open-search" });
+    });
+  });
+
   describe("paste", () => {
     it("macOS: Cmd+V (physical KeyV) returns paste", () => {
       expect(terminalKeyAction(mk({ code: "KeyV", key: "v", metaKey: true })))

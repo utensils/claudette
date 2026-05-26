@@ -127,8 +127,7 @@ All actions are on `window.__CLAUDETTE_STORE__.getState()`.
 
 - `setWorktreeBaseDir(dir)` -- worktree base directory
 - `setDefaultBranches(branches)` -- Record<repoId, branchName>
-- `setTerminalFontSize(size)` -- 8-24
-- `setAudioNotifications(enabled)` -- boolean
+- `setTerminalFontSize(size)` -- 8-32 (default 11)
 - `setCurrentThemeId(id)` -- theme identifier
 - `setLastMessages(msgs)` -- Record<wsId, ChatMessage>
 - `editorGitGutterBase: "head" | "merge_base"` -- which revision the Monaco git gutter compares against

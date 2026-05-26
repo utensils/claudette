@@ -45,6 +45,38 @@ const THEMEABLE_VARS = [
   "badge-done",
   "badge-plan",
   "badge-ask",
+  // Status accents — each family is a 5-token group: base color (which a
+  // theme can override), plus -bg/-border/-hover/-fg layers derived from
+  // the base via color-mix(in srgb, var(--accent-X) N%, transparent) in
+  // :root. A theme that overrides --accent-success automatically gets a
+  // matching tinted surface and outline; no -rgb companion needed.
+  "accent-success", "accent-success-bg", "accent-success-border", "accent-success-hover", "accent-success-fg",
+  "accent-warning", "accent-warning-bg", "accent-warning-border", "accent-warning-hover", "accent-warning-fg",
+  "accent-error", "accent-error-bg", "accent-error-border", "accent-error-hover", "accent-error-fg",
+  "accent-info", "accent-info-bg", "accent-info-border", "accent-info-hover", "accent-info-fg",
+  // UI-role tokens — neutral plus secondary/tertiary brand accents.
+  // Same color-mix derivation; only the base needs overriding per theme.
+  "accent-neutral",
+  "accent-secondary", "accent-secondary-bg", "accent-secondary-border", "accent-secondary-fg",
+  "accent-tertiary", "accent-tertiary-bg", "accent-tertiary-border", "accent-tertiary-fg",
+  // Category slots A–H for "item N of a set" UI (workspace tags, plugin types).
+  "category-a-bg", "category-a-border", "category-a-fg",
+  "category-b-bg", "category-b-border", "category-b-fg",
+  "category-c-bg", "category-c-border", "category-c-fg",
+  "category-d-bg", "category-d-border", "category-d-fg",
+  "category-e-bg", "category-e-border", "category-e-fg",
+  "category-f-bg", "category-f-border", "category-f-fg",
+  "category-g-bg", "category-g-border", "category-g-fg",
+  "category-h-bg", "category-h-border", "category-h-fg",
+  // Syntax highlight palette — mirrors base16 base08–base0F roles.
+  "syntax-keyword",
+  "syntax-string",
+  "syntax-number",
+  "syntax-comment",
+  "syntax-function",
+  "syntax-type",
+  "syntax-variable",
+  "syntax-operator",
   "diff-added-bg",
   "diff-removed-bg",
   "diff-added-text",
@@ -61,6 +93,8 @@ const THEMEABLE_VARS = [
   "terminal-fg",
   "terminal-cursor",
   "terminal-selection",
+  "terminal-search-match-bg",
+  "terminal-search-active-match-bg",
   "toolbar-active",
   "toolbar-active-text",
   "error-bg",
@@ -77,6 +111,12 @@ const THEMEABLE_VARS = [
   "font-mono",
   "font-display",
 ];
+
+// Read-only re-export for the parity test (utils/themeTokenParity.test.ts).
+// Kept as a separate symbol with a `__` prefix so it's obviously not for
+// production callers — they should reach for the canonical Claudette tokens
+// via CSS, not enumerate them at runtime.
+export const __THEMEABLE_VARS: readonly string[] = THEMEABLE_VARS;
 
 /**
  * Apply user font overrides on top of the current theme.
@@ -120,6 +160,47 @@ export function getTerminalTheme(): ITheme {
     selectionBackground:
       style.getPropertyValue("--terminal-selection").trim() || undefined,
   };
+}
+
+/**
+ * Decoration colors for `@xterm/addon-search`. The addon requires literal
+ * `#RRGGBB` strings — alpha/var chains it can't resolve are rejected — and,
+ * critically, only emits `onDidChangeResults` when decorations are enabled.
+ * Without them the match counter stays at zero and the prev/next buttons
+ * remain disabled even when matches exist.
+ *
+ * The tokens live in theme.css so per-theme overrides keep working. We read
+ * them via the canonical `getPropertyValue(...).trim() || "#..."` safety
+ * fallback, then run `ensureHexColor` to guard against user JSON themes
+ * that override `--accent-primary` (which the active-match token follows
+ * via var-substitution) with non-hex CSS color formats — the addon would
+ * silently reject those.
+ */
+export function getTerminalSearchDecorations(): {
+  matchBackground: string;
+  matchOverviewRuler: string;
+  activeMatchBackground: string;
+  activeMatchColorOverviewRuler: string;
+} {
+  const style = getComputedStyle(document.documentElement);
+  const rawMatch = style.getPropertyValue("--terminal-search-match-bg").trim() || "#5a5a5a";
+  const rawActive = style.getPropertyValue("--terminal-search-active-match-bg").trim() || "#e07850";
+  const matchColor = ensureHexColor(rawMatch, "#5a5a5a");
+  const activeColor = ensureHexColor(rawActive, "#e07850");
+  return {
+    matchBackground: matchColor,
+    matchOverviewRuler: matchColor,
+    activeMatchBackground: activeColor,
+    activeMatchColorOverviewRuler: activeColor,
+  };
+}
+
+// Validates that a color string is in literal `#RRGGBB` form. Anything
+// else (rgb/hsl/color-mix/unresolved var) falls back to the supplied hex
+// so the search addon — which silently no-ops on non-hex input — always
+// gets something it can render.
+function ensureHexColor(value: string, fallback: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
 // Keys the user may have set via applyUserFonts() — preserved across
@@ -231,6 +312,218 @@ export function cacheThemePreference(
   }
 }
 
+// ---- Base16 import support ------------------------------------------------
+//
+// Claudette accepts user themes in `~/.claudette/themes/*.json` either in
+// Claudette's native shape (id/name/colors with bare token names like
+// `accent-primary` — applyTheme prepends the `--` when setting the CSS
+// property) or as a canonical Base16 scheme (`base00`–`base0F` keys).
+// Base16 files are detected and converted into Claudette tokens at load time.
+
+const BASE16_KEY_SUFFIXES = [
+  "00", "01", "02", "03", "04", "05", "06", "07",
+  "08", "09", "0A", "0B", "0C", "0D", "0E", "0F",
+] as const;
+
+type Base16Key =
+  | "base00" | "base01" | "base02" | "base03"
+  | "base04" | "base05" | "base06" | "base07"
+  | "base08" | "base09" | "base0A" | "base0B"
+  | "base0C" | "base0D" | "base0E" | "base0F";
+
+// Accept #rrggbb, rrggbb, #rgb, rgb (case-insensitive). Return canonical #rrggbb.
+function normalizeHex(value: string): string | null {
+  const v = value.trim().replace(/^#/, "");
+  if (/^[0-9a-fA-F]{6}$/.test(v)) return `#${v.toLowerCase()}`;
+  if (/^[0-9a-fA-F]{3}$/.test(v)) {
+    const [r, g, b] = v;
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return null;
+}
+
+function hexToRgbTriplet(hex: string): string {
+  const v = hex.replace(/^#/, "");
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return `${r}, ${g}, ${b}`;
+}
+
+function hexLuminance(hex: string): number {
+  const v = hex.replace(/^#/, "");
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
+// Look up a base16 slot tolerantly. Accepts:
+//   - Top-level `base0X` keys (the legacy "flat" Base16 JSON shape).
+//   - Nested under `palette` (the canonical Tinted Theming YAML→JSON shape;
+//     when serialized from `palette: { base00: ... }` the entries land as
+//     `"palette.base00"` after the loader flattens string-valued fields).
+//   - Lowercase `base0a` instead of uppercase `base0A` (some legacy schemes).
+// The Rust loader (settings.rs) is also schema-tolerant on the input side,
+// so a file in any of these shapes ends up here with the right keys.
+function readBase16Slot(
+  colors: Record<string, string>,
+  suffix: string,
+): string | undefined {
+  const upper = `base${suffix}`;
+  const lower = `base${suffix.toLowerCase()}`;
+  return (
+    colors[upper] ??
+    colors[lower] ??
+    colors[`palette.${upper}`] ??
+    colors[`palette.${lower}`]
+  );
+}
+
+// Token names that, when present in a `colors` map, strongly indicate the file
+// is a hand-authored Claudette theme rather than a Base16 scheme. Built from
+// THEMEABLE_VARS minus a few keys that could legitimately co-exist with a
+// base16 payload (e.g. `variant`, `scheme` aren't tokens).
+const CLAUDETTE_TOKEN_SET = new Set(THEMEABLE_VARS);
+
+/**
+ * A theme payload is base16 iff its `colors` map contains all 16 baseXX slots
+ * with valid hex values (case-insensitive on the hex digit) AND it does not
+ * declare ANY recognized Claudette token. The latter check makes hybrid files
+ * unambiguous: if a file ships both base16 keys and any THEMEABLE_VARS entry,
+ * we treat it as Claudette so the author's explicit mappings aren't silently
+ * overwritten by the converter.
+ */
+export function detectBase16(colors: Record<string, string>): boolean {
+  for (const key of Object.keys(colors)) {
+    if (CLAUDETTE_TOKEN_SET.has(key)) return false;
+  }
+  for (const suffix of BASE16_KEY_SUFFIXES) {
+    const value = readBase16Slot(colors, suffix);
+    if (typeof value !== "string") return false;
+    if (normalizeHex(value) === null) return false;
+  }
+  return true;
+}
+
+/**
+ * Map a base16 palette onto Claudette tokens following the canonical Tinted
+ * Theming role spec: base00=bg, base05=fg, base08=red, base0A=yellow,
+ * base0B=green, base0D=blue, base0E=purple, etc.
+ *
+ * Emits only BASE colors for the semantic accent families (success / warning
+ * / error / info / secondary / tertiary). The `-bg` / `-border` / `-hover`
+ * / `-fg` companions derive from each base in `:root` via `color-mix()`,
+ * so the cascade fills them in automatically — no per-companion emission
+ * needed here. The legacy `--accent-primary-rgb` is still co-emitted
+ * because terminal-selection and a few other consumers still read it.
+ *
+ * `color-scheme` is read from a `variant` field if present (some base16
+ * files declare `"variant": "light"`); otherwise derived from base00's
+ * relative luminance.
+ */
+export function convertBase16ToClaudette(theme: ThemeDefinition): ThemeDefinition {
+  const src = theme.colors;
+  const palette: Partial<Record<Base16Key, string>> = {};
+  for (const suffix of BASE16_KEY_SUFFIXES) {
+    const raw = readBase16Slot(src, suffix);
+    const norm = normalizeHex(raw ?? "");
+    if (norm === null) {
+      // detectBase16 should have caught this; bail out and return the input
+      // unchanged so applyTheme treats it as a plain Claudette theme.
+      return theme;
+    }
+    palette[`base${suffix}` as Base16Key] = norm;
+  }
+  const p = palette as Record<Base16Key, string>;
+
+  const variant = (src["variant"] ?? "").toLowerCase();
+  const scheme: "light" | "dark" =
+    variant === "light" || variant === "dark"
+      ? (variant as "light" | "dark")
+      : hexLuminance(p.base00) < 0.5
+        ? "dark"
+        : "light";
+
+  const out: Record<string, string> = {
+    "color-scheme": scheme,
+
+    // Surfaces
+    "app-bg": p.base00,
+    "sidebar-bg": p.base01,
+    "sidebar-border": p.base02,
+    "chat-input-bg": p.base01,
+    "chat-header-bg": p.base01,
+    "chat-user-bg": p.base01,
+    "terminal-bg": p.base00,
+    "terminal-tab-bg": p.base01,
+    "terminal-tab-active-bg": p.base02,
+
+    // Text ramp — Claudette's primary→muted→dim→faint hierarchy goes from
+    // highest to lowest contrast against the bg. In base16, base05 is the
+    // default foreground; base04→base03 are progressively dimmer. base06 is
+    // a HIGH-contrast tone (brighter than base05 in dark schemes), so it
+    // doesn't fit "muted" — we leave it unmapped here.
+    "text-primary": p.base05,
+    "text-muted": p.base04,
+    "text-dim": p.base03,
+    "text-faint": p.base03,
+    "text-separator": p.base02,
+    "on-accent": p.base07,
+    "divider": p.base02,
+    "selected-bg": p.base02,
+
+    // Legacy semantic-ish tokens kept in sync with new accents.
+    "status-running": p.base0B,
+    "status-stopped": p.base08,
+    "badge-done": p.base0B,
+    "badge-plan": p.base0D,
+    "badge-ask": p.base0A,
+
+    "accent-neutral": p.base04,
+
+    // Brand accent uses base0E (purple) per the Tinted Theming convention.
+    "accent-primary": p.base0E,
+    "accent-primary-rgb": hexToRgbTriplet(p.base0E),
+    "accent-dim": p.base0F,
+
+    // Diff
+    "diff-added-text": p.base0B,
+    "diff-removed-text": p.base08,
+    "diff-hunk-header": p.base0D,
+    "diff-line-number": p.base03,
+
+    // Syntax — direct base08-base0F mapping per spec.
+    "syntax-variable": p.base08,
+    "syntax-number": p.base09,
+    "syntax-type": p.base0A,
+    "syntax-string": p.base0B,
+    "syntax-operator": p.base0C,
+    "syntax-function": p.base0D,
+    "syntax-keyword": p.base0E,
+    "syntax-comment": p.base03,
+
+    // Status + UI-role accent BASE colors. The -bg/-border/-hover/-fg
+    // companions derive from the base via color-mix() in :root, so
+    // we only need to set the base here — the cascade handles the
+    // tinted surface, outline, hover, and fg layers.
+    "accent-success": p.base0B,
+    "accent-warning": p.base09,
+    "accent-error": p.base08,
+    "accent-info": p.base0D,
+    "accent-secondary": p.base0F,
+    "accent-tertiary": p.base0E,
+  };
+
+  return {
+    id: theme.id,
+    name: theme.name,
+    author: theme.author,
+    description: theme.description,
+    colors: out,
+  };
+}
+
 export async function loadAllThemes(): Promise<ThemeDefinition[]> {
   let userThemes: ThemeDefinition[] = [];
   try {
@@ -254,7 +547,10 @@ export async function loadAllThemes(): Promise<ThemeDefinition[]> {
     });
   }
   for (const theme of userThemes) {
-    themesById.set(theme.id, theme);
+    const resolved = detectBase16(theme.colors)
+      ? convertBase16ToClaudette(theme)
+      : theme;
+    themesById.set(resolved.id, resolved);
   }
   return Array.from(themesById.values());
 }

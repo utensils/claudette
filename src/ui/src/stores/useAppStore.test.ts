@@ -4,7 +4,7 @@ import type { AgentApproval, AgentQuestion, PlanApproval } from "./useAppStore";
 import type { ChatMessage, ChatSession } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import type { Workspace } from "../types/workspace";
-import { applyPlanModeMountDefault } from "../components/chat/applyPlanModeMountDefault";
+import { applyPlanModeMountDefault } from "../components/chat/planModePersistence";
 
 const WS_ID = "test-workspace";
 
@@ -127,7 +127,13 @@ describe("Claudette terminal setting", () => {
 
 describe("queued messages", () => {
   beforeEach(() => {
-    useAppStore.setState({ queuedMessages: {} });
+    useAppStore.setState({
+      queuedMessages: {},
+      queuedMessageAutoDispatchPaused: {},
+      queuedMessageEditing: {},
+      queuedMessageSteering: {},
+      queuedMessageSteeringContent: {},
+    });
   });
 
   it("updates a queued message in place", () => {
@@ -187,6 +193,46 @@ describe("queued messages", () => {
       id: first.id,
       content: "edited",
     });
+  });
+
+  it("keeps steering prompt text with the per-session steering flag until steering ends", () => {
+    useAppStore
+      .getState()
+      .setQueuedMessageSteering("session-1", true, "  refine this approach  ");
+
+    let state = useAppStore.getState();
+    expect(state.queuedMessageSteering["session-1"]).toBe(true);
+    expect(state.queuedMessageSteeringContent["session-1"]).toBe(
+      "refine this approach",
+    );
+
+    useAppStore.getState().setQueuedMessageSteering("session-1", false);
+
+    state = useAppStore.getState();
+    expect(state.queuedMessageSteering["session-1"]).toBeUndefined();
+    expect(state.queuedMessageSteeringContent["session-1"]).toBeUndefined();
+  });
+
+  it("does not invent prompt text for attachment-only steering", () => {
+    useAppStore.getState().setQueuedMessageSteering("session-1", true, "   ");
+
+    const state = useAppStore.getState();
+    expect(state.queuedMessageSteering["session-1"]).toBe(true);
+    expect(state.queuedMessageSteeringContent["session-1"]).toBeUndefined();
+  });
+
+  it("clears steering prompt text when the queued session is emptied", () => {
+    const store = useAppStore.getState();
+    store.setQueuedMessage("session-1", "follow up");
+    store.setQueuedMessageSteering("session-1", true, "follow up");
+
+    const queuedId = useAppStore.getState().queuedMessages["session-1"]?.[0]?.id;
+    expect(queuedId).toBeTruthy();
+    store.removeQueuedMessage("session-1", queuedId!);
+
+    const state = useAppStore.getState();
+    expect(state.queuedMessageSteering["session-1"]).toBeUndefined();
+    expect(state.queuedMessageSteeringContent["session-1"]).toBeUndefined();
   });
 });
 
@@ -266,6 +312,9 @@ describe("queued message auto-dispatch pause", () => {
     useAppStore.setState({
       queuedMessages: {},
       queuedMessageAutoDispatchPaused: {},
+      queuedMessageEditing: {},
+      queuedMessageSteering: {},
+      queuedMessageSteeringContent: {},
     });
   });
 
@@ -309,7 +358,6 @@ describe("queued message auto-dispatch pause", () => {
 describe("plugin settings routing", () => {
   beforeEach(() => {
     useAppStore.setState({
-      pluginManagementEnabled: true,
       settingsOpen: false,
       settingsSection: null,
       pluginSettingsTab: "installed",
@@ -388,38 +436,22 @@ describe("plugin settings routing", () => {
     expect(state.pluginSettingsTab).toBe("available");
   });
 
-  it("defaults plugin management to disabled", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-    expect(useAppStore.getState().pluginManagementEnabled).toBe(false);
-  });
-
-  it("redirects claude-code-plugins section to experimental when management disabled", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-
+  it("opens the claude-code-plugins section directly", () => {
     useAppStore.getState().setSettingsSection("claude-code-plugins");
 
     const state = useAppStore.getState();
-    expect(state.settingsSection).toBe("experimental");
+    expect(state.settingsSection).toBe("claude-code-plugins");
     expect(state.pluginSettingsIntent).toBeNull();
     expect(state.pluginSettingsRepoId).toBeNull();
   });
 
-  it("keeps the new plugins (Claudette) section accessible regardless of management flag", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-
+  it("keeps the Plugins (Claudette) section accessible", () => {
     useAppStore.getState().setSettingsSection("plugins");
 
     expect(useAppStore.getState().settingsSection).toBe("plugins");
   });
 
-  it("openSettings('plugins') opens the Claudette plugins section even when plugin management is disabled", () => {
-    // Regression: voice-error → "Open Plugins settings" was rerouting to
-    // the Experimental pane when the user hadn't opted into plugin
-    // management, hiding the Distil-Whisper "Download model" row the
-    // error chip pointed them at. Only `claude-code-plugins` (the Claude
-    // CLI marketplace integration) should be gated behind that flag.
-    useAppStore.setState({ pluginManagementEnabled: false });
-
+  it("openSettings('plugins') opens the Claudette plugins section", () => {
     useAppStore.getState().openSettings("plugins");
 
     const state = useAppStore.getState();
@@ -427,12 +459,10 @@ describe("plugin settings routing", () => {
     expect(state.settingsSection).toBe("plugins");
   });
 
-  it("openSettings('claude-code-plugins') still routes to experimental when management is disabled", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-
+  it("openSettings('claude-code-plugins') opens Claude Code Plugins", () => {
     useAppStore.getState().openSettings("claude-code-plugins");
 
-    expect(useAppStore.getState().settingsSection).toBe("experimental");
+    expect(useAppStore.getState().settingsSection).toBe("claude-code-plugins");
   });
 
   it("routes the Claude auth focus target to Models and clears it on manual section changes", () => {
@@ -470,23 +500,6 @@ describe("plugin settings routing", () => {
     useAppStore.getState().setClaudeAuthFailure(null);
 
     expect(useAppStore.getState().claudeAuthFailure).toBeNull();
-  });
-
-  it("ignores openPluginSettings when plugin management is disabled", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-
-    useAppStore.getState().openPluginSettings({
-      action: "install",
-      repoId: "repo-1",
-      scope: "project",
-      source: "demo@market",
-      tab: "available",
-    });
-
-    const state = useAppStore.getState();
-    expect(state.settingsOpen).toBe(false);
-    expect(state.settingsSection).toBeNull();
-    expect(state.pluginSettingsIntent).toBeNull();
   });
 
   it("bumpPluginRefreshToken increments monotonically", () => {
@@ -746,20 +759,27 @@ describe("applyPlanModeMountDefault", () => {
   });
 
   it("applies default when store has no runtime value", () => {
-    applyPlanModeMountDefault(WS_ID, true);
+    applyPlanModeMountDefault(WS_ID, null, true);
     expect(useAppStore.getState().planMode[WS_ID]).toBe(true);
   });
 
   it("preserves existing false runtime value on remount", () => {
     useAppStore.getState().setPlanMode(WS_ID, false);
-    applyPlanModeMountDefault(WS_ID, true);
+    applyPlanModeMountDefault(WS_ID, null, true);
     expect(useAppStore.getState().planMode[WS_ID]).toBe(false);
   });
 
   it("preserves existing true runtime value on remount", () => {
     useAppStore.getState().setPlanMode(WS_ID, true);
-    applyPlanModeMountDefault(WS_ID, false);
+    applyPlanModeMountDefault(WS_ID, null, false);
     expect(useAppStore.getState().planMode[WS_ID]).toBe(true);
+  });
+
+  it("prefers persisted per-session value over the global default", () => {
+    // Regression for issue 963 — a user-toggled "off" must beat
+    // `default_plan_mode = true` on the next mount.
+    applyPlanModeMountDefault(WS_ID, "false", true);
+    expect(useAppStore.getState().planMode[WS_ID]).toBe(false);
   });
 });
 
@@ -1403,6 +1423,7 @@ describe("mergeRemoteData / clearRemoteData default branches", () => {
           base_branch: null,
           default_remote: null,
           path_valid: true,
+          required_inputs: null,
           remote_connection_id: null,
         },
       ],
@@ -1459,6 +1480,7 @@ describe("mergeRemoteData / clearRemoteData default branches", () => {
           base_branch: null,
           default_remote: null,
           path_valid: true,
+          required_inputs: null,
           remote_connection_id: null,
         },
         {
@@ -1478,6 +1500,7 @@ describe("mergeRemoteData / clearRemoteData default branches", () => {
           base_branch: null,
           default_remote: null,
           path_valid: true,
+          required_inputs: null,
           remote_connection_id: null,
         },
       ],
@@ -2025,6 +2048,7 @@ function makeWorkspace(id: string, repoId: string = "r1"): Workspace {
     status_line: "",
     created_at: "2026-01-01T00:00:00Z",
     sort_order: 0,
+    input_values: null,
     remote_connection_id: null,
   };
 }

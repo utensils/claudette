@@ -135,6 +135,7 @@ beforeEach(() => {
         status_line: "",
         created_at: "2026-05-08T00:00:00.000Z",
         sort_order: 0,
+        input_values: null,
         remote_connection_id: null,
         agent_status: "Idle",
       },
@@ -223,7 +224,10 @@ describe("MessagesWithTurns edit summaries", () => {
       />,
     );
 
-    expect(container.textContent).toContain("mcp__postgres__query");
+    // The MCP call renders in a per-server container (header "postgres")
+    // with the redundant `mcp__<server>__` prefix stripped from the row.
+    expect(container.textContent).toContain("postgres");
+    expect(container.textContent).not.toContain("mcp__postgres__query");
     expect(container.textContent).not.toContain("1 file changed");
     expect(container.textContent).not.toContain("dirty-from-other-session.ts");
   });

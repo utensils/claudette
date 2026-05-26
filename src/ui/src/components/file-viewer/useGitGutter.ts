@@ -62,6 +62,11 @@ export function useGitGutter(
   // outside the worktree (or untracked), so the cheapest correct
   // behavior is "no gutter for symlinks".
   isSymlink: boolean,
+  // Hard-disable the gutter regardless of file state. Set for
+  // agent-managed tabs, whose absolute paths aren't tracked in the
+  // workspace repo — a gutter fetch would only fire a guaranteed-to-fail
+  // git IPC per open. See `FileViewer`'s `agentFile` handling.
+  skipGutter = false,
 ) {
   // `null` = gutter unavailable (no head, fetch error, binary, or revision
   // not yet resolved). Empty string `""` = file untracked at the revision;
@@ -101,8 +106,9 @@ export function useGitGutter(
   useEffect(() => {
     const version = ++fetchVersionRef.current;
 
-    // Bail for symlinks — see the doc comment on `isSymlink` above.
-    if (isSymlink) {
+    // Bail for symlinks or hard-disabled gutters (agent-managed tabs) —
+    // see the doc comments on `isSymlink` / `skipGutter` above.
+    if (isSymlink || skipGutter) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setHead(null);
       collectionRef.current?.clear();
@@ -153,7 +159,15 @@ export function useGitGutter(
     // has moved HEAD). Re-fetching on `diffMergeBase` change is the
     // cheapest way to inherit that signal in both modes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, filename, revision, diffMergeBase, collectionRef, isSymlink]);
+  }, [
+    workspaceId,
+    filename,
+    revision,
+    diffMergeBase,
+    collectionRef,
+    isSymlink,
+    skipGutter,
+  ]);
 
   // Debounced recompute on every buffer or head change. (Unchanged from
   // before Task 6 except that it now responds to `head` updates produced

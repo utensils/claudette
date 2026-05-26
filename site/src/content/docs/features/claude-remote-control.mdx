@@ -5,10 +5,6 @@ description: Attach a Claudette chat to claude.ai so you can drive the same conv
 
 Claude Remote Control bridges a Claudette chat session to **claude.ai**'s web and mobile UIs. Once attached, the same Claude Code conversation is reachable from both ends — turns you send from Claudette and turns you send from the browser stream into the same persistent CLI process and into the same Claudette chat. Everything you'd expect (tool calls, file edits, plan mode, MCP servers, the integrated terminal) keeps running locally on your machine; the bridge only relays prompts and assistant responses.
 
-:::note[Experimental feature]
-Remote Control is an opt-in experimental feature. Enable it in **Settings → Experimental → Claude Remote Control** before the toolbar surface appears.
-:::
-
 :::caution[Use with your own account only]
 The bridge runs under whatever Claude credentials Claudette is signed in with. [Anthropic's Consumer Terms](https://www.anthropic.com/legal/consumer-terms) prohibit making your account "available to anyone else." Pair claude.ai only with devices that are signed into your own account.
 :::
@@ -19,25 +15,20 @@ The bridge runs under whatever Claude credentials Claudette is signed in with. [
 - Signed into Claude with a **Pro** or **Max** subscription on the same machine running Claudette (the Claude Code CLI's bridge requires `allow_remote_control` to be enabled by your organization's policy).
 - Internet access — the bridge maintains a long-lived connection to Anthropic's session-ingress service.
 
-## Enabling the Feature Flag
-
-1. Open **Settings** (`⌘/Ctrl + ,`).
-2. Pick **Experimental** in the sidebar.
-3. Toggle **Claude Remote Control** on.
-
-Until the flag is enabled, the toolbar action stays hidden and the backend Tauri commands return "Claude Remote Control is disabled in Experimental settings."
-
 ## Attaching a Chat to claude.ai
 
 1. Open the chat session you want to bridge.
 2. Click the **overflow menu** (⋯) at the right of the prompt composer.
 3. Select **Claude Remote Control → Enable**.
 
+You can click **Enable** at any time — including mid-turn. If a turn is currently running, Claudette queues the request and applies it the moment the turn finishes; the row shows a **pending** chip while it waits. Click the row again before the turn ends to cancel the queued enable.
+
 The first time you enable a session, Claudette tells the persistent Claude Code CLI to start a bridge environment. The lifecycle progresses through:
 
 | State | What it means |
 | --- | --- |
-| **Enabling** | Bridge initialization in flight. Cold-enable on a fresh chat defers until your first prompt. |
+| **Pending** | You clicked Enable while a turn was running. Claudette will activate the bridge automatically when the turn finishes. Click the row again to cancel. |
+| **Enabling** | Bridge initialization in flight. Cold-enable on a fresh chat defers until your first prompt (shown as **armed** in the meta chip). |
 | **Ready** | Bridge handle exists; transport handshake hasn't completed yet. |
 | **Connected** | Transport is live; claude.ai and Claudette are in sync. |
 | **Reconnecting** | Transient network blip — the CLI is reconnecting on its own. |
@@ -60,7 +51,6 @@ Tool calls, file edits, MCP servers, and `Bash` runs all execute on your local m
 ## Disabling
 
 - **Per session**: overflow menu → **Claude Remote Control → Disable**. The bridge environment is archived; the local CLI process keeps running for future local turns.
-- **Globally**: Settings → Experimental → toggle off. The next agent event cycle tears down any active bridges.
 
 Disabling doesn't affect the underlying chat — your local Claudette transcript and any work-in-progress are preserved.
 
@@ -73,6 +63,7 @@ Disabling doesn't affect the underlying chat — your local Claudette transcript
 
 ## Troubleshooting
 
+- **Armed vs. Pending** — these are two distinct deferred-enable states with different triggers. **Armed** appears when you enable Remote Control on a brand-new chat that hasn't had a single message yet; the bridge waits for your first prompt before it actually starts (claude.ai has nothing to show until then). **Pending** appears when you click Enable while an existing chat is in the middle of a turn; the bridge fires automatically the moment the current turn finishes. Both clear themselves; only Pending can be cancelled with a second click.
 - **Status stuck on "Enabling" with "Send your first message…"** — Claudette intentionally defers the bridge until a chat has at least one turn (otherwise the bridge would have nothing to render in claude.ai's recents). Send any prompt from Claudette to kick the bridge off.
 - **Status: Error, detail `/login`** — the Claude Code CLI couldn't reach Anthropic with its OAuth token. Run `claude` in a terminal once to refresh credentials, then retry.
 - **Status: Error, detail "disabled by your organization's policy"** — your Anthropic org disabled `allow_remote_control`. Contact your admin.
@@ -80,5 +71,5 @@ Disabling doesn't affect the underlying chat — your local Claudette transcript
 
 ## Related
 
-- [Settings](/claudette/features/settings/) — where the experimental flag lives.
+- [Settings](/claudette/features/settings/) — the full settings reference.
 - [Remote Workspaces](/claudette/features/remote-workspaces/) — separate feature: connect Claudette to a remote *machine* running Claudette. (Remote Control connects a chat to claude.ai; Remote Workspaces connects two Claudette installs.)

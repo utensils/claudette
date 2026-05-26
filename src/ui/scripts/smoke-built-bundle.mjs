@@ -119,6 +119,7 @@ try {
             default_branches: {},
             last_messages: [],
             scm_cache: [],
+            workspace_scm_links: [],
             manual_workspace_order_repo_ids: [],
           };
         case "get_diagnostics_settings":

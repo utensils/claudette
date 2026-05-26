@@ -1,30 +1,60 @@
 //! In-memory cache for env-provider exports, keyed by `(worktree, plugin_name)`.
 //!
-//! The cache stores each plugin's last [`ProviderExport`] alongside the
-//! mtimes of the files it reported as `watched`. On lookup, we re-stat
-//! those files; if all mtimes are unchanged, the cached entry is
-//! returned and the plugin's `export` operation is skipped (no Lua VM
-//! spin-up, no subprocess).
+//! The cache stores each plugin's last [`ProviderExport`] alongside an
+//! mtime + content-hash fingerprint of every file it reported as
+//! `watched`. On lookup we re-check those files with a two-tier test:
 //!
-//! Scope of invalidation covered by v1:
-//! - `.envrc` / `mise.toml` / `.env` / `flake.lock` edits → mtime
-//!   changes → cache miss → re-export.
-//! - File deletion → stat fails → treated as "mtime changed" → miss.
+//! 1. **mtime compare** (cheap, no file reads). If every watched
+//!    file's mtime is unchanged, the entry is fresh — return it and
+//!    skip the plugin's `export` (no Lua VM spin-up, no subprocess).
+//! 2. **content hash** (slow path, only on an mtime mismatch). A bare
+//!    mtime bump is not proof of a content change — `git checkout`,
+//!    `touch`, save-on-noop editors, and nix-direnv re-evaluation all
+//!    move mtimes forward without changing bytes. When mtime moved we
+//!    hash the file: identical bytes → still fresh (and we heal the
+//!    stored mtime so the next lookup takes the cheap path again);
+//!    changed bytes → stale → re-export.
 //!
-//! Not covered (v2+ work):
+//! This two-tier check is what keeps the cache warm on a workspace
+//! whose `.envrc` / `flake.nix` / `flake.lock` content never changed
+//! even as agents, terminals, and git operations churn file mtimes.
+//!
+//! Scope of invalidation:
+//! - `.envrc` / `mise.toml` / `.env` / `flake.lock` content edits →
+//!   hash mismatch → cache miss → re-export.
+//! - File deletion → stat fails → treated as "changed" → miss.
+//!
+//! Not covered:
 //! - A plugin starts watching a *new* file on a later call (e.g. user
 //!   adds `.envrc.local`). We only know what the previous export told
 //!   us to watch. Acceptable because direnv's `DIRENV_WATCHES` updates
-//!   inside `.envrc` — the `.envrc` mtime changing forces a re-eval.
+//!   inside `.envrc` — the `.envrc` content changing forces a re-eval.
 //! - User runs `direnv deny` without editing `.envrc` → cache stays
-//!   fresh until next `.envrc` mtime change. Workaround: UI "Reload".
+//!   fresh until next `.envrc` content change. Workaround: UI "Reload".
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::time::SystemTime;
 
 use super::types::{EnvMap, ProviderExport};
+
+/// Invalidation fingerprint for a single watched file, captured at
+/// store time.
+#[derive(Debug, Clone, PartialEq)]
+struct WatchedFile {
+    /// Absolute path of the file.
+    path: PathBuf,
+    /// Modification time at store time. `None` when the file was
+    /// missing/unreadable — a later `Some` means it appeared.
+    mtime: Option<SystemTime>,
+    /// Content hash at store time, mirroring `mtime`'s `None` for a
+    /// missing/unreadable file. This is what lets a forward mtime bump
+    /// with byte-identical content stay a cache *hit* instead of
+    /// thrashing a re-export.
+    hash: Option<u64>,
+}
 
 /// Cache entry for a single `(worktree, plugin)` pair.
 #[derive(Debug, Clone)]
@@ -32,9 +62,9 @@ pub struct CacheEntry {
     /// Exported env. Kept separate from `ProviderExport` so we can
     /// clone cheaply without re-walking the watched list.
     pub env: EnvMap,
-    /// Files we watch for invalidation, paired with their mtime at the
-    /// time of the last successful export.
-    pub watched: Vec<(PathBuf, Option<SystemTime>)>,
+    /// Files we watch for invalidation, paired with the mtime +
+    /// content hash captured at the last successful export.
+    watched: Vec<WatchedFile>,
     /// When this entry was written.
     pub evaluated_at: SystemTime,
 }
@@ -51,54 +81,67 @@ impl EnvCache {
         Self::default()
     }
 
-    /// Return the cached entry if all watched files' current mtimes
-    /// match the stored values. Any change → stale → returns `None`.
+    /// Return the cached entry if its watched files are still fresh.
+    ///
+    /// "Fresh" is decided by the two-tier check in [`check_freshness`]:
+    /// an unchanged mtime is an instant hit; an mtime that moved
+    /// forward but left content byte-identical is *also* a hit (and we
+    /// heal the stored mtime so the next call is cheap again); a real
+    /// content change — or a watched file appearing/disappearing —
+    /// returns `None`.
     pub fn get_fresh(&self, worktree: &Path, plugin: &str) -> Option<CacheEntry> {
         let key = (worktree.to_path_buf(), plugin.to_string());
         let guard = self.entries.read().unwrap();
-        let entry = guard.get(&key)?.clone();
+        let mut entry = guard.get(&key)?.clone();
         drop(guard);
 
-        if all_mtimes_match(&entry.watched) {
-            Some(entry)
-        } else {
-            None
+        match check_freshness(&entry.watched) {
+            Freshness::Fresh => Some(entry),
+            Freshness::Rehashed(refreshed) => {
+                entry.watched = refreshed;
+                // Heal the stored entry so a future lookup hits the
+                // cheap mtime path instead of re-hashing. Best-effort:
+                // only write back if the entry wasn't replaced or
+                // evicted in the meantime (same `evaluated_at`).
+                if let Ok(mut guard) = self.entries.write()
+                    && let Some(stored) = guard.get_mut(&key)
+                    && stored.evaluated_at == entry.evaluated_at
+                {
+                    stored.watched = entry.watched.clone();
+                }
+                Some(entry)
+            }
+            Freshness::Stale => None,
         }
     }
 
     /// Store (or overwrite) the cache entry for `(worktree, plugin)`.
     ///
     /// Returns `Some(evaluated_at)` if the entry was stored, or `None`
-    /// if it was dropped because a watched file's mtime changed between
-    /// the two snapshots we take (before-store and after-store). The
-    /// race we're guarding:
+    /// if it was dropped because a watched file changed between the
+    /// two fingerprint snapshots we take (before-store and
+    /// after-store). The race we're guarding:
     ///
     ///   t0: plugin's `export()` captures env based on on-disk content
-    ///   t1: we snapshot mtimes ("first")
-    ///   t2: we snapshot mtimes again ("second")
+    ///   t1: we snapshot mtime+hash ("first")
+    ///   t2: we snapshot mtime+hash again ("second")
     ///   t3: caller stores the entry
     ///
     /// If a file changes during [t1, t2] we see it here and refuse to
-    /// cache — the next resolve will re-run `export()` and pick up the
+    /// cache — the next resolve re-runs `export()` and picks up the
     /// fresh state. A change during [t0, t1] still slips through (we
-    /// cache stale env under the post-change mtime), but the window is
-    /// microseconds and — being bounded above by the slowest syscall —
-    /// small enough that not-caching-at-all would be more wasteful than
-    /// the occasional stale turn. File-content hashing would fully close
-    /// this and is v2 work.
+    /// cache stale env under the post-change fingerprint), but the
+    /// window is microseconds — small enough that not-caching-at-all
+    /// would be more wasteful than the occasional stale turn.
     pub fn put(
         &self,
         worktree: &Path,
         plugin: &str,
         export: &ProviderExport,
     ) -> Option<SystemTime> {
-        let first: Vec<(PathBuf, Option<SystemTime>)> = export
-            .watched
-            .iter()
-            .map(|p| (p.clone(), mtime(p)))
-            .collect();
-        let second: Vec<Option<SystemTime>> = export.watched.iter().map(|p| mtime(p)).collect();
-        if first.iter().zip(second.iter()).any(|((_, a), b)| a != b) {
+        let first: Vec<WatchedFile> = export.watched.iter().map(|p| snapshot(p)).collect();
+        let second: Vec<WatchedFile> = export.watched.iter().map(|p| snapshot(p)).collect();
+        if first != second {
             return None;
         }
 
@@ -124,7 +167,7 @@ impl EnvCache {
             .read()
             .unwrap()
             .get(&key)
-            .map(|entry| entry.watched.iter().map(|(p, _)| p.clone()).collect())
+            .map(|entry| entry.watched.iter().map(|wf| wf.path.clone()).collect())
             .unwrap_or_default()
     }
 
@@ -139,6 +182,74 @@ impl EnvCache {
             }
             None => {
                 guard.retain(|(wt, _), _| wt != worktree);
+            }
+        }
+    }
+
+    /// Re-check a single `(worktree, plugin)` entry against the
+    /// filesystem and evict it **only if a watched file's content
+    /// actually changed**. Returns `true` if the entry was evicted.
+    ///
+    /// This is the content-aware counterpart to [`invalidate`], meant
+    /// for the fs-watcher callback. A watcher event means *some*
+    /// watched path was touched — but `touch`, `git checkout`,
+    /// save-on-noop editors, and nix-direnv re-evaluation all fire
+    /// events without changing bytes. Evicting unconditionally on
+    /// every event is exactly the cache thrash issue #888 is about:
+    /// the reactive watcher would otherwise drop the entry before
+    /// [`get_fresh`]'s own two-tier check ever gets to run.
+    ///
+    /// So this applies the same [`check_freshness`] test the lazy
+    /// path uses: unchanged content keeps the entry (and heals its
+    /// stored mtimes so the next `get_fresh` is cheap); genuinely
+    /// changed content removes it and returns `true` so the caller
+    /// can notify the UI. A missing entry returns `false` — nothing
+    /// to evict, nothing to notify.
+    pub fn invalidate_if_stale(&self, worktree: &Path, plugin: &str) -> bool {
+        let key = (worktree.to_path_buf(), plugin.to_string());
+        // Snapshot the watched list under a read lock, then release it
+        // before `check_freshness` runs its stat/read syscalls — same
+        // discipline as `get_fresh`. An IO-heavy watcher burst must not
+        // block unrelated `get_fresh` / `put` calls (the cache is one
+        // `RwLock` shared across all worktrees and plugins).
+        let (watched, evaluated_at) = {
+            let guard = self.entries.read().unwrap();
+            match guard.get(&key) {
+                Some(entry) => (entry.watched.clone(), entry.evaluated_at),
+                None => return false,
+            }
+        };
+
+        match check_freshness(&watched) {
+            Freshness::Fresh => false,
+            Freshness::Rehashed(refreshed) => {
+                // Heal the stored mtimes — best-effort, and only if the
+                // entry is still the one we checked (a concurrent `put`
+                // would have replaced it with a fresher snapshot).
+                if let Ok(mut guard) = self.entries.write()
+                    && let Some(stored) = guard.get_mut(&key)
+                    && stored.evaluated_at == evaluated_at
+                {
+                    stored.watched = refreshed;
+                }
+                false
+            }
+            Freshness::Stale => {
+                // Evict — but only if the entry is still the one we
+                // checked. A `put` racing between our read snapshot and
+                // here means a fresh export already landed; don't drop
+                // that one (and report "not invalidated" so the caller
+                // skips the UI event).
+                let mut guard = self.entries.write().unwrap();
+                if guard
+                    .get(&key)
+                    .is_some_and(|stored| stored.evaluated_at == evaluated_at)
+                {
+                    guard.remove(&key);
+                    true
+                } else {
+                    false
+                }
             }
         }
     }
@@ -162,15 +273,95 @@ impl EnvCache {
     }
 }
 
+/// Outcome of re-checking a cache entry's watched files against the
+/// current filesystem state.
+enum Freshness {
+    /// Every watched file matched on mtime alone — the cheap path,
+    /// no file reads.
+    Fresh,
+    /// One or more files' mtimes moved but their content hashes still
+    /// match. The entry is still valid; the vec carries the watched
+    /// list with refreshed mtimes so the caller can write it back and
+    /// let the next check take the cheap mtime path.
+    Rehashed(Vec<WatchedFile>),
+    /// A watched file's content actually changed, or it appeared /
+    /// disappeared — the entry must be re-exported.
+    Stale,
+}
+
+/// Two-tier freshness check: mtime first (cheap), content hash only on
+/// an mtime mismatch (slow path). See the module doc for the rationale
+/// — a bare mtime bump is not proof a file's bytes changed.
+fn check_freshness(watched: &[WatchedFile]) -> Freshness {
+    let mut refreshed: Option<Vec<WatchedFile>> = None;
+    for (i, wf) in watched.iter().enumerate() {
+        let current_mtime = mtime(&wf.path);
+        if current_mtime == wf.mtime {
+            continue;
+        }
+        // mtime moved — fall back to a content hash before declaring
+        // the entry stale. `git checkout`, `touch`, nix-direnv
+        // re-evaluation, and save-on-noop editors all bump mtime
+        // forward without changing a byte; those must NOT invalidate.
+        //
+        // The hash equality only proves "unchanged" when BOTH the
+        // stored and current hashes exist. `content_hash` returns
+        // `None` for anything it can't read as a byte stream — most
+        // importantly a watched *directory* (a `watch_dir` target),
+        // but also a file gone unreadable. For those we cannot prove
+        // byte-equality, so an mtime change is treated as stale: the
+        // correct conservative fallback (a directory's mtime moving
+        // means an entry was added/removed inside it). Without the
+        // `Some`/`Some` guard a watched directory would hash to
+        // `None == None` and be wrongly healed.
+        let unchanged = matches!(
+            (wf.hash, content_hash(&wf.path)),
+            (Some(stored), Some(current)) if stored == current
+        );
+        if !unchanged {
+            return Freshness::Stale;
+        }
+        // Same bytes, new mtime: heal the stored mtime so the next
+        // check is a cheap compare again instead of another hash.
+        refreshed.get_or_insert_with(|| watched.to_vec())[i].mtime = current_mtime;
+    }
+    match refreshed {
+        Some(list) => Freshness::Rehashed(list),
+        None => Freshness::Fresh,
+    }
+}
+
+/// Capture a watched file's invalidation fingerprint (mtime + content
+/// hash) at store time.
+fn snapshot(path: &Path) -> WatchedFile {
+    WatchedFile {
+        path: path.to_path_buf(),
+        mtime: mtime(path),
+        hash: content_hash(path),
+    }
+}
+
 /// Read a file's mtime, returning `None` if the file is missing or
-/// unreadable. A missing file on lookup counts as "mtime changed" vs.
-/// its previous `Some(_)` — it will not match, so the cache misses.
+/// unreadable. A missing file on lookup counts as "changed" vs. its
+/// previous `Some(_)` — it will not match, so the cache misses.
 fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
-fn all_mtimes_match(watched: &[(PathBuf, Option<SystemTime>)]) -> bool {
-    watched.iter().all(|(p, stored)| mtime(p) == *stored)
+/// Hash a file's full contents, returning `None` for a missing or
+/// unreadable file (mirroring [`mtime`]). Only called on the slow path
+/// — an mtime mismatch — so the read cost is paid once per benign
+/// mtime bump, not on every cache lookup.
+///
+/// `DefaultHasher` (SipHash) is fine here: the digest only ever lives
+/// in-memory and is compared within a single process run, so the
+/// "not stable across Rust versions" caveat doesn't apply, and a
+/// 64-bit collision on a handful of small config files is negligible.
+fn content_hash(path: &Path) -> Option<u64> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 #[cfg(test)]
@@ -222,7 +413,82 @@ mod tests {
 
         assert!(
             cache.get_fresh(tmp.path(), "env-direnv").is_none(),
-            "mtime change must invalidate"
+            "mtime change with new content must invalidate"
+        );
+    }
+
+    #[test]
+    fn get_fresh_survives_mtime_bump_with_identical_content() {
+        // The core regression for issue #888: `git checkout`, `touch`,
+        // nix-direnv re-evaluation, and save-on-noop editors all move a
+        // watched file's mtime forward without changing its bytes. The
+        // content-hash fallback must keep the entry a cache *hit*.
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("flake.lock");
+        let content = r#"{ "nodes": {}, "version": 7 }"#;
+        std::fs::write(&file, content).unwrap();
+
+        let cache = EnvCache::new();
+        assert!(
+            cache
+                .put(tmp.path(), "env-direnv", &export_with_watched(&file))
+                .is_some()
+        );
+        assert!(cache.get_fresh(tmp.path(), "env-direnv").is_some());
+
+        // Bump mtime forward, byte-for-byte identical content.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&file, content).unwrap();
+
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_some(),
+            "identical content must stay a cache hit despite the mtime bump"
+        );
+
+        // The heal step should have rewritten the stored mtime, so a
+        // second lookup is fresh too (and takes the cheap path).
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_some(),
+            "healed entry must remain a cache hit on the next lookup"
+        );
+
+        // A real content change still invalidates.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&file, r#"{ "nodes": { "x": 1 }, "version": 7 }"#).unwrap();
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_none(),
+            "an actual content change must still invalidate"
+        );
+    }
+
+    #[test]
+    fn get_fresh_invalidates_on_watched_directory_mtime_change() {
+        // A `watch_dir` target is a directory — `content_hash` can't
+        // read it as a byte stream, so its stored hash is `None`. An
+        // mtime bump (a file added/removed inside) must still
+        // invalidate: with no content hash to compare, mtime is the
+        // only signal, and a directory's mtime moving is a real
+        // change. Guards against a `None == None` hash compare wrongly
+        // "healing" a directory whose contents changed.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("watched_dir");
+        std::fs::create_dir(&dir).unwrap();
+
+        let cache = EnvCache::new();
+        assert!(
+            cache
+                .put(tmp.path(), "env-direnv", &export_with_watched(&dir))
+                .is_some()
+        );
+        assert!(cache.get_fresh(tmp.path(), "env-direnv").is_some());
+
+        // Add a file inside → the directory's own mtime moves.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(dir.join("new.txt"), "x").unwrap();
+
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_none(),
+            "a watched directory whose contents changed must invalidate"
         );
     }
 
@@ -272,6 +538,55 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert!(cache.get_fresh(tmp.path(), "env-direnv").is_none());
         assert!(cache.get_fresh(tmp.path(), "env-mise").is_some());
+    }
+
+    #[test]
+    fn invalidate_if_stale_keeps_entry_on_byte_identical_change() {
+        // The reactive-watcher counterpart to
+        // `get_fresh_survives_mtime_bump_with_identical_content`: a
+        // watcher event fired by a `touch` / checkout / save-on-noop
+        // must NOT evict when the bytes are unchanged (issue #888).
+        // Without this, the watcher drops the entry before
+        // `get_fresh`'s own two-tier check can run.
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("flake.lock");
+        let content = r#"{ "nodes": {}, "version": 7 }"#;
+        std::fs::write(&file, content).unwrap();
+
+        let cache = EnvCache::new();
+        assert!(
+            cache
+                .put(tmp.path(), "env-direnv", &export_with_watched(&file))
+                .is_some()
+        );
+
+        // mtime bump, identical content → watcher event, but no evict.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&file, content).unwrap();
+        assert!(
+            !cache.invalidate_if_stale(tmp.path(), "env-direnv"),
+            "a byte-identical change must not evict"
+        );
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_some(),
+            "entry must survive a byte-identical watcher event"
+        );
+
+        // A real content change → eviction, returns true.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&file, r#"{ "nodes": { "x": 1 }, "version": 7 }"#).unwrap();
+        assert!(
+            cache.invalidate_if_stale(tmp.path(), "env-direnv"),
+            "a real content change must evict"
+        );
+        assert!(cache.get_fresh(tmp.path(), "env-direnv").is_none());
+    }
+
+    #[test]
+    fn invalidate_if_stale_on_missing_entry_is_a_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = EnvCache::new();
+        assert!(!cache.invalidate_if_stale(tmp.path(), "env-direnv"));
     }
 
     #[test]

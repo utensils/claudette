@@ -19,10 +19,7 @@ export function isPluginSlashCommandInput(input: string): boolean {
 export function parsePluginSlashCommand(
   input: string,
   repoId: string | null,
-  enabled = true,
 ): ParsedPluginSlashCommand | null {
-  if (!enabled) return null;
-
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) return null;
 

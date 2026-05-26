@@ -24,7 +24,6 @@ export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 
 export interface NativeCommandContext {
   repoId: string | null;
-  pluginManagementEnabled: boolean;
   usageInsightsEnabled: boolean;
   openPluginSettings: (intent: Partial<PluginSettingsIntent>) => void;
   /** Repository metadata for the current workspace — used by review-workflow handlers. */
@@ -44,6 +43,11 @@ export interface NativeCommandContext {
   addLocalMessage: (text: string) => void;
   startClaudeAuthLogin: () => Promise<void>;
   startCodexLogin: () => Promise<void>;
+  /** Open the Pi provider picker modal (multi-provider — Pi has no
+   *  single OAuth flow like Codex/Claude). Caller resolves once the
+   *  modal is mounted; the modal closes on its own when the user
+   *  finishes or cancels. */
+  startPiLogin: () => Promise<void>;
   openUsageSettingsExternal: () => void;
   openReleaseNotes: () => void;
 
@@ -77,9 +81,18 @@ export interface NativeCommandContext {
   slashCommands: SlashCommand[];
 }
 
+/**
+ * Names of harness-dispatched actions a `harness_action` handler can
+ * produce. The chat send pipeline branches on this discriminant to choose
+ * the right per-backend implementation (e.g. `compact` → Codex's
+ * `thread/compact/start` RPC vs. Claude's literal `/compact` user input).
+ */
+export type HarnessAction = "compact";
+
 export type NativeCommandResult =
   | { kind: "handled"; canonicalName: string }
   | { kind: "expand"; canonicalName: string; prompt: string }
+  | { kind: "harness_action"; canonicalName: string; action: HarnessAction }
   | { kind: "skipped" };
 
 export interface NativeHandler {
@@ -168,16 +181,10 @@ function pluginHandler(root: "plugin" | "marketplace"): NativeHandler {
     aliases: root === "plugin" ? ["plugins"] : [],
     kind: "settings_route",
     execute: (ctx, args) => {
-      if (!ctx.pluginManagementEnabled) {
-        // Plugin management disabled — swallow the command so it never reaches
-        // the agent, but do not mutate settings.
-        return { kind: "handled", canonicalName: root };
-      }
       const reconstructed = args.length > 0 ? `/${root} ${args}` : `/${root}`;
       const parsed = parsePluginSlashCommand(
         reconstructed,
         ctx.repoId,
-        ctx.pluginManagementEnabled,
       );
       if (!parsed) {
         return { kind: "handled", canonicalName: root };
@@ -384,8 +391,9 @@ const loginHandler: NativeHandler = {
           "Codex sign-in opened. Complete the browser flow, then retry the turn.",
         );
       } else if (target === "pi") {
+        await ctx.startPiLogin();
         ctx.addLocalMessage(
-          "Pi auth is managed by Pi. Run `pi auth` in a terminal, refresh Pi models in Settings > Models, then retry the turn.",
+          "Pi sign-in opened. Pick a provider, complete the flow, then retry the turn.",
         );
       } else {
         await ctx.startClaudeAuthLogin();
@@ -484,7 +492,7 @@ const clearHandler: NativeHandler = {
 const compactHandler: NativeHandler = {
   name: "compact",
   aliases: [],
-  kind: "prompt_expansion",
+  kind: "harness_action",
   execute: (ctx, args) => {
     if (!ctx.workspaceId) {
       ctx.addLocalMessage("/compact: no active workspace");
@@ -494,7 +502,11 @@ const compactHandler: NativeHandler = {
       ctx.addLocalMessage("/compact: does not accept arguments. Usage: /compact");
       return { kind: "handled" as const, canonicalName: "compact" };
     }
-    return { kind: "expand" as const, canonicalName: "compact", prompt: "/compact" };
+    return {
+      kind: "harness_action" as const,
+      canonicalName: "compact",
+      action: "compact",
+    };
   },
 };
 
@@ -797,6 +809,10 @@ export function formatHelpMessage(commands: SlashCommand[]): string {
       heading: "_Actions (stay local, do not contact the agent)_",
     },
     { kind: "settings_route", heading: "_Settings shortcuts_" },
+    {
+      kind: "harness_action",
+      heading: "_Agent actions (dispatched per backend)_",
+    },
     {
       kind: "prompt_expansion",
       heading: "_Prompt expansions (seed a prompt, then send to the agent)_",

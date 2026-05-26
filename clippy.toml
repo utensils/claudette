@@ -1,0 +1,4 @@
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "use claudette::process::std_command() or CommandWindowExt::no_console_window(); raw spawns flash blank consoles in Windows GUI release builds" },
+  { path = "tokio::process::Command::new", reason = "use claudette::process::command() or CommandWindowExt::no_console_window(); raw spawns flash blank consoles in Windows GUI release builds" },
+]

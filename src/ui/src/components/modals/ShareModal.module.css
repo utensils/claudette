@@ -1,0 +1,18 @@
+.qrFrame {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--chat-input-bg);
+}
+
+.qrCanvas {
+  /* `qrcode.toCanvas` writes black pixels on a white quiet-zone
+     background, so the canvas itself supplies all visual contrast. We
+     just constrain its visual width so the rendered pixel ratio stays
+     crisp on HiDPI displays — the underlying buffer can be larger. */
+  width: 220px;
+  height: 220px;
+  display: block;
+}

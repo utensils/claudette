@@ -1,13 +1,21 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
 import type { PlanApproval } from "../../stores/useAppStore";
 import { readPlanFile, sendRemoteCommand } from "../../services/tauri";
 import { CopyButton } from "../shared/CopyButton";
+import { useWorkspaceFileOpener } from "./useWorkspaceFileOpener";
 import styles from "./PlanApprovalCard.module.css";
 
 interface PlanApprovalCardProps {
   approval: PlanApproval;
+  /** Owning workspace for the plan. Lets the rendered plan content route
+   *  file-path clicks into this workspace's Monaco tab instead of falling
+   *  through to the OS default editor — plans frequently enumerate
+   *  "Critical Files" with absolute paths under `~/.claudette/workspaces/`,
+   *  which previously rendered as `<a href="claudettepath:…">` links with
+   *  no in-app opener context. */
+  workspaceId: string;
   /**
    * Called with the user's decision. `approved=true` lets the CLI run the
    * ExitPlanMode tool's `call()` (which writes the plan file and emits the
@@ -19,6 +27,7 @@ interface PlanApprovalCardProps {
 
 export function PlanApprovalCard({
   approval,
+  workspaceId,
   onRespond,
   remoteConnectionId,
 }: PlanApprovalCardProps) {
@@ -33,8 +42,21 @@ export function PlanApprovalCard({
   // instead of issuing duplicate `readPlanFile` / `sendRemoteCommand`
   // requests. Cleared in a `finally` so a failed fetch can be retried.
   const inFlightFetchRef = useRef<Promise<string> | null>(null);
+  const { openFile, resolveFilePath } = useWorkspaceFileOpener(workspaceId);
+  const directPlanContent = approval.planContent ?? null;
+  const visiblePlanContent = directPlanContent ?? planContent;
+  const hasPlanPreview = approval.planFilePath !== null || directPlanContent !== null;
+
+  useEffect(() => {
+    inFlightFetchRef.current = null;
+    setPlanContent(null);
+    setLoadError(null);
+    setLoading(false);
+    setExpanded(false);
+  }, [approval.toolUseId]);
 
   const fetchPlanContent = (): Promise<string> => {
+    if (directPlanContent !== null) return Promise.resolve(directPlanContent);
     if (planContent !== null) return Promise.resolve(planContent);
     if (inFlightFetchRef.current) return inFlightFetchRef.current;
     if (!approval.planFilePath) {
@@ -57,7 +79,7 @@ export function PlanApprovalCard({
   };
 
   const handleViewPlan = async () => {
-    if (planContent !== null) {
+    if (visiblePlanContent !== null) {
       setExpanded(!expanded);
       return;
     }
@@ -84,7 +106,7 @@ export function PlanApprovalCard({
         {t("plan_approval_description")}
       </div>
 
-      {approval.planFilePath && (
+      {hasPlanPreview && (
         <div className={styles.planActions}>
           <button
             className={styles.planLink}
@@ -97,7 +119,9 @@ export function PlanApprovalCard({
                 ? t("plan_approval_hide_plan")
                 : t("plan_approval_view_plan")}
             {" \u2014 "}
-            {approval.planFilePath.split("/").slice(-2).join("/")}
+            {approval.planFilePath
+              ? approval.planFilePath.split("/").slice(-2).join("/")
+              : t("plan_approval_codex_plan")}
           </button>
           <CopyButton
             variant="bare"
@@ -116,13 +140,17 @@ export function PlanApprovalCard({
         </div>
       )}
 
-      {expanded && planContent && (
+      {expanded && visiblePlanContent !== null && (
         <div className={styles.planContent}>
-          <MessageMarkdown content={planContent} />
+          <MessageMarkdown
+            content={visiblePlanContent}
+            onOpenFile={openFile}
+            resolveFilePath={resolveFilePath}
+          />
         </div>
       )}
 
-      {expanded && !planContent && loadError && (
+      {expanded && visiblePlanContent === null && loadError && (
         <div className={styles.planContent}>{loadError}</div>
       )}
 

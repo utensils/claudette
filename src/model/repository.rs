@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use super::RepositoryInputField;
+
 #[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 pub struct Repository {
@@ -33,6 +35,11 @@ pub struct Repository {
     /// Explicit remote name for push/pull/PR operations (e.g. "origin").
     /// None means auto-detect (first configured remote).
     pub default_remote: Option<String>,
+    /// Per-repo declared inputs. New workspaces must supply a value for each
+    /// declared field at creation time; those values become env vars in the
+    /// workspace session. `None` (i.e. empty schema) means "no prompts" and
+    /// is the default for newly-added repositories.
+    pub required_inputs: Option<Vec<RepositoryInputField>>,
     /// Runtime-only: whether the repo path still exists on disk. Not persisted.
     pub path_valid: bool,
 }

@@ -4,7 +4,10 @@ mod binary;
 pub mod codex_app_server;
 mod environment;
 pub mod harness;
+pub mod history_seeder;
 mod naming;
+#[cfg(feature = "pi-sdk")]
+pub mod pi_control;
 #[cfg(feature = "pi-sdk")]
 pub mod pi_sdk;
 mod process;
@@ -21,9 +24,10 @@ pub use binary::{
     resolve_codex_path_blocking,
 };
 pub use codex_app_server::{
-    CodexAppServerOptions, CodexAppServerSession, CodexPermissionLevel,
-    build_codex_approval_response_payload, build_codex_user_input_response_payload,
-    is_codex_approval_tool_name, normalize_codex_reasoning_effort,
+    CodexAppServerOptions, CodexAppServerSession, CodexCreditsSnapshot, CodexPermissionLevel,
+    CodexRateLimitSnapshot, CodexRateLimitWindow, build_codex_approval_response_payload,
+    build_codex_user_input_response_payload, is_codex_approval_tool_name,
+    normalize_codex_reasoning_effort,
 };
 pub use harness::{
     AgentHarnessCapabilities, AgentHarnessKind, AgentSession, ClaudeCodeHarness,
@@ -33,7 +37,9 @@ pub use naming::{
     generate_branch_name, generate_session_name, persist_claude_custom_title, sanitize_branch_name,
 };
 #[cfg(feature = "pi-sdk")]
-pub use pi_sdk::{PiSdkModel, PiSdkOptions, PiSdkSession, resolve_pi_harness_path};
+pub use pi_control::{PiOAuthSession, PiOAuthStarted, PiProvider, PiProviderList};
+#[cfg(feature = "pi-sdk")]
+pub use pi_sdk::{PiControlEvent, PiSdkModel, PiSdkOptions, PiSdkSession, resolve_pi_harness_path};
 pub use process::{AgentEvent, TurnHandle, run_turn, stop_agent, stop_agent_graceful};
 pub use session::PersistentSession;
 pub use types::{

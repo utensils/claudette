@@ -11,7 +11,7 @@ use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
 use claudette::file_watcher::FileWatcher;
 use claudette::plugin_runtime::PluginRegistry;
-use claudette::scm::types::{CiCheck, PullRequest};
+use claudette::scm::types::{CiCheck, CiOverallStatus, PullRequest};
 use serde::{Deserialize, Serialize};
 
 use crate::boot_probation::BootProbationState;
@@ -21,6 +21,7 @@ use crate::remote::DiscoveredServer;
 use crate::usage::UsageCacheEntry;
 #[cfg(feature = "voice")]
 use crate::voice::VoiceProviderRegistry;
+use claudette::agent::codex_app_server::CodexRateLimitSnapshot;
 
 /// Set during `RunEvent::Exit` before we tear down PTY shells and agent
 /// subprocesses. PTY reader threads use this to avoid reporting shutdown
@@ -29,6 +30,25 @@ pub static APP_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Re-export for use in tray module without direct tauri::tray import.
 pub type TrayIcon = tauri::tray::TrayIcon;
+
+pub(crate) struct AsyncGateEntry {
+    pub lock: Arc<tokio::sync::Mutex<()>>,
+    pub last_used: Instant,
+}
+
+impl AsyncGateEntry {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+            last_used: now,
+        }
+    }
+
+    pub fn touch(&mut self, now: Instant) -> Arc<tokio::sync::Mutex<()>> {
+        self.last_used = now;
+        Arc::clone(&self.lock)
+    }
+}
 
 /// What kind of attention the agent needs from the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,6 +227,24 @@ pub struct AgentSessionState {
     /// restart. Stays sticky until then so we don't spam every turn
     /// while the user is fixing the underlying issue.
     pub posted_env_trust_warning: bool,
+    /// Cross-harness migration prelude queued for the next user turn.
+    ///
+    /// Set by `prepare_cross_harness_migration` when the user switches
+    /// a chat session to a model whose harness can't read the prior
+    /// harness's transcript (Claude CLI -> Codex, Codex -> Pi, etc.).
+    /// The next `send_chat_message` prepends this string to the user's
+    /// content *before* the spawn, then clears it. The persisted user
+    /// message in `chat_messages` stays as the bare user input — the
+    /// prelude is invisible to the UI but visible to the model as
+    /// part of turn 1.
+    ///
+    /// Lives in memory only: if the app exits between migration and
+    /// the user's next turn, the migration is forgotten and the new
+    /// harness starts with no context. That's an acceptable trade —
+    /// migrations are typically followed by a send within seconds,
+    /// and adding a DB column would force a schema migration for a
+    /// transient state.
+    pub pending_history_prelude: Option<String>,
 }
 
 impl AgentSessionState {
@@ -413,12 +451,22 @@ pub enum ClaudeFlagDiscovery {
     Err(String),
 }
 
+/// Per-workspace CI status for detecting failure transitions.
+pub struct CiTransitionState {
+    pub overall_status: Option<CiOverallStatus>,
+    pub last_auto_fix_triggered: Option<Instant>,
+}
+
 /// Cached SCM data for a specific (repo_id, branch) pair.
 pub struct ScmCacheEntry {
     pub pull_request: Option<PullRequest>,
     pub ci_checks: Vec<CiCheck>,
     pub last_fetched: Instant,
     pub error: Option<String>,
+    /// HEAD SHA observed when this cache row was fetched. Used to let
+    /// no-PR negative cache entries live longer without masking a newly
+    /// pushed branch tip.
+    pub head_sha: Option<String>,
 }
 
 /// In-memory cache for SCM data, keyed by (repo_id, branch_name).
@@ -427,6 +475,44 @@ pub struct ScmCache {
 }
 
 impl ScmCache {
+    pub fn new() -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
+/// One cached repo-wide SCM list: open issues or open PRs (per scope).
+///
+/// Separate from [`ScmCacheEntry`] because the data shape is fundamentally
+/// different (a list of items vs. a single PR + its checks) and the key
+/// space is `(repo_id, list_kind)` rather than `(repo_id, branch_name)`.
+/// Co-locating both in `ScmCache` would force an enum payload and conflate
+/// two independent TTL / invalidation cycles.
+pub struct RepoListEntry {
+    /// Plugin operation result, deserialized as a JSON array of items.
+    /// The Tauri command extracts `Vec<Issue>` or `Vec<PullRequest>` from
+    /// this on read. Stored as `Value` so we don't need a typed enum in
+    /// state and so the eventual SQLite persist is a single JSON string.
+    pub payload: serde_json::Value,
+    pub last_fetched: Instant,
+    pub error: Option<String>,
+    /// `true` when the resolved plugin's manifest does not declare the
+    /// operation (e.g. a user-authored SCM plugin without `list_issues`).
+    /// Distinct from `error` so the UI can render a muted "not supported"
+    /// hint instead of treating it as a transient failure.
+    pub unsupported: bool,
+    pub provider: Option<String>,
+}
+
+/// In-memory cache for repo-wide SCM lists (open issues, open PRs by scope).
+/// Persisted to `repo_scm_lists_cache` so the project view has data on
+/// boot without waiting for the first poll.
+pub struct RepoScmListsCache {
+    pub entries: RwLock<HashMap<(String, String), RepoListEntry>>,
+}
+
+impl RepoScmListsCache {
     pub fn new() -> Self {
         Self {
             entries: RwLock::new(HashMap::new()),
@@ -516,6 +602,15 @@ pub struct AppState {
     pub next_tray_seq: AtomicU64,
     /// Cached Claude Code OAuth token and usage data.
     pub usage_cache: RwLock<Option<UsageCacheEntry>>,
+    /// Latest Codex `account/rateLimits/read` snapshot, kept fresh by
+    /// a subscriber task spawned alongside each Codex app-server
+    /// session in `commands::chat::send`. Read by `commands::usage`'s
+    /// `get_session_usage` for any `CodexNative` / `CodexSubscription`
+    /// session — when populated it supplies real subscription quotas
+    /// (primary/secondary windows + credits) instead of falling back
+    /// to the local-aggregate token totals. `None` until the first
+    /// Codex session of the app lifetime publishes its seed.
+    pub codex_rate_limits: RwLock<Option<CodexRateLimitSnapshot>>,
     /// SCM + env-provider + language-grammar plugin registry.
     ///
     /// Wrapped as `RwLock<Arc<PluginRegistry>>` (rather than the simpler
@@ -557,9 +652,26 @@ pub struct AppState {
     pub file_watcher: RwLock<Option<Arc<FileWatcher>>>,
     /// Cached PR/CI status data keyed by (repo_id, branch_name).
     pub scm_cache: ScmCache,
+    /// Per `(repo_id, branch)` SCM fetch gate. Multiple workspaces can point
+    /// at the same branch; this lets the first lookup populate the cache and
+    /// the rest reuse it instead of shelling out in parallel. Idle, unheld
+    /// gates are pruned on lookup so long-running sessions do not retain every
+    /// branch forever.
+    pub scm_fetch_locks: RwLock<HashMap<(String, String), AsyncGateEntry>>,
+    /// Cached repo-wide SCM lists (open issues / open PRs by scope) keyed
+    /// by `(repo_id, list_kind)`. Powers the project-view sections.
+    pub repo_scm_lists_cache: RepoScmListsCache,
     /// Short-TTL cache for `git merge-base <base_branch> HEAD`, keyed by
     /// workspace_id. See `MergeBaseCache` doc comment for the full rationale.
     pub merge_base_cache: MergeBaseCache,
+    /// Per-workspace gate for `load_diff_files`. Frontend callers normally
+    /// de-dupe their own intervals, but file gutters, sidebar refreshes, and
+    /// remote callers can still converge on the same workspace; this prevents
+    /// backend git fanout from overlapping for one workspace. Idle, unheld
+    /// gates are pruned on lookup.
+    pub diff_load_locks: RwLock<HashMap<String, AsyncGateEntry>>,
+    /// Per-workspace CI transition state for auto-fix triggering.
+    pub ci_last_status: RwLock<HashMap<String, CiTransitionState>>,
     /// Limits concurrent SCM CLI invocations.
     pub scm_semaphore: Arc<Semaphore>,
     /// The workspace the user is currently viewing. The polling loop reads
@@ -601,10 +713,42 @@ pub struct AppState {
     /// the frontend forwards that code here so clean profiles can complete
     /// login without an attached terminal.
     pub auth_login_stdin: tokio::sync::Mutex<Option<tokio::process::ChildStdin>>,
+    /// Cancellation flags for in-flight bulk-cleanup runs, keyed by the
+    /// frontend-supplied `request_id`. The Tauri command inserts an
+    /// `Arc<AtomicBool>` on start and removes it on completion;
+    /// `cancel_workspaces_bulk(request_id)` flips the flag. Both the
+    /// per-row DB loop (in `ops::workspace::delete_workspaces_bulk`) and
+    /// the post-DB worktree/branch cleanup loop check the same flag, so
+    /// the user's Cancel click really does stop further work.
+    pub bulk_cleanup_cancels: RwLock<HashMap<String, Arc<AtomicBool>>>,
+    /// Repository IDs with a GUI-initiated `create_workspace` currently in
+    /// flight. A create runs for several seconds (git worktree add + setup
+    /// script + env resolve). The frontend's `creationInFlight` latch is a
+    /// webview-scoped JS variable that a reload resets to `false`, so on its
+    /// own it can't stop a reload-then-reclick from minting a duplicate `-N`
+    /// workspace. This set lives in the Rust process — unaffected by webview
+    /// reloads — and `create_workspace` consults it before each create.
+    /// Keyed per repo so unrelated repos still create concurrently. See
+    /// issue #896.
+    pub workspace_creates_in_flight: Mutex<HashSet<String>>,
+    /// Nudges the native agent scheduler after a wakeup/routine is created,
+    /// deleted, or manually fired so the polling loop can recompute its next
+    /// deadline immediately instead of waiting for the fallback tick.
+    pub scheduler_notify: Arc<tokio::sync::Notify>,
 }
 
 impl AppState {
     pub fn new(db_path: PathBuf, worktree_base_dir: PathBuf, plugins: PluginRegistry) -> Self {
+        // Hydrate the Codex rate-limits cache from SQLite so the
+        // composer usage meter has real plan quotas to render the
+        // first time the user selects a Codex backend after launch.
+        // Best-effort: a missing/corrupt row falls back to `None` and
+        // the next chat turn (or prefetch command) repopulates the
+        // in-memory + on-disk copies together.
+        let codex_rate_limits = claudette::db::Database::open(&db_path)
+            .ok()
+            .and_then(|db| db.load_codex_rate_limits().ok().flatten());
+
         Self {
             db_path,
             worktree_base_dir: RwLock::new(worktree_base_dir),
@@ -619,6 +763,7 @@ impl AppState {
             tray_handle: Mutex::new(None),
             next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),
+            codex_rate_limits: RwLock::new(codex_rate_limits),
             plugins: RwLock::new(Arc::new(plugins)),
             #[cfg(feature = "voice")]
             voice: Arc::new(VoiceProviderRegistry::new(
@@ -628,7 +773,11 @@ impl AppState {
             env_watcher: RwLock::new(None),
             file_watcher: RwLock::new(None),
             scm_cache: ScmCache::new(),
+            scm_fetch_locks: RwLock::new(HashMap::new()),
+            repo_scm_lists_cache: RepoScmListsCache::new(),
             merge_base_cache: MergeBaseCache::new(),
+            diff_load_locks: RwLock::new(HashMap::new()),
+            ci_last_status: RwLock::new(HashMap::new()),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             selected_workspace_id: RwLock::new(None),
             workspace_activity: RwLock::new(HashMap::new()),
@@ -639,11 +788,37 @@ impl AppState {
             claude_flag_defs: Arc::new(RwLock::new(ClaudeFlagDiscovery::Loading)),
             auth_login_cancel: tokio::sync::Mutex::new(None),
             auth_login_stdin: tokio::sync::Mutex::new(None),
+            bulk_cleanup_cancels: RwLock::new(HashMap::new()),
+            workspace_creates_in_flight: Mutex::new(HashSet::new()),
+            scheduler_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
     pub fn next_pty_id(&self) -> u64 {
         self.next_pty_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Try to claim the workspace-creation slot for `repo_id`.
+    ///
+    /// Returns `true` if the slot was free (the caller may proceed with the
+    /// create) and `false` if a create for this repo is already in flight.
+    /// The matching release is [`AppState::end_workspace_create`], normally
+    /// run from a `Drop` guard so it fires on every exit path. See the
+    /// `workspace_creates_in_flight` field and issue #896.
+    pub fn try_begin_workspace_create(&self, repo_id: &str) -> bool {
+        self.workspace_creates_in_flight
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(repo_id.to_string())
+    }
+
+    /// Release the workspace-creation slot for `repo_id`. Idempotent —
+    /// releasing a repo that holds no slot is a harmless no-op.
+    pub fn end_workspace_create(&self, repo_id: &str) {
+        self.workspace_creates_in_flight
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(repo_id);
     }
 
     /// Snapshot the plugin registry for use across `await` points.
@@ -670,14 +845,12 @@ impl AppState {
 #[cfg(unix)]
 mod tests {
     use super::*;
-    use claudette::process::CommandWindowExt as _;
 
     /// Helper: spawn a long-running `sleep` process and return its PID.
     fn spawn_sleep() -> (tokio::process::Child, u32) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let child = tokio::process::Command::new("sleep")
-                .no_console_window()
+            let child = claudette::process::command("sleep")
                 .arg("3600")
                 .kill_on_drop(true)
                 .spawn()
@@ -735,8 +908,7 @@ mod tests {
     fn local_server_state_drop_kills_child() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (child, pid) = rt.block_on(async {
-            let child = tokio::process::Command::new("sleep")
-                .no_console_window()
+            let child = claudette::process::command("sleep")
                 .arg("3600")
                 .kill_on_drop(true)
                 .spawn()
@@ -859,5 +1031,51 @@ mod tests {
         // Cleanup.
         finish_tx.send(()).unwrap();
         holder.await.unwrap();
+    }
+}
+
+// ---- Regression: duplicate workspace creation (issue #896) --------------
+//
+// Cross-platform (not `#[cfg(unix)]`) because the in-flight slot logic has
+// no OS-specific code. Pins the per-repo single-flight contract that stops
+// a webview reload + re-click from minting a duplicate `-N` workspace.
+#[cfg(test)]
+mod create_slot_tests {
+    use super::AppState;
+    use claudette::plugin_runtime::PluginRegistry;
+
+    /// Build a throwaway `AppState`. The temp dir is returned so the caller
+    /// keeps it alive — `AppState::new` opens a SQLite DB under it during
+    /// construction, but the slot methods under test never touch disk.
+    fn test_state() -> (AppState, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::discover(dir.path());
+        let state = AppState::new(
+            dir.path().join("claudette.db"),
+            dir.path().join("worktrees"),
+            registry,
+        );
+        (state, dir)
+    }
+
+    #[test]
+    fn workspace_create_slot_is_single_flight_per_repo() {
+        let (state, _dir) = test_state();
+
+        // First claim for a repo wins.
+        assert!(state.try_begin_workspace_create("repo-a"));
+        // A second claim while the first is in flight is rejected — this is
+        // the guard that survives a webview reload.
+        assert!(!state.try_begin_workspace_create("repo-a"));
+        // A different repo is unaffected: concurrent creates across repos
+        // are still allowed.
+        assert!(state.try_begin_workspace_create("repo-b"));
+
+        // Releasing repo-a's slot makes it claimable again.
+        state.end_workspace_create("repo-a");
+        assert!(state.try_begin_workspace_create("repo-a"));
+
+        // Releasing a repo that holds no slot is a harmless no-op.
+        state.end_workspace_create("never-claimed");
     }
 }

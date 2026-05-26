@@ -103,6 +103,31 @@ pub enum BridgePayload {
         /// Optional caption the agent attached.
         caption: Option<String>,
     },
+    /// Schedule a one-shot native Claudette wakeup for the current chat
+    /// session. The parent persists it and re-enters the chat pipeline when
+    /// due, including after app restart.
+    ScheduleWakeup {
+        delay_seconds: Option<i64>,
+        fire_at: Option<String>,
+        prompt: String,
+        reason: Option<String>,
+    },
+    /// Create a recurring or one-shot cron-style native routine.
+    CronCreate {
+        name: Option<String>,
+        cron_expr: String,
+        prompt: String,
+        recurring: bool,
+    },
+    /// List native wakeups and routines visible to this session.
+    CronList,
+    /// Delete a native routine by id or name.
+    CronDelete { id: String },
+    /// Subscribe the current chat session to output from a background task.
+    Monitor {
+        task_id: String,
+        until: Option<String>,
+    },
     /// Forward a Claude Code hook payload to the parent UI. Tool hooks fired
     /// inside subagents include `agent_id`, which lets the frontend attach the
     /// nested tool call to the parent Agent activity.
@@ -115,6 +140,12 @@ pub struct BridgeResponse {
     /// Set on success — the row id assigned to the attachment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_id: Option<String>,
+    /// Generic tool result text for non-attachment tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Optional structured payload for list/create responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
     /// Set on failure — human-readable message that gets surfaced back to
     /// the agent in the MCP tool result so the model can adjust.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -126,6 +157,28 @@ impl BridgeResponse {
         Self {
             ok: true,
             attachment_id: Some(attachment_id.into()),
+            message: None,
+            data: None,
+            error: None,
+        }
+    }
+
+    pub fn message(message: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            attachment_id: None,
+            message: Some(message.into()),
+            data: None,
+            error: None,
+        }
+    }
+
+    pub fn data(message: impl Into<String>, data: serde_json::Value) -> Self {
+        Self {
+            ok: true,
+            attachment_id: None,
+            message: Some(message.into()),
+            data: Some(data),
             error: None,
         }
     }
@@ -134,6 +187,8 @@ impl BridgeResponse {
         Self {
             ok: false,
             attachment_id: None,
+            message: None,
+            data: None,
             error: Some(message.into()),
         }
     }
@@ -210,7 +265,7 @@ mod tests {
                 assert_eq!(media_type, "image/png");
                 assert_eq!(caption.as_deref(), Some("look"));
             }
-            BridgePayload::HookEvent { .. } => panic!("expected attachment payload"),
+            _ => panic!("expected attachment payload"),
         }
     }
 

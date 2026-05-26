@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { Plug2 } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity } from "../../stores/useAppStore";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
@@ -99,6 +100,7 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
             activities={group.activities}
             searchQuery={searchQuery}
             worktreePath={worktreePath}
+            mcp={group.kind === "mcp"}
           />
         ),
       )}
@@ -112,12 +114,15 @@ function GroupedToolActivityRows({
   activities,
   searchQuery,
   worktreePath,
+  mcp = false,
 }: {
   sessionId: string;
   label: string;
   activities: readonly ToolActivity[];
   searchQuery: string;
   worktreePath?: string | null;
+  /** MCP group: render the Plug2 icon + bare-name rows. */
+  mcp?: boolean;
 }) {
   // The user override lives in the shared slice (not local
   // `useState`) so the expand choice survives the running→completed
@@ -187,6 +192,13 @@ function GroupedToolActivityRows({
         }}
       >
         <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
+        {mcp && (
+          <Plug2
+            size={13}
+            aria-hidden="true"
+            className={styles.mcpGroupIcon}
+          />
+        )}
         <span className={styles.turnLabel}>{label}</span>
       </div>
       {isExpanded && (
@@ -197,6 +209,7 @@ function GroupedToolActivityRows({
               activity={act}
               searchQuery={searchQuery}
               worktreePath={worktreePath}
+              mcp={mcp}
             />
           ))}
         </div>

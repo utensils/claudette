@@ -73,6 +73,156 @@ impl Database {
         )?;
         Ok(())
     }
+
+    // --- Repo-wide SCM lists cache (issues / PRs by scope) ---
+
+    /// `row.fetched_at` is ignored; the database sets it to `datetime('now')`
+    /// on every upsert. `list_kind` is one of `"issues:<scope>"` or
+    /// `"pull_requests:<scope>"`. The pre-scope `"issues"` rows written
+    /// before the issues filter toggle landed are read-tolerated by
+    /// `load_all_repo_scm_list_cache` but no longer produced — they age
+    /// out the next time the repo is polled.
+    pub fn upsert_repo_scm_list_cache(
+        &self,
+        row: &RepoScmListCacheRow,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO repo_scm_lists_cache
+                (repo_id, list_kind, provider, payload, error, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+            params![
+                row.repo_id,
+                row.list_kind,
+                row.provider,
+                row.payload,
+                row.error,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_all_repo_scm_list_cache(
+        &self,
+    ) -> Result<Vec<RepoScmListCacheRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT repo_id, list_kind, provider, payload, error, fetched_at
+             FROM repo_scm_lists_cache",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(RepoScmListCacheRow {
+                repo_id: row.get(0)?,
+                list_kind: row.get(1)?,
+                provider: row.get(2)?,
+                payload: row.get(3)?,
+                error: row.get(4)?,
+                fetched_at: row.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_repo_scm_list_cache(
+        &self,
+        repo_id: &str,
+        list_kind: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM repo_scm_lists_cache WHERE repo_id = ?1 AND list_kind = ?2",
+            params![repo_id, list_kind],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_repo_scm_list_cache_for_repo(
+        &self,
+        repo_id: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM repo_scm_lists_cache WHERE repo_id = ?1",
+            params![repo_id],
+        )?;
+        Ok(())
+    }
+
+    // --- Workspace <-> SCM item links ---
+
+    /// Record (or replace) the association between a workspace and the SCM
+    /// item it was created for. `row.created_at` is ignored; the database
+    /// sets it to `datetime('now')`. A workspace is created fresh before
+    /// this is called, so the `OR REPLACE` only ever inserts in practice —
+    /// it stays for idempotency under retry.
+    pub fn upsert_workspace_scm_link(
+        &self,
+        row: &WorkspaceScmLinkRow,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO workspace_scm_links
+                (workspace_id, repo_id, kind, number, url, title, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+            params![
+                row.workspace_id,
+                row.repo_id,
+                row.kind,
+                row.number,
+                row.url,
+                row.title,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load every workspace -> SCM item link. Consumed at boot by
+    /// `load_initial_data` to hydrate the project-view badges. Rows for
+    /// hard-deleted workspaces are already gone via the FK cascade.
+    pub fn load_all_workspace_scm_links(
+        &self,
+    ) -> Result<Vec<WorkspaceScmLinkRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT workspace_id, repo_id, kind, number, url, title, created_at
+             FROM workspace_scm_links",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(WorkspaceScmLinkRow {
+                workspace_id: row.get(0)?,
+                repo_id: row.get(1)?,
+                kind: row.get(2)?,
+                number: row.get(3)?,
+                url: row.get(4)?,
+                title: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+}
+
+/// Persisted repo-wide SCM list (issues or PRs by scope).
+/// Payload is a JSON-encoded array of items; on the wire it is always a
+/// list, never wrapped in `{ items: [...] }` — the wrapper lives in the
+/// Tauri command return shape, not the cache row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoScmListCacheRow {
+    pub repo_id: String,
+    pub list_kind: String,
+    pub provider: Option<String>,
+    pub payload: String,
+    pub error: Option<String>,
+    pub fetched_at: String,
+}
+
+/// Persisted association between a workspace and the SCM item (issue or
+/// PR) it was spun up for. Powers the project-view "in progress" badge
+/// and the workspace-side "what is this for" breadcrumb. `kind` is one of
+/// `"issue"` or `"pr"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceScmLinkRow {
+    pub workspace_id: String,
+    pub repo_id: String,
+    pub kind: String,
+    pub number: i64,
+    pub url: String,
+    pub title: String,
+    pub created_at: String,
 }
 
 #[cfg(test)]
@@ -156,6 +306,62 @@ mod tests {
     }
 
     #[test]
+    fn test_repo_scm_list_cache_upsert_and_delete() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+
+        // Upsert issues + PRs:open + PRs:mine for the same repo.
+        for (kind, payload) in [
+            ("issues", r#"[{"number":1}]"#),
+            ("pull_requests:open", r#"[{"number":42}]"#),
+            ("pull_requests:mine", r#"[]"#),
+        ] {
+            db.upsert_repo_scm_list_cache(&RepoScmListCacheRow {
+                repo_id: "r1".into(),
+                list_kind: kind.into(),
+                provider: Some("github".into()),
+                payload: payload.into(),
+                error: None,
+                fetched_at: String::new(),
+            })
+            .unwrap();
+        }
+
+        let rows = db.load_all_repo_scm_list_cache().unwrap();
+        assert_eq!(rows.len(), 3);
+
+        // Upserting an existing key replaces (not duplicates).
+        db.upsert_repo_scm_list_cache(&RepoScmListCacheRow {
+            repo_id: "r1".into(),
+            list_kind: "issues".into(),
+            provider: Some("github".into()),
+            payload: r#"[{"number":2}]"#.into(),
+            error: None,
+            fetched_at: String::new(),
+        })
+        .unwrap();
+        let rows = db.load_all_repo_scm_list_cache().unwrap();
+        assert_eq!(rows.len(), 3);
+        let issues_row = rows
+            .iter()
+            .find(|r| r.list_kind == "issues")
+            .expect("issues row");
+        assert!(issues_row.payload.contains("\"number\":2"));
+
+        // Per-kind delete drops only that row.
+        db.delete_repo_scm_list_cache("r1", "issues").unwrap();
+        let rows = db.load_all_repo_scm_list_cache().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.list_kind != "issues"));
+
+        // Per-repo delete drops everything for that repo.
+        db.delete_repo_scm_list_cache_for_repo("r1").unwrap();
+        let rows = db.load_all_repo_scm_list_cache().unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
     fn test_scm_status_cache_nullable_pr() {
         let db = Database::open_in_memory().unwrap();
         db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
@@ -176,5 +382,82 @@ mod tests {
         let rows = db.load_all_scm_status_cache().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].pr_json, Some("null".into()));
+    }
+
+    fn make_scm_link(workspace_id: &str, repo_id: &str, number: i64) -> WorkspaceScmLinkRow {
+        WorkspaceScmLinkRow {
+            workspace_id: workspace_id.into(),
+            repo_id: repo_id.into(),
+            kind: "issue".into(),
+            number,
+            url: format!("https://example.com/issues/{number}"),
+            title: format!("Issue {number}"),
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_workspace_scm_link_upsert_and_load() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+            .unwrap();
+
+        db.upsert_workspace_scm_link(&make_scm_link("w1", "r1", 898))
+            .unwrap();
+        let rows = db.load_all_workspace_scm_links().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].workspace_id, "w1");
+        assert_eq!(rows[0].number, 898);
+        assert_eq!(rows[0].kind, "issue");
+        assert!(!rows[0].created_at.is_empty(), "created_at is DB-set");
+
+        // Re-linking the same workspace replaces, never duplicates.
+        let mut updated = make_scm_link("w1", "r1", 900);
+        updated.kind = "pr".into();
+        db.upsert_workspace_scm_link(&updated).unwrap();
+        let rows = db.load_all_workspace_scm_links().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].number, 900);
+        assert_eq!(rows[0].kind, "pr");
+    }
+
+    #[test]
+    fn test_workspace_scm_link_cascade_delete() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+            .unwrap();
+        db.upsert_workspace_scm_link(&make_scm_link("w1", "r1", 898))
+            .unwrap();
+
+        // Hard-deleting the workspace drops its link via the FK cascade.
+        db.delete_workspace("w1").unwrap();
+        let rows = db.load_all_workspace_scm_links().unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_workspace_scm_link_kind_check_constraint() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+            .unwrap();
+
+        // The migration's `CHECK (kind IN ('issue', 'pr'))` rejects any
+        // other value, so a bad `kind` can never reach link resolution.
+        let mut bad = make_scm_link("w1", "r1", 1);
+        bad.kind = "epic".into();
+        assert!(db.upsert_workspace_scm_link(&bad).is_err());
+
+        // The two valid values still insert.
+        for kind in ["issue", "pr"] {
+            let mut ok = make_scm_link("w1", "r1", 2);
+            ok.kind = kind.into();
+            db.upsert_workspace_scm_link(&ok).unwrap();
+        }
     }
 }

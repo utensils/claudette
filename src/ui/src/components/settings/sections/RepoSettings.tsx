@@ -17,6 +17,7 @@ import { RepoIcon } from "../../shared/RepoIcon";
 import { IconPicker } from "../../modals/IconPicker";
 import { ClaudeFlagsSettings } from "./ClaudeFlagsSettings";
 import { EnvPanel } from "./EnvPanel";
+import { RequiredInputsEditor } from "./RequiredInputsEditor";
 import {
   InheritedGlobalsList,
   PinnedPromptsManager,
@@ -70,6 +71,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const [repoConfig, setRepoConfig] = useState<RepoConfigInfo | null>(null);
   const [mcpServers, setMcpServers] = useState<SavedMcpServer[]>([]);
   const [archiveOnMerge, setArchiveOnMerge] = useState<"inherit" | "true" | "false">("inherit");
+  const [ciAutoFix, setCiAutoFix] = useState<"inherit" | "true" | "false">("inherit");
+  const [ciAutoFixPrompt, setCiAutoFixPrompt] = useState("");
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const iconPopoverRef = useRef<HTMLDivElement>(null);
 
@@ -87,6 +90,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       setBaseBranch(repo.base_branch ?? "");
       setDefaultRemote(repo.default_remote ?? "");
       setArchiveOnMerge("inherit");
+      setCiAutoFix("inherit");
+      setCiAutoFixPrompt("");
       setError(null);
     }
   }, [repoId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -116,6 +121,16 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         else setArchiveOnMerge("inherit");
       })
       .catch(() => setArchiveOnMerge("inherit"));
+    getAppSetting(`repo:${repoId}:ci_auto_fix_enabled`)
+      .then((val) => {
+        if (val === "true") setCiAutoFix("true");
+        else if (val === "false") setCiAutoFix("false");
+        else setCiAutoFix("inherit");
+      })
+      .catch(() => setCiAutoFix("inherit"));
+    getAppSetting(`repo:${repoId}:ci_auto_fix_prompt`)
+      .then((val) => { if (val) setCiAutoFixPrompt(val); })
+      .catch(() => {});
   }, [repoId]);
 
   const refreshMcpServers = useCallback(() => {
@@ -510,6 +525,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         <EnvPanel target={envTarget} />
       </div>
 
+      <RequiredInputsEditor repoId={repoId} />
+
       <div className={styles.fieldGroup}>
         <div className={styles.fieldLabel}>{t("repo_custom_instructions")}</div>
         {repoInstructionsOverrides && (
@@ -753,6 +770,67 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         </div>
       </div>
 
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>{t("repo_ci_auto_fix")}</div>
+          <div className={styles.settingDescription}>
+            {t("repo_ci_auto_fix_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <select
+            className={styles.select}
+            value={ciAutoFix}
+            onChange={async (e) => {
+              const val = e.target.value as "inherit" | "true" | "false";
+              const prev = ciAutoFix;
+              setCiAutoFix(val);
+              try {
+                setError(null);
+                await setAppSetting(
+                  `repo:${repoId}:ci_auto_fix_enabled`,
+                  val === "inherit" ? "" : val,
+                );
+              } catch (err) {
+                setCiAutoFix(prev);
+                setError(String(err));
+              }
+            }}
+          >
+            <option value="inherit">{t("repo_archive_inherit")}</option>
+            <option value="true">{t("repo_archive_enabled")}</option>
+            <option value="false">{t("repo_archive_disabled")}</option>
+          </select>
+        </div>
+      </div>
+
+      {ciAutoFix !== "false" && (
+        <div className={styles.fieldGroup}>
+          <div className={styles.fieldLabel}>{t("repo_ci_prompt_override")}</div>
+          <div className={`${styles.fieldHint} ${styles.fieldHintSpacedWide}`}>
+            {t("repo_ci_prompt_override_hint")}
+          </div>
+          <textarea
+            className={styles.textarea}
+            value={ciAutoFixPrompt}
+            onChange={(e) => setCiAutoFixPrompt(e.target.value)}
+            onBlur={async () => {
+              try {
+                setError(null);
+                await setAppSetting(
+                  `repo:${repoId}:ci_auto_fix_prompt`,
+                  ciAutoFixPrompt,
+                );
+              } catch (e) {
+                setError(String(e));
+              }
+            }}
+            placeholder={t("repo_ci_prompt_override_placeholder")}
+            rows={6}
+          />
+        </div>
+      )}
+
       <div className={styles.fieldGroup}>
         <div className={styles.fieldLabel}>{t("repo_worktree_discovery")}</div>
         <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
@@ -765,6 +843,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           {t("repo_worktree_discover")}
         </button>
       </div>
+
+      <RepoArchivedCleanupField repoId={repoId} />
 
       <div className={styles.dangerZone}>
         <div className={styles.dangerLabel}>{t("repo_danger_zone")}</div>
@@ -817,6 +897,63 @@ function RepoPinnedPromptsField({ repoId }: RepoPinnedPromptsFieldProps) {
       </div>
       <PinnedPromptsManager scope={{ kind: "repo", repoId }} projectPath={repoPath} />
       <InheritedGlobalsList globals={globalPrompts} repoNames={repoNames} />
+    </div>
+  );
+}
+
+interface RepoArchivedCleanupFieldProps {
+  repoId: string;
+}
+
+function RepoArchivedCleanupField({ repoId }: RepoArchivedCleanupFieldProps) {
+  const { t } = useTranslation("settings");
+  const openModal = useAppStore((s) => s.openModal);
+  const isRemote = useAppStore(
+    (s) =>
+      Boolean(
+        s.repositories.find((r) => r.id === repoId)?.remote_connection_id,
+      ),
+  );
+  // Mirror the modal's `!w.remote_connection_id` filter
+  // (`BulkCleanupArchivedModal.tsx`). Without this, an archived row
+  // tagged with a remote connection would inflate the hint count
+  // here ("1 archived workspace") while the modal would render zero
+  // rows — same row needs to be invisible to both surfaces or the
+  // counts drift.
+  const archivedCount = useAppStore(
+    (s) =>
+      s.workspaces.filter(
+        (w) =>
+          w.repository_id === repoId &&
+          w.status === "Archived" &&
+          !w.remote_connection_id,
+      ).length,
+  );
+
+  // Bulk cleanup currently dispatches to the local Tauri command, which
+  // only validates IDs in the desktop app's local DB. Remote workspaces
+  // would fail with "Workspace not found"; hide the entry point until
+  // we route through the owning remote connection.
+  if (isRemote) return null;
+
+  return (
+    <div className={styles.fieldGroup}>
+      <div className={styles.fieldLabel}>{t("repo_workspace_cleanup_label")}</div>
+      <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
+        {t(
+          archivedCount === 1
+            ? "repo_workspace_cleanup_hint_singular"
+            : "repo_workspace_cleanup_hint_plural",
+          { count: archivedCount },
+        )}
+      </div>
+      <button
+        className={styles.iconBtn}
+        onClick={() => openModal("bulkCleanupArchived", { repoId })}
+        disabled={archivedCount === 0}
+      >
+        {t("repo_workspace_cleanup_button")}
+      </button>
     </div>
   );
 }

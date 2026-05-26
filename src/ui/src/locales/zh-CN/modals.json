@@ -85,6 +85,10 @@
   "import_worktrees_importing": "正在导入...",
   "import_worktrees_confirm_singular": "导入 {{count}} 个工作区",
   "import_worktrees_confirm_plural": "导入 {{count}} 个工作区",
+  "import_worktrees_delete_tooltip": "从磁盘删除此残留工作树",
+  "import_worktrees_delete_confirm": "永久删除此工作树及其所有文件？\n\n{{path}}",
+  "import_worktrees_delete_confirm_button": "从磁盘删除",
+  "import_worktrees_deleting": "正在删除...",
 
   "mcp_servers_title": "MCP 服务器",
   "mcp_servers_detecting": "正在检测 MCP 服务器...",

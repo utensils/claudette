@@ -73,13 +73,7 @@ describe("parsePluginSlashCommand", () => {
     });
   });
 
-  it("returns null when plugin management is disabled", () => {
-    expect(parsePluginSlashCommand("/plugin", "repo-1", false)).toBeNull();
-    expect(parsePluginSlashCommand("/plugins install demo", "repo-1", false)).toBeNull();
-    expect(parsePluginSlashCommand("/marketplace add github:owner/repo", "repo-1", false)).toBeNull();
-  });
-
-  it("detects plugin-related slash inputs for disabled-mode suppression", () => {
+  it("detects plugin-related slash inputs", () => {
     expect(isPluginSlashCommandInput("/plugin")).toBe(true);
     expect(isPluginSlashCommandInput("/plugins install demo")).toBe(true);
     expect(isPluginSlashCommandInput("/marketplace add official")).toBe(true);

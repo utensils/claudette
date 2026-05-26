@@ -117,7 +117,7 @@ pub async fn test_agent_backend(
 }
 
 #[tauri::command]
-pub async fn launch_codex_login() -> Result<(), String> {
+pub async fn launch_codex_login(_workspace_id: Option<String>) -> Result<(), String> {
     Err(disabled_error())
 }
 

@@ -29,7 +29,8 @@ export interface UiSlice {
   sidebarWidth: number;
   rightSidebarWidth: number;
   terminalHeight: number;
-  rightSidebarTab: "files" | "changes" | "tasks";
+  composerHeight: number;
+  rightSidebarTabByWorkspace: Record<string, "files" | "changes" | "tasks">;
   sidebarGroupBy: "status" | "repo";
   sidebarRepoFilter: string; // repo ID or "all"
   sidebarShowArchived: boolean;
@@ -41,10 +42,11 @@ export interface UiSlice {
   commandPaletteInitialMode: "file" | null;
   toggleSidebar: () => void;
   toggleRightSidebar: () => void;
-  setRightSidebarTab: (tab: "files" | "changes" | "tasks") => void;
+  setRightSidebarTabForWorkspace: (workspaceId: string, tab: "files" | "changes" | "tasks") => void;
   setSidebarWidth: (w: number) => void;
   setRightSidebarWidth: (w: number) => void;
   setTerminalHeight: (h: number) => void;
+  setComposerHeight: (h: number) => void;
   setSidebarGroupBy: (g: "status" | "repo") => void;
   setSidebarRepoFilter: (id: string) => void;
   setSidebarShowArchived: (show: boolean) => void;
@@ -165,7 +167,8 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   sidebarWidth: 260,
   rightSidebarWidth: 250,
   terminalHeight: 300,
-  rightSidebarTab: "files",
+  composerHeight: 52,
+  rightSidebarTabByWorkspace: {},
   sidebarGroupBy: "repo",
   sidebarRepoFilter: "all",
   sidebarShowArchived: false,
@@ -176,10 +179,14 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
   toggleRightSidebar: () =>
     set((s) => ({ rightSidebarVisible: !s.rightSidebarVisible })),
-  setRightSidebarTab: (tab) => set({ rightSidebarTab: tab }),
+  setRightSidebarTabForWorkspace: (workspaceId, tab) =>
+    set((s) => ({
+      rightSidebarTabByWorkspace: { ...s.rightSidebarTabByWorkspace, [workspaceId]: tab },
+    })),
   setSidebarWidth: (w) => set({ sidebarWidth: w }),
   setRightSidebarWidth: (w) => set({ rightSidebarWidth: w }),
   setTerminalHeight: (h) => set({ terminalHeight: h }),
+  setComposerHeight: (h) => set({ composerHeight: h }),
   setSidebarGroupBy: (g) => set({ sidebarGroupBy: g }),
   setSidebarRepoFilter: (id) => set({ sidebarRepoFilter: id }),
   setSidebarShowArchived: (show) => set({ sidebarShowArchived: show }),
@@ -261,21 +268,9 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   chatAuthLoginStartedRequestId: null,
   openSettings: (section = "general", focus = null) =>
     set((state) => {
-      // Only `claude-code-plugins` (the Claude CLI marketplace integration)
-      // is gated behind `pluginManagementEnabled`. The `plugins` section
-      // (Claudette's own built-in Lua plugins — voice providers, SCM, env
-      // providers) is always reachable. Routing `"plugins"` to
-      // `"experimental"` was a bug where the voice-error → Plugins flow
-      // landed on the wrong page when plugin management was off, hiding
-      // the Distil-Whisper "Download model" button the user was sent
-      // there to click. setSettingsSection (below) already gets this
-      // distinction right; openSettings now matches.
       let nextSection = section;
       if (focus === "claude-auth" && nextSection === "general") {
         nextSection = "models";
-      }
-      if (nextSection === "claude-code-plugins" && !state.pluginManagementEnabled) {
-        nextSection = "experimental";
       }
       const resetMarketplaceIntent = nextSection === "claude-code-plugins";
       return {
@@ -304,14 +299,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
     }),
   setSettingsSection: (section) =>
     set((state) => {
-      // Claude Code Plugins requires plugin management to be on; when
-      // disabled, fall through to the experimental pane so the setting
-      // stays reachable. The new "plugins" section (Claudette's own
-      // Lua plugins) is always available.
-      const nextSection =
-        section === "claude-code-plugins" && !state.pluginManagementEnabled
-          ? "experimental"
-          : section;
+      const nextSection = section;
       const resetMarketplaceIntent = nextSection === "claude-code-plugins";
       return {
         settingsSection: nextSection,
@@ -349,9 +337,6 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   pluginRefreshToken: 0,
   openPluginSettings: (intent = {}) =>
     set((state) => {
-      if (!state.pluginManagementEnabled) {
-        return {};
-      }
       const mergedIntent: PluginSettingsIntent = {
         action: intent.action ?? null,
         repoId: intent.repoId ?? null,

@@ -42,6 +42,9 @@ To switch between workspaces in the same project, click them in the sidebar or u
 | `⌘/Ctrl + P` | Go to file — Quick Open the workspace file picker |
 | `⌘/Ctrl + O` | Go to file (alternate). Kept after the Cmd+P swap so existing muscle memory still works; rebindable / disable-able in **Settings → Keyboard**. |
 | `⌘/Ctrl + Shift + P` | Toggle command palette |
+| `⌘/Ctrl + F` | Search — opens the terminal scrollback search bar when a terminal pane is focused, otherwise searches the active chat transcript |
+| `⌘/Ctrl + /` | Show the keyboard-shortcuts reference |
+| `⌘/Ctrl + 0` | Toggle focus between the chat input and the active terminal pane |
 
 Cmd/Ctrl+P and Cmd/Ctrl+Shift+P match VS Code's defaults. The bindings can be customised — or fully swapped back to the pre-1.x defaults — in **Settings → Keyboard**.
 
@@ -57,6 +60,8 @@ These fire while a file is open in the editor pane. They mostly mirror Monaco's 
 | `⇧⌥F` (macOS) / `Ctrl+Shift+I` (Linux/Windows) | Format the current document |
 | `⌃G` (macOS) / `Ctrl+G` (Linux/Windows) | Go to line |
 | `⌘⇧O` (macOS) / `Ctrl+Shift+O` (Linux/Windows) | Go to symbol in the current file |
+| `⌘/Ctrl + Shift + V` | Toggle the Markdown preview for the active file |
+| `⌘/Ctrl + Z` | Undo the last file-tree operation (create / rename / move / delete) |
 
 ### Zoom
 
@@ -72,6 +77,7 @@ These fire while a file is open in the editor pane. They mostly mirror Monaco's 
 | Shortcut | Action |
 |----------|--------|
 | `Shift + Tab` | Toggle plan mode |
+| `⌘/Ctrl + Enter` | Skip the queue — send the typed message immediately as a mid-turn steer instead of queuing it for after the current turn |
 | `Escape` | Dismiss current overlay, or stop running agent |
 
 ### Voice Input
@@ -99,6 +105,7 @@ terminal is focused; Linux/Windows keep bare `Ctrl+D` for shell EOF and use
 | `⌘⌥←/→/↑/↓` (macOS) / `Ctrl+Alt+arrow` (Linux) | Move focus to the neighboring pane |
 | `⌘T` (macOS) / `Ctrl+Shift+T` (Linux) | New terminal tab |
 | `⌘⇧[` / `⌘⇧]` | Previous / next terminal tab |
+| `⌘/Ctrl + F` | Search the active pane's scrollback — opens an in-panel bar with match counter and next/prev controls |
 | `⌘/Ctrl + =` / `⌘/Ctrl + -` | Global UI zoom; terminal intercepts the keys so they do not reach the shell |
 | `⌘/Ctrl + Shift + =` / `⌘/Ctrl + Shift + -` | Terminal font size only |
 

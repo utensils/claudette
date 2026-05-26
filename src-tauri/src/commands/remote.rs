@@ -7,9 +7,8 @@ use crate::remote::{DiscoveredServer, RemoteConnectionInfo, RemoteConnectionMana
 use crate::state::AppState;
 #[cfg(feature = "server")]
 use crate::state::LocalServerState;
-use crate::transport::ws::WebSocketTransport;
 #[cfg(feature = "server")]
-use claudette::process::CommandWindowExt as _;
+use claudette::transport::ws::WebSocketTransport;
 #[cfg(feature = "server")]
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -96,7 +95,7 @@ pub async fn pair_with_server(
     };
 
     // Load remote data before handing off the transport.
-    use crate::transport::Transport;
+    use claudette::transport::Transport;
     let remote_data = transport
         .send(serde_json::json!({
             "method": "load_initial_data",
@@ -155,7 +154,7 @@ pub async fn connect_remote(
     };
 
     // Load remote data.
-    use crate::transport::Transport;
+    use claudette::transport::Transport;
     let remote_data = transport
         .send(serde_json::json!({
             "method": "load_initial_data",
@@ -282,8 +281,7 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
         let server_bin = std::env::current_exe()
             .map_err(|e| format!("Failed to locate current executable: {e}"))?;
 
-        let mut child = tokio::process::Command::new(&server_bin)
-            .no_console_window()
+        let mut child = claudette::process::command(&server_bin)
             .arg("--server")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

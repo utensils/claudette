@@ -20,7 +20,6 @@ use claudette::agent::{
 };
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind, AgentBackendModel};
 use claudette::plugin::load_secure_secret;
-use claudette::process::CommandWindowExt as _;
 use serde_json::Value;
 
 #[cfg(feature = "pi-sdk")]
@@ -286,7 +285,24 @@ async fn discover_pi_models(
     // matters for `precheck_cwd`; `std::env::temp_dir()` is always
     // present and identical for every refresh.
     let cwd = std::env::temp_dir();
-    let discovered = PiSdkSession::discover_models(&cwd).await?;
+    // Thread keychain-only provider secrets through so Refresh models
+    // sees the same providers as `list_providers`. Without this, a
+    // user who configured OpenRouter with "Keep this key private to
+    // Claudette" would see the provider as configured in the Pi card
+    // but Refresh would still return zero models for it.
+    //
+    // Propagate keychain-read errors instead of dropping them — a
+    // dead secure store has the same symptom (no models discovered)
+    // as a misconfigured provider, and the user needs to know it's
+    // the store, not Pi. `pi_list_providers` and chat startup already
+    // surface this error; mirror that here.
+    let extras = super::pi_auth::pi_local_secret_env()?;
+    let extras_slice: Option<&[(String, String)]> = if extras.is_empty() {
+        None
+    } else {
+        Some(extras.as_slice())
+    };
+    let discovered = PiSdkSession::discover_models_with_env(&cwd, extras_slice).await?;
     let models: Vec<AgentBackendModel> = discovered
         .into_iter()
         .map(|model| AgentBackendModel {
@@ -527,10 +543,8 @@ pub(super) async fn codex_login_status() -> Result<String, String> {
 }
 
 pub(super) fn codex_cli_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(program);
-    command
-        .no_console_window()
-        .env("PATH", claudette::env::enriched_path());
+    let mut command = claudette::process::command(program);
+    command.env("PATH", claudette::env::enriched_path());
     command
 }
 

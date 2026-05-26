@@ -394,6 +394,21 @@ export const HOTKEY_ACTIONS = [
     rebindable: true,
   },
   {
+    // Cmd/Ctrl+F when an xterm pane has focus opens the in-panel search bar
+    // for that pane's scrollback. Pairs with `global.open-chat-search`
+    // (same default keystroke but scoped to global); xterm's custom key
+    // handler intercepts the press here and stops propagation, so the
+    // global chat-search handler never fires while a terminal pane is
+    // focused.
+    id: "terminal.open-search",
+    scope: "terminal",
+    category: "keyboard_category_terminal",
+    description: "keyboard_action_terminal_open_search",
+    defaultBinding: allPlatforms("mod+code:KeyF"),
+    match: "code",
+    rebindable: true,
+  },
+  {
     // Cmd/Ctrl+W: context-aware "close tab".
     //  - File active in the right pane → routes through the FileViewer's
     //    dirty-aware close path (preserves the existing discard-changes

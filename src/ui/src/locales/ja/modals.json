@@ -85,6 +85,10 @@
   "import_worktrees_importing": "インポート中...",
   "import_worktrees_confirm_singular": "{{count}} 件のワークスペースをインポート",
   "import_worktrees_confirm_plural": "{{count}} 件のワークスペースをインポート",
+  "import_worktrees_delete_tooltip": "この孤立したワークツリーをディスクから削除",
+  "import_worktrees_delete_confirm": "このワークツリーとすべてのファイルを完全に削除しますか？\n\n{{path}}",
+  "import_worktrees_delete_confirm_button": "ディスクから削除",
+  "import_worktrees_deleting": "削除中...",
 
   "mcp_servers_title": "MCP サーバー",
   "mcp_servers_detecting": "MCP サーバーを検出中...",

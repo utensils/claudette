@@ -167,7 +167,18 @@ jobs:
           perl -i -pe 's/^version\s*=\s*"[^"]+"/version = "$ENV{NIGHTLY_VERSION}"/' src-tauri/Cargo.toml
           perl -i -pe 's/^version\s*=\s*"[^"]+"/version = "$ENV{NIGHTLY_VERSION}"/' src-server/Cargo.toml
           perl -i -pe 's/^version\s*=\s*"[^"]+"/version = "$ENV{NIGHTLY_VERSION}"/' src-cli/Cargo.toml
-          grep '^version' Cargo.toml src-tauri/Cargo.toml src-server/Cargo.toml src-cli/Cargo.toml
+          # `src-mobile` is part of the workspace but not built by this
+          # nightly. Stamp it anyway so the workspace stays version-consistent
+          # and so any tooling that scans every Cargo.toml / tauri.conf.json
+          # sees the same dev version. The hardcoded version in
+          # `src-mobile/tauri.conf.json` is also what tripped tauri-action
+          # into uploading artifacts under the stale `0.24.0` name (see #846
+          # area). Keep the JSON regex anchored on the `"version"` key so it
+          # only rewrites that line.
+          perl -i -pe 's/^version\s*=\s*"[^"]+"/version = "$ENV{NIGHTLY_VERSION}"/' src-mobile/Cargo.toml
+          perl -i -pe 's/("version"\s*:\s*)"[^"]+"/$1"$ENV{NIGHTLY_VERSION}"/' src-mobile/tauri.conf.json
+          grep '^version' Cargo.toml src-tauri/Cargo.toml src-server/Cargo.toml src-cli/Cargo.toml src-mobile/Cargo.toml
+          grep '"version"' src-mobile/tauri.conf.json
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -271,6 +282,19 @@ jobs:
           APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
+          # Scope tauri-action to the desktop project explicitly. The
+          # default `projectPath: .` triggers a recursive walk that picks
+          # up *any* `tauri.conf.json` in the repo — alphabetical order
+          # lands on `src-mobile/tauri.conf.json` (added in #840) before
+          # `src-tauri/tauri.conf.json`, and the mobile file's hardcoded
+          # `"version"` is what got reported to the post-bundle upload
+          # step. The bundler still uses Cargo.toml's (stamped) version
+          # for the artifact filename, so the lookup name and the actual
+          # filename drifted apart and the Linux upload failed with
+          # "No artifacts were found." Pinning the path keeps the action
+          # on the desktop project regardless of any future tauri.conf.json
+          # files added to other workspace members.
+          projectPath: src-tauri
           tagName: nightly-staging
           releaseName: "Nightly ${{ needs.compute-version.outputs.version }}"
           releaseDraft: true
@@ -298,6 +322,19 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
+          # Scope tauri-action to the desktop project explicitly. The
+          # default `projectPath: .` triggers a recursive walk that picks
+          # up *any* `tauri.conf.json` in the repo — alphabetical order
+          # lands on `src-mobile/tauri.conf.json` (added in #840) before
+          # `src-tauri/tauri.conf.json`, and the mobile file's hardcoded
+          # `"version"` is what got reported to the post-bundle upload
+          # step. The bundler still uses Cargo.toml's (stamped) version
+          # for the artifact filename, so the lookup name and the actual
+          # filename drifted apart and the Linux upload failed with
+          # "No artifacts were found." Pinning the path keeps the action
+          # on the desktop project regardless of any future tauri.conf.json
+          # files added to other workspace members.
+          projectPath: src-tauri
           tagName: nightly-staging
           releaseName: "Nightly ${{ needs.compute-version.outputs.version }}"
           releaseDraft: true
@@ -323,6 +360,19 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
+          # Scope tauri-action to the desktop project explicitly. The
+          # default `projectPath: .` triggers a recursive walk that picks
+          # up *any* `tauri.conf.json` in the repo — alphabetical order
+          # lands on `src-mobile/tauri.conf.json` (added in #840) before
+          # `src-tauri/tauri.conf.json`, and the mobile file's hardcoded
+          # `"version"` is what got reported to the post-bundle upload
+          # step. The bundler still uses Cargo.toml's (stamped) version
+          # for the artifact filename, so the lookup name and the actual
+          # filename drifted apart and the Linux upload failed with
+          # "No artifacts were found." Pinning the path keeps the action
+          # on the desktop project regardless of any future tauri.conf.json
+          # files added to other workspace members.
+          projectPath: src-tauri
           tagName: nightly-staging
           releaseName: "Nightly ${{ needs.compute-version.outputs.version }}"
           releaseDraft: true

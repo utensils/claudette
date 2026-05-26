@@ -53,7 +53,7 @@ export interface EditorActionsDeps {
   ) => void;
   rightSidebarVisible: boolean;
   showRightSidebar: () => void;
-  setRightSidebarTab: (tab: "files" | "changes" | "tasks") => void;
+  setRightSidebarTabForWorkspace: (workspaceId: string, tab: "files" | "changes" | "tasks") => void;
 
   openCommandPaletteFileMode: () => void;
 
@@ -165,7 +165,7 @@ export function buildEditorActions(deps: EditorActionsDeps): EditorActions {
 
   const onRevealInFiles = () => {
     if (!deps.rightSidebarVisible) deps.showRightSidebar();
-    deps.setRightSidebarTab("files");
+    deps.setRightSidebarTabForWorkspace(deps.workspaceId, "files");
     for (const dir of ancestorDirs(deps.path)) {
       deps.setAllFilesDirExpanded(deps.workspaceId, dir, true);
     }
@@ -290,7 +290,7 @@ export function useEditorActions(params: UseEditorActionsParams): EditorActions 
   const setAllFilesDirExpanded = useAppStore((s) => s.setAllFilesDirExpanded);
   const rightSidebarVisible = useAppStore((s) => s.rightSidebarVisible);
   const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
-  const setRightSidebarTab = useAppStore((s) => s.setRightSidebarTab);
+  const setRightSidebarTabForWorkspace = useAppStore((s) => s.setRightSidebarTabForWorkspace);
   const openCommandPaletteFileMode = useAppStore(
     (s) => s.openCommandPaletteFileMode,
   );
@@ -334,7 +334,7 @@ export function useEditorActions(params: UseEditorActionsParams): EditorActions 
         showRightSidebar: () => {
           if (!useAppStore.getState().rightSidebarVisible) toggleRightSidebar();
         },
-        setRightSidebarTab,
+        setRightSidebarTabForWorkspace,
         openCommandPaletteFileMode,
         wordWrap,
         setWordWrap,
@@ -365,7 +365,7 @@ export function useEditorActions(params: UseEditorActionsParams): EditorActions 
       setAllFilesDirExpanded,
       rightSidebarVisible,
       toggleRightSidebar,
-      setRightSidebarTab,
+      setRightSidebarTabForWorkspace,
       openCommandPaletteFileMode,
       wordWrap,
       setWordWrap,

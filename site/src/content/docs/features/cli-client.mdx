@@ -12,7 +12,7 @@ Most subcommands require the desktop app to be running. If it isn't, they exit w
 
 ## Installation
 
-The `claudette` binary ships inside the desktop app bundle. Use the in-app installer in **Settings > General > Command-line interface**, which symlinks the bundled binary onto your `PATH`. On Linux `.deb` installs the CLI is already at `/usr/bin/claudette` automatically. Standalone `claudette-cli-<platform>` release assets are also published per release for headless / CI consumers.
+The `claudette` binary ships inside the desktop app bundle. Use the in-app installer in **Settings > CLI**, which symlinks the bundled binary onto your `PATH`. On Linux, `.deb` installs place the CLI at `/usr/bin/claudette` automatically. Standalone `claudette-cli-<platform>` release assets are also published per release for headless / CI consumers.
 
 To install shell completion:
 
@@ -94,7 +94,11 @@ claudette workspace list --json                   # Scriptable output
 claudette workspace create <repo-id> <name>       # New workspace on a fresh worktree
 claudette workspace archive <id>                  # Archive (worktree removed; chat preserved)
 claudette workspace archive <id> --delete-branch  # Force-delete the branch on archive
+claudette workspace purge --repo <repo-id>        # Permanently delete archived workspaces in a repo
+claudette workspace purge --repo <repo-id> --older-than-days 90 --dry-run
 ```
+
+`workspace purge` only ever removes **archived** workspaces — the server rejects Active IDs. Add `--older-than-days N` to restrict by age, and `--dry-run` to preview the IDs without deleting.
 
 `workspace create` returns the new workspace's ID **and** a `default_session_id` that you can immediately target with `chat send`.
 
@@ -147,11 +151,11 @@ Boolean flags are tri-state — pass `--plan` to force on, `--no-plan` to force 
 
 | Flag | Values | Effect |
 |---|---|---|
-| `--model` | `opus`, `sonnet`, `haiku`, `claude-opus-4-6`, ... | Override model for this turn |
+| `--model` | `opus`, `sonnet`, `haiku`, `claude-opus-4-7`, ... | Override model for this turn |
 | `--plan` / `--no-plan` | — | Plan mode (read-only until approved) |
 | `--thinking` / `--no-thinking` | — | Extended thinking |
-| `--fast` / `--no-fast` | — | Fast mode (Opus 4.6) |
-| `--effort` | `low`, `medium`, `high`, `xhigh`, `max` | Reasoning effort (`max` requires Opus 4.6) |
+| `--fast` / `--no-fast` | — | Fast mode (built-in support: Opus 4.6) |
+| `--effort` | `low`, `medium`, `high`, `xhigh`, `max` | Reasoning effort (`xhigh` requires Opus 4.7) |
 | `--chrome` / `--no-chrome` | — | Chrome browser tool |
 | `--disable-1m-context` | — | Suppress Max-plan auto-upgrade to a 1M context window |
 | `--permission` | `default`, `acceptEdits`, `bypassPermissions` | Permission level |
@@ -241,6 +245,20 @@ workspaces:
 ```
 
 `prompt_file` paths are resolved relative to the manifest's directory. `validate` catches duplicate names, missing prompts, prompt-file paths that don't exist, and invalid workspace names.
+
+## Scheduled routines
+
+`routine` manages native cron-style scheduled prompts that fire through a chat session:
+
+```sh
+claudette routine list                                          # Wakeups + routines
+claudette routine create <session-id> "0 9 * * 1-5" "Check open PRs" --name weekday-prs
+claudette routine create <session-id> "30 14 28 2 *" "Review the checklist" --once
+claudette routine run weekday-prs                               # Fire immediately by id or name
+claudette routine delete weekday-prs                            # Delete by id or name
+```
+
+`routine create` accepts literal prompts, `@file` prompts, and `-` for stdin, matching `chat send`. See [Agent Scheduling](/claudette/features/agent-scheduling/) for the cron semantics.
 
 ## Escape hatch: raw RPC
 

@@ -30,6 +30,7 @@ function makeRepo(overrides: Partial<Repository> = {}): Repository {
     base_branch: null,
     default_remote: null,
     path_valid: true,
+    required_inputs: null,
     remote_connection_id: null,
     ...overrides,
   };

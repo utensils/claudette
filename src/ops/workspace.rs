@@ -16,11 +16,14 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command as TokioCommand;
+
+use std::collections::HashMap;
 
 use crate::agent;
 use crate::config;
@@ -28,8 +31,7 @@ use crate::db::Database;
 use crate::env::{WorkspaceEnv, enriched_path};
 use crate::env_provider::ResolvedEnv;
 use crate::git;
-use crate::model::{AgentStatus, Workspace, WorkspaceStatus};
-use crate::process::CommandWindowExt as _;
+use crate::model::{AgentStatus, Repository, Workspace, WorkspaceStatus, coerce_input_value};
 use crate::workspace_alloc::{allocate_workspace_name, is_valid_workspace_name};
 
 use super::{NotificationEvent, OpsError, OpsHooks, WorkspaceChangeKind};
@@ -65,6 +67,57 @@ pub struct CreateParams<'a> {
     /// Branch prefix already resolved by the caller (e.g.
     /// `"jamesbrink/"`). Empty string is allowed.
     pub branch_prefix: &'a str,
+    /// Values for the repo's declared `required_inputs`. Validated against
+    /// the schema before the worktree is allocated; passing `None` against
+    /// a repo that declares inputs fails the create with
+    /// [`OpsError::Validation`]. Live here (rather than at the Tauri layer)
+    /// so every call site — GUI, IPC, WS server, future callers — enforces
+    /// the invariant uniformly.
+    pub input_values: Option<&'a HashMap<String, String>>,
+}
+
+/// Validate a repository's declared input schema against a supplied value
+/// map. Returns the coerced values to persist (or `Ok(None)` when the repo
+/// declares no inputs). Errors are formatted for user-facing display.
+///
+/// Used internally by [`create`] and exposed so the GUI layer can pre-check
+/// values before showing a "creating…" state on the modal — failing fast
+/// avoids the surprise of allocating a worktree only to surface a "missing
+/// value" error after the fact.
+pub fn validate_repository_inputs(
+    repo: &Repository,
+    supplied: Option<&HashMap<String, String>>,
+) -> Result<Option<HashMap<String, String>>, String> {
+    let Some(schema) = repo.required_inputs.as_ref() else {
+        return Ok(None);
+    };
+    if schema.is_empty() {
+        return Ok(None);
+    }
+    let supplied_map = supplied.cloned().unwrap_or_default();
+    let mut coerced = HashMap::with_capacity(schema.len());
+    for field in schema {
+        let key = field.key();
+        // For non-required fields, an omitted key is treated as an empty
+        // string: the workspace's env var is set to "" so downstream scripts
+        // can uniformly `[ -z "$X" ]` instead of having to distinguish
+        // "missing from map" vs "explicitly blank". For required fields,
+        // a missing key is still a hard error.
+        let raw_owned: String;
+        let raw: &str = match supplied_map.get(key) {
+            Some(value) => value.as_str(),
+            None if !field.is_required() => {
+                raw_owned = String::new();
+                raw_owned.as_str()
+            }
+            None => {
+                return Err(format!("Missing value for required input {key:?}."));
+            }
+        };
+        let value = coerce_input_value(field, raw)?;
+        coerced.insert(key.to_string(), value);
+    }
+    Ok(Some(coerced))
 }
 
 /// Result of a successful [`create`]. `default_session_id` is the chat
@@ -143,6 +196,12 @@ async fn create_inner(
         .find(|r| r.id == params.repo_id)
         .ok_or_else(|| OpsError::NotFound("Repository not found".to_string()))?;
 
+    // Validate declared inputs BEFORE allocating a worktree — fail-fast so
+    // a missing/invalid value doesn't leave an orphan worktree directory
+    // behind. Every caller (GUI, IPC, WS server) gets this check uniformly.
+    let validated_inputs =
+        validate_repository_inputs(repo, params.input_values).map_err(OpsError::Validation)?;
+
     let repo_path = repo.path.clone();
 
     let (allocation, actual_path) = {
@@ -202,6 +261,10 @@ async fn create_inner(
         status_line: String::new(),
         created_at: now_iso(),
         sort_order: 0,
+        // Populated below after `insert_workspace` succeeds. Left `None`
+        // here only so the struct is valid mid-creation; the persisted
+        // value comes from `validated_inputs`.
+        input_values: None,
     };
 
     if let Err(e) = db.insert_workspace(&ws) {
@@ -209,6 +272,22 @@ async fn create_inner(
         let _ = git::branch_delete(&repo_path, &ws.branch_name).await;
         return Err(OpsError::Db(e));
     }
+    // Persist any declared input values to the dedicated column. The
+    // workspace row was inserted without them — `insert_workspace`'s SQL
+    // only writes the original columns — so the agent/terminal/script env
+    // merges would read NULL without this. If the write fails, roll back
+    // the row too — otherwise the DB ends up with a workspace pointing at
+    // a worktree we're about to delete, with `input_values` NULL — exactly
+    // the state we use to mean "no inputs declared".
+    if let Some(values) = validated_inputs.as_ref()
+        && let Err(e) = db.set_workspace_input_values(&ws.id, Some(values))
+    {
+        let _ = db.delete_workspace(&ws.id);
+        let _ = git::remove_worktree(&repo_path, &actual_path, true).await;
+        let _ = git::branch_delete(&repo_path, &ws.branch_name).await;
+        return Err(OpsError::Db(e));
+    }
+    ws.input_values = validated_inputs;
     // Patch sort_order to the value the DB assigned so the workspace this
     // op returns lands at the bottom of its repo group immediately, instead
     // of rendering at sort_order=0 until the next workspace-list reload.
@@ -249,20 +328,19 @@ async fn create_inner(
 fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
     #[cfg(not(windows))]
     let mut cmd = {
-        let mut c = TokioCommand::new("sh");
+        let mut c = crate::process::command("sh");
         c.arg("-c").arg(script);
         c
     };
     #[cfg(windows)]
     let mut cmd = {
-        let mut c = TokioCommand::new("cmd.exe");
+        let mut c = crate::process::command("cmd.exe");
         // /S = leave the rest of the command line alone (no double-quote
         // stripping); /C = run the command and exit. Same flags used by
         // the notification-command builder.
         c.arg("/S").arg("/C").arg(script);
         c
     };
-    cmd.no_console_window();
     cmd.current_dir(worktree_path)
         .env("PATH", enriched_path())
         .stdout(std::process::Stdio::piped())
@@ -294,8 +372,7 @@ fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
 /// fallback and we're already in a "we don't care, just kill it" path.
 #[cfg(windows)]
 async fn kill_script_subtree(pid: u32) {
-    let _ = TokioCommand::new("taskkill")
-        .no_console_window()
+    let _ = crate::process::command("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .output()
         .await;
@@ -841,6 +918,12 @@ pub async fn archive(
     } else {
         db.delete_terminal_tabs_for_workspace(&workspace_id)?;
         db.delete_scm_status_cache(&workspace_id)?;
+        db.disable_agent_scheduled_tasks_for_workspace(
+            &workspace_id,
+            chrono::Utc::now(),
+            "workspace_archived",
+            "Workspace was archived",
+        )?;
         db.update_workspace_status(&workspace_id, &WorkspaceStatus::Archived, None)?;
     }
 
@@ -866,6 +949,210 @@ pub async fn archive(
     })
 }
 
+/// Per-workspace outcome from a [`delete_workspaces_bulk`] call.
+///
+/// Three terminal states, mutually exclusive:
+/// - **Deleted** — `error: None`, `cancelled: false`. The DB row is gone
+///   and the bulk hook has fired.
+/// - **Failed** — `error: Some(_)`, `cancelled: false`. The row survives;
+///   caller should not run worktree/branch cleanup for it.
+/// - **Cancelled** — `error: None`, `cancelled: true`. The cancel token
+///   was tripped before this row was attempted; the DB call never ran and
+///   the row's state is untouched. Frontend labels these as "skipped",
+///   not "failed", so the user knows a retry will pick them up cleanly.
+///
+/// `repository_id` is surfaced for every outcome so the caller can dedupe
+/// affected repos for MCP supervisor reconciliation without re-querying
+/// the DB.
+#[derive(Debug, Serialize)]
+pub struct DeleteWorkspaceOutcome {
+    pub id: String,
+    pub repository_id: String,
+    pub error: Option<String>,
+    /// True iff this row was skipped because the cancel token was tripped
+    /// before its DB delete ran. See struct-level docs for full semantics.
+    #[serde(default)]
+    pub cancelled: bool,
+}
+
+/// Hard-delete a batch of workspaces. Each delete runs in its own
+/// transaction (via
+/// [`Database::try_delete_archived_workspace_with_summary`]) and is
+/// gated on the row still being `Archived` *inside the same
+/// transaction* — caller-side snapshot checks aren't sufficient because
+/// the bulk Tauri command spans many `await` points between
+/// pre-validation and the actual delete, and a concurrent
+/// `restore_workspace` could flip a row to `Active` in that window.
+///
+/// Per-row outcomes:
+/// - DB row deleted → `error: None, cancelled: false`, hook emits `Deleted`.
+/// - Row missing or no longer Archived → `error: Some("workspace no
+///   longer archived"), cancelled: false`, no hook (a `restore_workspace`
+///   already fired its own).
+/// - SQLite error → `error: Some(...), cancelled: false`, no hook.
+/// - Cancel token tripped before the row was attempted →
+///   `error: None, cancelled: true`, no hook, no DB call.
+///
+/// Cancellation is cooperative: the loop checks `cancel` at the top of
+/// each iteration. The row currently mid-flight is allowed to complete
+/// (its DB transaction is short — milliseconds — and worktree/branch
+/// cleanup runs later in the caller, where the same flag is re-checked).
+/// Every subsequent row is recorded as `cancelled: true` with no DB
+/// touch. This matches the spec in issue #854: in-flight finishes,
+/// remaining work skips.
+///
+/// `on_progress` fires once per outcome immediately after the outcome is
+/// built — same thread, no async, no allocations beyond what the caller's
+/// closure does. The Tauri command bridges this to a per-row Tauri event
+/// so the modal can render live status; the CLI ignores it.
+///
+/// Caller responsibilities (matching the single-workspace
+/// `delete_workspace` Tauri command):
+/// - Stop any running agents whose `workspace_id` matches before invoking.
+/// - Remove worktrees + delete git branches *for IDs whose outcome
+///   reports success* — never for rows where this op reported a failure
+///   or a cancellation.
+/// - Invalidate env-provider watcher entries and cache entries rooted at
+///   each successful row's worktree path.
+/// - Run the "is this the last workspace in its repo?" MCP supervisor
+///   cleanup once per affected `repository_id` after this returns.
+pub fn delete_workspaces_bulk(
+    db: &Database,
+    hooks: &dyn OpsHooks,
+    ids: &[String],
+    cancel: Option<&Arc<AtomicBool>>,
+    on_progress: Option<&dyn Fn(&DeleteWorkspaceOutcome)>,
+) -> Result<Vec<DeleteWorkspaceOutcome>, OpsError> {
+    let workspaces = db.list_workspaces()?;
+    let mut outcomes = Vec::with_capacity(ids.len());
+    let mut deleted_ids: Vec<String> = Vec::new();
+
+    for id in ids {
+        let repository_id = workspaces
+            .iter()
+            .find(|w| &w.id == id)
+            .map(|w| w.repository_id.clone())
+            .unwrap_or_default();
+
+        // Cooperative cancel: trip the flag and every subsequent row
+        // records as `cancelled: true` without touching the DB. The
+        // currently-running iteration (if any) already passed this check
+        // and runs to completion — its DB transaction is short and
+        // there's no safe interrupt point inside SQLite.
+        let outcome = if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            DeleteWorkspaceOutcome {
+                id: id.clone(),
+                repository_id,
+                error: None,
+                cancelled: true,
+            }
+        } else {
+            let error = match db.try_delete_archived_workspace_with_summary(id) {
+                Ok(true) => {
+                    deleted_ids.push(id.clone());
+                    None
+                }
+                Ok(false) => Some("workspace no longer archived".to_string()),
+                Err(e) => Some(e.to_string()),
+            };
+            DeleteWorkspaceOutcome {
+                id: id.clone(),
+                repository_id,
+                error,
+                cancelled: false,
+            }
+        };
+
+        if let Some(cb) = on_progress {
+            cb(&outcome);
+        }
+        outcomes.push(outcome);
+    }
+
+    // One bulk hook for the whole batch — the GUI's hook impl amortizes
+    // the tray rebuild and the workspace-row lookup so a 72-row delete
+    // doesn't fan out to 72 tray rebuilds + 72 DB list scans. Fires for
+    // whatever ran before cancel tripped; an entirely-cancelled batch
+    // (`deleted_ids.is_empty()`) skips the hook.
+    if !deleted_ids.is_empty() {
+        hooks.workspaces_changed_bulk(&deleted_ids, WorkspaceChangeKind::Deleted);
+    }
+
+    Ok(outcomes)
+}
+
+/// Inputs to [`restore`].
+pub struct RestoreParams<'a> {
+    pub workspace_id: &'a str,
+}
+
+/// Result of a successful [`restore`]. `worktree_path` is the
+/// canonicalized path returned by `git worktree add` — the same value
+/// has already been written back onto the workspace row via
+/// [`Database::update_workspace_status`], so the caller can surface it
+/// to remote clients without re-reading the DB.
+#[derive(Debug, Serialize)]
+pub struct RestoreOutput {
+    pub workspace: Workspace,
+    pub worktree_path: String,
+}
+
+/// Restore a previously archived workspace: re-create the git worktree
+/// for its existing branch, flip the DB row back to `Active`, and fire
+/// [`WorkspaceChangeKind::Restored`].
+///
+/// The worktree directory is recomputed from `worktree_base /
+/// repo.path_slug / ws.name` — archive cleared `ws.worktree_path` to
+/// `None`, so the row itself can't tell us where the worktree used to
+/// live; the `path_slug` + name convention is the same one [`create`]
+/// uses, which keeps restore predictable.
+///
+/// No state guard is performed: calling `restore` on a workspace that is
+/// already `Active` falls through to `git::restore_worktree`, which
+/// errors because the worktree directory already exists. Matches the
+/// inline behavior of the pre-extraction `restore_workspace` Tauri
+/// command — adding a friendlier state-check is a follow-up.
+pub async fn restore(
+    db: &mut Database,
+    hooks: &dyn OpsHooks,
+    worktree_base: &Path,
+    params: RestoreParams<'_>,
+) -> Result<RestoreOutput, OpsError> {
+    let workspaces = db.list_workspaces()?;
+    let ws = workspaces
+        .iter()
+        .find(|w| w.id == params.workspace_id)
+        .ok_or_else(|| OpsError::NotFound("Workspace not found".to_string()))?;
+
+    let repos = db.list_repositories()?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == ws.repository_id)
+        .ok_or_else(|| OpsError::NotFound("Repository not found".to_string()))?;
+
+    let workspace_id = ws.id.clone();
+    let branch_name = ws.branch_name.clone();
+    let repo_path = repo.path.clone();
+    let worktree_path = worktree_base.join(&repo.path_slug).join(&ws.name);
+    let worktree_path_str = worktree_path.to_string_lossy().to_string();
+
+    let actual_path = git::restore_worktree(&repo_path, &branch_name, &worktree_path_str).await?;
+
+    db.update_workspace_status(&workspace_id, &WorkspaceStatus::Active, Some(&actual_path))?;
+
+    let updated = db
+        .list_workspaces()?
+        .into_iter()
+        .find(|w| w.id == workspace_id)
+        .ok_or_else(|| OpsError::NotFound("Workspace not found after restore".to_string()))?;
+
+    hooks.workspace_changed(&workspace_id, WorkspaceChangeKind::Restored);
+
+    Ok(RestoreOutput {
+        workspace: updated,
+        worktree_path: actual_path,
+    })
+}
 /// Read the two app-settings keys that drive the branch prefix. Synchronous
 /// so callers can read while the `Database` (`rusqlite::Connection` —
 /// `!Send`) is in scope, then drop the handle before awaiting
@@ -920,7 +1207,7 @@ mod tests {
     }
 
     async fn run_git_in(repo_path: &std::path::Path, args: &[&str]) {
-        let status = tokio::process::Command::new("git")
+        let status = crate::process::command("git")
             .args(args)
             .current_dir(repo_path)
             .status()
@@ -961,6 +1248,7 @@ mod tests {
             archive_script_auto_run: false,
             base_branch: None,
             default_remote: None,
+            required_inputs: None,
             path_valid: true,
         };
         db.insert_repository(&repo).unwrap();
@@ -982,6 +1270,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "scratch",
                 branch_prefix: "test/",
+                input_values: None,
             },
         )
         .await
@@ -1008,6 +1297,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "agent-pipeline",
                 branch_prefix: "test/",
+                input_values: None,
             },
         )
         .await
@@ -1020,6 +1310,123 @@ mod tests {
                 .unwrap()
         );
         assert!(!db.claim_branch_auto_rename(&created.workspace.id).unwrap());
+    }
+
+    /// Regression for the cross-caller bug Copilot caught on #807: the WS
+    /// server bypasses the GUI's pre-check, so the shared op itself has to
+    /// reject a create against a repo that declared inputs when the caller
+    /// passes `input_values: None`. Without this, remote/CLI callers could
+    /// create workspaces with NULL `input_values` and silently misconfigure
+    /// the workspace's env.
+    #[tokio::test]
+    async fn create_rejects_missing_required_inputs() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        // Declare a single required input on the repo.
+        db.update_repository_required_inputs(
+            &repo.id,
+            Some(&[crate::model::RepositoryInputField::String {
+                key: "TICKET_ID".into(),
+                label: "Ticket".into(),
+                description: None,
+                default: None,
+                placeholder: None,
+                required: true,
+            }]),
+        )
+        .unwrap();
+
+        let result = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "feature",
+                branch_prefix: "test/",
+                input_values: None, // caller doesn't yet support inputs
+            },
+        )
+        .await;
+
+        match result {
+            Err(OpsError::Validation(msg)) => {
+                assert!(
+                    msg.contains("TICKET_ID"),
+                    "expected validation error to name the missing key, got {msg:?}"
+                );
+            }
+            other => panic!("expected OpsError::Validation, got {other:?}"),
+        }
+
+        // No worktree allocation, no DB row, no Created hook.
+        let workspaces = db.list_workspaces().unwrap();
+        assert!(workspaces.is_empty(), "validation must run before insert");
+        assert!(
+            hooks.changes().is_empty(),
+            "no lifecycle hook should fire on validation failure"
+        );
+    }
+
+    /// Pair with the rejection test — when the caller supplies values that
+    /// satisfy the declared schema, the op persists them to the workspace
+    /// row and surfaces them on the returned struct.
+    #[tokio::test]
+    async fn create_persists_supplied_input_values() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        db.update_repository_required_inputs(
+            &repo.id,
+            Some(&[crate::model::RepositoryInputField::String {
+                key: "TICKET_ID".into(),
+                label: "Ticket".into(),
+                description: None,
+                default: None,
+                placeholder: None,
+                required: true,
+            }]),
+        )
+        .unwrap();
+
+        let mut supplied = std::collections::HashMap::new();
+        supplied.insert("TICKET_ID".to_string(), "PROJ-42".to_string());
+
+        let created = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "feature",
+                branch_prefix: "test/",
+                input_values: Some(&supplied),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Returned struct carries the values…
+        assert_eq!(
+            created
+                .workspace
+                .input_values
+                .as_ref()
+                .unwrap()
+                .get("TICKET_ID"),
+            Some(&"PROJ-42".to_string()),
+        );
+        // …and they also land on disk (this is what was broken before the
+        // op took over persistence — the struct looked right but the row
+        // had NULL `input_values` and the env merge read nothing).
+        let from_db = db
+            .get_workspace_input_values(&created.workspace.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(from_db.get("TICKET_ID"), Some(&"PROJ-42".to_string()));
     }
 
     /// Regression for the `claudette workspace archive --delete-branch`
@@ -1040,6 +1447,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "feature",
                 branch_prefix: "test/",
+                input_values: None,
             },
         )
         .await
@@ -1087,6 +1495,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "feature",
                 branch_prefix: "test/",
+                input_values: None,
             },
         )
         .await
@@ -1115,6 +1524,238 @@ mod tests {
             vec![WorkspaceChangeKind::Created, WorkspaceChangeKind::Archived,],
             "delete_branch=false must keep emitting Archived"
         );
+    }
+
+    /// `delete_workspaces_bulk` on a happy path: every (archived) named
+    /// ID is hard-deleted, a summary row materialises for each, and a
+    /// single `Deleted` hook fires per ID.
+    #[tokio::test]
+    async fn delete_workspaces_bulk_deletes_and_emits_hooks() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        let mut ids = Vec::new();
+        for name in ["a", "b", "c"] {
+            let created = create(
+                &mut db,
+                &hooks,
+                worktree_base.path(),
+                CreateParams {
+                    repo_id: &repo.id,
+                    name,
+                    branch_prefix: "test/",
+                    input_values: None,
+                },
+            )
+            .await
+            .unwrap();
+            // Bulk delete is Archived-only — flip status before invoking.
+            db.update_workspace_status(&created.workspace.id, &WorkspaceStatus::Archived, None)
+                .unwrap();
+            ids.push(created.workspace.id);
+        }
+
+        let outcomes = delete_workspaces_bulk(&db, &hooks, &ids, None, None).unwrap();
+        assert_eq!(outcomes.len(), 3);
+        for outcome in &outcomes {
+            assert!(outcome.error.is_none(), "expected success for {outcome:?}");
+            assert!(
+                !outcome.cancelled,
+                "no cancel token passed, no row should be cancelled: {outcome:?}",
+            );
+            assert_eq!(outcome.repository_id, repo.id);
+        }
+
+        let remaining = db.list_workspaces().unwrap();
+        assert!(
+            !remaining.iter().any(|w| ids.contains(&w.id)),
+            "all target rows should be gone after bulk delete",
+        );
+
+        let deleted_kinds: Vec<_> = hooks
+            .changes()
+            .into_iter()
+            .filter(|(id, kind)| ids.contains(id) && *kind == WorkspaceChangeKind::Deleted)
+            .collect();
+        assert_eq!(
+            deleted_kinds.len(),
+            3,
+            "one Deleted hook per row, got: {deleted_kinds:?}",
+        );
+    }
+
+    /// The in-transaction Archived guard is the real protection
+    /// against a concurrent restore racing a bulk delete. We can't
+    /// easily race async tasks in a single-threaded test, but we can
+    /// prove the guard itself: pass one Archived row, one Active row
+    /// (simulating a row that flipped after the caller's snapshot
+    /// check), and one missing ID. Only the Archived row should be
+    /// deleted; the others must surface as per-row failures and the
+    /// Active row must survive.
+    #[tokio::test]
+    async fn delete_workspaces_bulk_refuses_non_archived_rows() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        let archived = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "archived",
+                branch_prefix: "test/",
+                input_values: None,
+            },
+        )
+        .await
+        .unwrap();
+        let active = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "active",
+                branch_prefix: "test/",
+                input_values: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        db.update_workspace_status(&archived.workspace.id, &WorkspaceStatus::Archived, None)
+            .unwrap();
+        // `active` stays Active — simulates the "raced restore" case
+        // where a row flipped after the caller's snapshot.
+
+        let ids = vec![
+            archived.workspace.id.clone(),
+            active.workspace.id.clone(),
+            "does-not-exist".to_string(),
+        ];
+        let outcomes = delete_workspaces_bulk(&db, &hooks, &ids, None, None).unwrap();
+        assert_eq!(outcomes.len(), 3);
+
+        // Archived row deleted.
+        assert_eq!(outcomes[0].id, archived.workspace.id);
+        assert!(outcomes[0].error.is_none());
+
+        // Active row refused — fails closed.
+        assert_eq!(outcomes[1].id, active.workspace.id);
+        assert_eq!(
+            outcomes[1].error.as_deref(),
+            Some("workspace no longer archived"),
+        );
+
+        // Missing row reported the same way — same bucket from the
+        // frontend's perspective ("can't be deleted right now, refresh
+        // and try again").
+        assert_eq!(outcomes[2].id, "does-not-exist");
+        assert_eq!(
+            outcomes[2].error.as_deref(),
+            Some("workspace no longer archived"),
+        );
+
+        let remaining = db.list_workspaces().unwrap();
+        assert!(
+            remaining.iter().any(|w| w.id == active.workspace.id),
+            "active workspace must survive a bulk delete that included its id",
+        );
+    }
+
+    /// Cancel-mid-batch semantics from issue #854: rows already past the
+    /// per-iteration check finish; the rest skip without touching the DB
+    /// and surface as `cancelled: true` outcomes. The progress callback
+    /// fires once per outcome, in order, so the frontend's live counter
+    /// matches the final outcomes list exactly.
+    #[tokio::test]
+    async fn delete_workspaces_bulk_short_circuits_on_cancel() {
+        use std::sync::Mutex as StdMutex;
+
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        let mut ids = Vec::new();
+        for name in ["a", "b", "c", "d"] {
+            let created = create(
+                &mut db,
+                &hooks,
+                worktree_base.path(),
+                CreateParams {
+                    repo_id: &repo.id,
+                    name,
+                    branch_prefix: "test/",
+                    input_values: None,
+                },
+            )
+            .await
+            .unwrap();
+            db.update_workspace_status(&created.workspace.id, &WorkspaceStatus::Archived, None)
+                .unwrap();
+            ids.push(created.workspace.id);
+        }
+
+        // Trip the cancel flag from inside the progress callback, after
+        // the first row reports. Mirrors the real user pressing Cancel
+        // mid-flight: the second iteration sees the flag at its top-of-
+        // loop check and short-circuits without a DB call.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress_log: Arc<StdMutex<Vec<(String, bool, bool)>>> =
+            Arc::new(StdMutex::new(Vec::new()));
+        let log_for_cb = Arc::clone(&progress_log);
+        let cancel_for_cb = Arc::clone(&cancel);
+        let on_progress = move |outcome: &DeleteWorkspaceOutcome| {
+            let mut log = log_for_cb.lock().unwrap();
+            log.push((
+                outcome.id.clone(),
+                outcome.error.is_none() && !outcome.cancelled,
+                outcome.cancelled,
+            ));
+            // After the first outcome lands, simulate the user pressing
+            // Cancel. Everything from row 2 onward must skip the DB.
+            if log.len() == 1 {
+                cancel_for_cb.store(true, Ordering::Relaxed);
+            }
+        };
+
+        let outcomes =
+            delete_workspaces_bulk(&db, &hooks, &ids, Some(&cancel), Some(&on_progress)).unwrap();
+
+        assert_eq!(outcomes.len(), 4, "every requested id must report once");
+        assert!(
+            outcomes[0].error.is_none() && !outcomes[0].cancelled,
+            "row 0 ran before cancel: {:?}",
+            outcomes[0],
+        );
+        for outcome in &outcomes[1..] {
+            assert!(
+                outcome.cancelled && outcome.error.is_none(),
+                "post-cancel row must be cancelled with no error: {outcome:?}",
+            );
+        }
+
+        // The remaining archived rows survive (the cancelled iterations
+        // never touched the DB).
+        let remaining = db.list_workspaces().unwrap();
+        let surviving: Vec<_> = remaining.iter().filter(|w| ids.contains(&w.id)).collect();
+        assert_eq!(
+            surviving.len(),
+            3,
+            "rows b/c/d should still be in the DB after cancel",
+        );
+
+        // Progress callback fired once per outcome, in declaration order.
+        let log = progress_log.lock().unwrap();
+        assert_eq!(log.len(), 4);
+        assert_eq!(log[0].0, ids[0]);
+        assert!(log[0].1, "first row reported as success");
+        for entry in &log[1..] {
+            assert!(entry.2, "row {} should be reported as cancelled", entry.0);
+        }
     }
 
     /// `build_script_command` must produce a Command that actually runs
@@ -1164,8 +1805,7 @@ mod tests {
     async fn kill_script_subtree_terminates_grandchildren() {
         use std::time::Duration;
 
-        let mut child = TokioCommand::new("cmd.exe")
-            .no_console_window()
+        let mut child = crate::process::command("cmd.exe")
             .args([
                 "/C",
                 "start /B ping -n 30 127.0.0.1 >NUL & ping -n 30 127.0.0.1 >NUL",

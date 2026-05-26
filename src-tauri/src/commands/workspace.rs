@@ -1,9 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use claudette::agent::history_seeder;
 use claudette::db::Database;
 use claudette::fork::{self, ForkInputs};
 use claudette::git;
@@ -12,14 +14,14 @@ use claudette::model::{AgentStatus, ChatMessage, ChatRole, Workspace, WorkspaceS
 use claudette::names::NameGenerator;
 use claudette::ops::workspace::{self as ops_workspace, CreateParams, SetupResult};
 use claudette::ops::{NoopHooks, NotificationEvent, OpsHooks, WorkspaceChangeKind};
-// All three platforms call into the trait now: Linux/macOS via
-// `.no_console_window()`, Windows via `.new_console_window()` for the
-// fallback terminal launchers below.
+// Windows fallback terminal launchers intentionally allocate a visible
+// console via `.new_console_window()`.
+#[cfg(target_os = "windows")]
 use claudette::process::CommandWindowExt as _;
 
 use crate::commands::apps::{self, DEFAULT_TERMINAL_APP_SETTING_KEY};
 use crate::ops_hooks::TauriHooks;
-use crate::state::AppState;
+use crate::state::{AgentSessionState, AppState, ClaudeRemoteControlStatus};
 
 #[derive(Serialize)]
 pub struct CreateWorkspaceResult {
@@ -33,6 +35,34 @@ pub struct CreateWorkspaceResult {
     pub setup_result: Option<SetupResult>,
 }
 
+/// Stable error code returned by [`create_workspace`] when a create for
+/// the same repository is already running. Returned as a bare token (not
+/// a human-readable sentence) so the cross-process contract with the
+/// frontend is a fixed identifier rather than prose — immune to wording
+/// tweaks and future localization. `useCreateWorkspace.ts` matches this
+/// exact string and owns the user-facing copy. Mirrors the
+/// `WORKSPACE_FILE_NOT_FOUND` error-code convention in
+/// `src-tauri/src/commands/files.rs`. See issue #896.
+const WORKSPACE_CREATE_IN_FLIGHT_ERR: &str = "WORKSPACE_CREATE_IN_FLIGHT";
+
+/// RAII release for the per-repo workspace-creation slot claimed via
+/// [`AppState::try_begin_workspace_create`].
+///
+/// Holding this for the lifetime of [`create_workspace`] frees the slot
+/// on every exit path — the normal return, an error bubbled up from
+/// `create_workspace_inner`, or an unwind — so a failed or panicking
+/// create can never wedge a repo into a permanently un-creatable state.
+struct WorkspaceCreateGuard<'a> {
+    state: &'a AppState,
+    repo_id: String,
+}
+
+impl Drop for WorkspaceCreateGuard<'_> {
+    fn drop(&mut self) {
+        self.state.end_workspace_create(&self.repo_id);
+    }
+}
+
 #[tauri::command]
 #[tracing::instrument(
     target = "claudette::workspace",
@@ -43,14 +73,35 @@ pub async fn create_workspace(
     repo_id: String,
     name: String,
     skip_setup: Option<bool>,
+    // Values for the repo's declared `required_inputs`. When the repo has
+    // no schema this is ignored; when it does, every declared key must be
+    // present and each value must pass its type's coercion.
+    input_values: Option<std::collections::HashMap<String, String>>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
+    // Single-flight guard against duplicate workspace creation. The
+    // frontend's `creationInFlight` latch (useCreateWorkspace.ts) is a
+    // module-level JS variable that a webview reload resets to `false`,
+    // while the Rust command spawned by the first create keeps running
+    // across that reload. Without this process-side guard a reload — or
+    // any re-click while a slow create is in flight — issues a second
+    // `create_workspace` that mints a duplicate `-N` row. The slot is
+    // keyed per repo so creates in *different* repos still run
+    // concurrently. See issue #896.
+    if !state.try_begin_workspace_create(&repo_id) {
+        return Err(WORKSPACE_CREATE_IN_FLIGHT_ERR.to_string());
+    }
+    let _create_guard = WorkspaceCreateGuard {
+        state: state.inner(),
+        repo_id: repo_id.clone(),
+    };
     create_workspace_inner(
         &repo_id,
         &name,
         skip_setup.unwrap_or(false),
         false,
+        input_values,
         &app,
         &state,
     )
@@ -70,10 +121,12 @@ pub(crate) async fn create_workspace_inner(
     name: &str,
     skip_setup: bool,
     preserve_supplied_name: bool,
+    input_values: Option<std::collections::HashMap<String, String>>,
     app: &AppHandle,
     state: &AppState,
 ) -> Result<CreateWorkspaceResult, String> {
     let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+
     let (prefix_mode, prefix_custom) = ops_workspace::read_branch_prefix_settings(&db);
     let prefix = ops_workspace::resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
     let worktree_base = state.worktree_base_dir.read().await.clone();
@@ -82,6 +135,13 @@ pub(crate) async fn create_workspace_inner(
         repo_id,
         name,
         branch_prefix: &prefix,
+        // Validation + persistence of input_values happens inside the op
+        // (`ops::workspace::create_inner` runs `validate_repository_inputs`
+        // before allocating a worktree and `set_workspace_input_values`
+        // after `insert_workspace` succeeds). All callers — GUI, IPC, WS
+        // server — share the same enforcement that way; we no longer have
+        // to repeat the validate-then-persist dance per caller.
+        input_values: input_values.as_ref(),
     };
     let out = if preserve_supplied_name {
         ops_workspace::create_preserving_supplied_name(
@@ -95,6 +155,11 @@ pub(crate) async fn create_workspace_inner(
         ops_workspace::create(&mut db, &NoopHooks, worktree_base.as_path(), params).await
     }
     .map_err(|e| e.to_string())?;
+
+    // The op already persisted the coerced values and populated the
+    // workspace struct. Re-borrow here so the setup-script env synth
+    // below reads the canonical post-coercion form.
+    let validated_inputs = out.workspace.input_values.clone();
 
     // Run the setup script BEFORE resolving the env-provider stack.
     // Many `.claudette.json` setups exist precisely to prime that stack
@@ -152,12 +217,23 @@ pub(crate) async fn create_workspace_inner(
         "workspace_env_progress",
         crate::commands::env::WorkspaceEnvProgressPayload {
             workspace_id: out.workspace.id.clone(),
+            resolve_id: uuid::Uuid::new_v4().to_string(),
             plugin: "provisioning".to_string(),
             phase: crate::commands::env::EnvProgressPhase::Started,
             elapsed_ms: 0,
             ok: None,
         },
     );
+
+    // First-create setup runs BEFORE the env-provider resolve (see comment
+    // above) so we can't reuse the cached `ResolvedEnv`. We still want the
+    // workspace's input values visible to the setup script, so synthesize a
+    // minimal `ResolvedEnv` from them. `None` when the workspace has no
+    // declared inputs — the streaming setup then runs with the inherited
+    // PATH only, as before.
+    let inputs_only_env = validated_inputs.as_ref().map(input_values_to_resolved_env);
+    let mut workspace_with_inputs = out.workspace.clone();
+    workspace_with_inputs.input_values = validated_inputs.clone();
 
     let setup_result = if skip_setup {
         None
@@ -172,13 +248,13 @@ pub(crate) async fn create_workspace_inner(
             crate::commands::env::make_workspace_terminal_sink(&out.workspace.id),
         );
         ops_workspace::resolve_and_run_setup_streaming(
-            &out.workspace,
+            &workspace_with_inputs,
             Path::new(&repo.path),
             Path::new(&out.worktree_path),
             repo.setup_script.as_deref(),
             repo.base_branch.as_deref(),
             repo.default_remote.as_deref(),
-            None,
+            inputs_only_env.as_ref(),
             sink,
         )
         .await
@@ -209,12 +285,136 @@ pub(crate) async fn create_workspace_inner(
     })
 }
 
+/// Build a minimal [`ResolvedEnv`] from a workspace's input-value map so it
+/// can be passed to spawn sites that expect a `ResolvedEnv` (the setup
+/// script path, primarily). The `sources` vec stays empty because no
+/// env-provider plugin contributed these — they're declared inputs.
+pub(crate) fn input_values_to_resolved_env(
+    values: &std::collections::HashMap<String, String>,
+) -> claudette::env_provider::ResolvedEnv {
+    let mut env = claudette::env_provider::ResolvedEnv::default();
+    for (k, v) in values {
+        env.vars.insert(k.clone(), Some(v.clone()));
+    }
+    env
+}
+
 #[derive(Serialize)]
 pub struct ForkWorkspaceResult {
     pub workspace: Workspace,
     /// Whether the Claude session JSONL was copied so the fork can `--resume`
     /// its conversation history. When `false`, the fork starts a fresh session.
     pub session_resumed: bool,
+}
+
+/// Write a fork's synthetic history prelude onto an
+/// `AgentSessionState`, returning whether a prelude was written.
+///
+/// Pure helper around [`history_seeder::build_migration_prelude`].
+/// System rows are filtered because the prelude carries prior
+/// user/assistant turns only — the new harness derives its own system
+/// instructions from its own config. An empty history (or a history
+/// where every row is system / blank) is a no-op: the function
+/// returns `false` and leaves `pending_history_prelude` untouched so
+/// a degenerate fork (e.g. at the very first checkpoint) doesn't
+/// shadow an existing prelude with `None`.
+///
+/// Split out of [`seed_fork_history_prelude`] so the test module can
+/// pin the filter / build / write contract without standing up an
+/// `AppState` or a Tauri runtime — same pattern as
+/// `apply_migration_to_session` in `commands/chat/lifecycle.rs`.
+pub(crate) fn apply_fork_prelude(
+    session: &mut AgentSessionState,
+    messages: Vec<ChatMessage>,
+) -> bool {
+    let conversation: Vec<ChatMessage> = messages
+        .into_iter()
+        .filter(|m| !matches!(m.role, ChatRole::System))
+        .collect();
+    match history_seeder::build_migration_prelude(&conversation) {
+        Some(prelude) => {
+            session.pending_history_prelude = Some(prelude);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Seed the fork's first turn with a synthetic prelude built from the
+/// chat messages `copy_history` just wrote into the new chat session.
+///
+/// Used when the harness-native transcript copy did not apply
+/// (`ForkOutcome::session_resumed == false`). The harness-native copy
+/// is at best an optimization that only the Claude CLI path implements
+/// — Pi and Codex have no equivalent, and even the Claude CLI path
+/// returns `false` when the JSONL file is absent. Without this seed,
+/// the fork's first turn lands at an empty harness session and the
+/// agent has no memory of the prior conversation even though the UI
+/// shows it (the rows are in `chat_messages`, but the harness's own
+/// transcript is empty).
+///
+/// Mirrors the in-memory write that `prepare_cross_harness_migration`
+/// performs in `commands/chat/lifecycle.rs`. The prelude lives only on
+/// `AgentSessionState.pending_history_prelude`; `send_chat_message`
+/// consumes it once and clears it on the fork's first turn. There is
+/// no DB persistence — if the user restarts Claudette between forking
+/// and sending the first message, the prelude is lost (same trade-off
+/// the cross-harness migration already accepts; in practice users
+/// send their first turn immediately after forking).
+async fn seed_fork_history_prelude(
+    state: &State<'_, AppState>,
+    new_workspace_id: &str,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let new_chat_session_id = db
+        .default_session_id_for_workspace(new_workspace_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("fork workspace {new_workspace_id} has no default chat session"))?;
+
+    // `copy_history` already populated the new chat session's
+    // `chat_messages` rows with the parent's history up to the
+    // checkpoint, so a session-scoped read here is exactly the
+    // conversation the prelude needs to render.
+    let messages = db
+        .list_chat_messages_for_session(&new_chat_session_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut agents = state.agents.write().await;
+    let session = agents
+        .entry(new_chat_session_id.clone())
+        .or_insert_with(|| AgentSessionState {
+            workspace_id: new_workspace_id.to_string(),
+            session_id: String::new(),
+            turn_count: 0,
+            active_pid: None,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            claude_remote_control: ClaudeRemoteControlStatus::disabled(),
+            claude_remote_control_monitor_pid: None,
+            local_user_message_uuids: Default::default(),
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_fast_mode: false,
+            session_disable_1m_context: false,
+            session_backend_hash: String::new(),
+            pending_permissions: Default::default(),
+            running_background_tasks: Default::default(),
+            background_wake_active: false,
+            background_task_output_paths: Default::default(),
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            session_resolved_env_signature: String::new(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+            posted_env_trust_warning: false,
+            pending_history_prelude: None,
+        });
+    apply_fork_prelude(session, messages);
+    Ok(())
 }
 
 #[tauri::command]
@@ -249,6 +449,29 @@ pub async fn fork_workspace_at_checkpoint(
     )
     .await
     .map_err(|e| e.to_string())?;
+
+    // When the harness-native transcript copy did not apply (Pi / Codex
+    // forks have no JSONL to copy, Claude-CLI forks where the JSONL was
+    // missing for whatever reason fall back here too), seed the fork's
+    // first turn with the same synthetic conversation-history prelude
+    // that cross-harness model swaps use. `copy_history` already copied
+    // the parent's `chat_messages` rows into the new chat session, so
+    // the UI shows the conversation — without the prelude the new
+    // harness's session is empty and the agent answers as if the user
+    // had typed turn 1 from scratch ("I don't see a previous message").
+    if !outcome.session_resumed {
+        if let Err(e) = seed_fork_history_prelude(&state, &outcome.workspace.id).await {
+            // Non-fatal: the fork is still usable, the user's first
+            // turn just won't carry the prior context. Surface in logs
+            // so a regression is debuggable, but don't fail the fork.
+            tracing::warn!(
+                target = "claudette::fork",
+                workspace_id = %outcome.workspace.id,
+                error = %e,
+                "failed to seed history prelude on fork — first turn will lack prior context"
+            );
+        }
+    }
 
     // Pre-create the fork's Claudette Terminal tab pointing at the
     // workspace-scoped provisioning output file. The fork itself doesn't
@@ -373,7 +596,7 @@ async fn resolve_env_for_workspace(
         Some((p, o)) => (Some(p), Some(o)),
         None => (None, None),
     };
-    let resolved = claudette::env_provider::resolve_with_registry_streaming(
+    let mut resolved = claudette::env_provider::resolve_with_registry_streaming(
         &registry,
         &state.env_cache,
         Path::new(worktree),
@@ -385,6 +608,12 @@ async fn resolve_env_for_workspace(
         output,
     )
     .await;
+    // Apply per-workspace input values on top of the env-provider stack.
+    // Opening the DB again is cheap; closing it inside the helper keeps
+    // this call site free of error noise on transient lock contention.
+    if let Ok(db) = Database::open(&state.db_path) {
+        crate::commands::env::merge_workspace_input_env(&db, &ws.id, &mut resolved);
+    }
     crate::commands::env::register_resolved_with_watcher(
         state,
         Path::new(worktree),
@@ -659,26 +888,90 @@ pub async fn restore_workspace(
 ) -> Result<String, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
+    // Find the row + repo BEFORE flipping status, so we know what git
+    // restore is about to run against and can roll back cleanly on
+    // failure.
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let ws = workspaces
         .iter()
         .find(|w| w.id == id)
         .ok_or("Workspace not found")?;
+    let branch_name = ws.branch_name.clone();
+    let workspace_name = ws.name.clone();
+    let repository_id = ws.repository_id.clone();
 
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let repo = repos
         .iter()
-        .find(|r| r.id == ws.repository_id)
+        .find(|r| r.id == repository_id)
         .ok_or("Repository not found")?;
+    let repo_path = repo.path.clone();
+    let path_slug = repo.path_slug.clone();
+
+    // Atomically claim the row out of Archived BEFORE the async git
+    // restore. Bulk delete's `try_delete_archived_workspace_with_summary`
+    // refuses any row whose status isn't 'archived', so once the claim
+    // succeeds the bulk path can't race in and hard-delete this row
+    // while git is restoring its worktree.
+    //
+    // Transitional state during the git restore window: the row is
+    // observable as `(status: Active, worktree_path: None)` until
+    // `git::restore_worktree` returns and we persist the final path
+    // below. This is the same shape an archived row already has
+    // (archive nulls out `worktree_path`), so existing UI null-checks
+    // on `worktree_path` keep working — there's just a longer window
+    // where the row is Active without a path. Callers that open the
+    // worktree on the Active transition must already null-check the
+    // path (they would have hit the same shape pre-archive). If a
+    // future component needs to distinguish "fully restored" from
+    // "restore in flight", model a `Restoring` status; until then
+    // `Active + worktree_path: None` is the contract.
+    let claimed = db
+        .try_claim_archived_for_restore(&id)
+        .map_err(|e| e.to_string())?;
+    if !claimed {
+        return Err("Workspace is not archived (already restored or deleted)".to_string());
+    }
 
     let worktree_base = state.worktree_base_dir.read().await;
-    let worktree_path: PathBuf = worktree_base.join(&repo.path_slug).join(&ws.name);
+    let worktree_path: PathBuf = worktree_base.join(&path_slug).join(&workspace_name);
     let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
-    let actual_path = git::restore_worktree(&repo.path, &ws.branch_name, &worktree_path_str)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Run git restore. On failure roll the status back to Archived so a
+    // partial restore doesn't leave the user with an Active row that
+    // has no worktree. The rollback window is tiny (one sync UPDATE)
+    // and the failure path matches the pre-fix behavior the user
+    // expects.
+    let actual_path =
+        match git::restore_worktree(&repo_path, &branch_name, &worktree_path_str).await {
+            Ok(p) => p,
+            Err(e) => {
+                // Roll the status back so a partial restore doesn't
+                // leave an Active row with no worktree. If the
+                // rollback itself fails (e.g. transient SQLITE_BUSY)
+                // the row would stay Active with worktree_path: None
+                // indefinitely while the user only sees the git error
+                // — log so the inconsistency is at least visible in
+                // `~/.claudette/logs/`.
+                if let Err(rollback_err) =
+                    db.update_workspace_status(&id, &WorkspaceStatus::Archived, None)
+                {
+                    tracing::error!(
+                        target: "claudette::workspace",
+                        workspace_id = %id,
+                        git_error = %e,
+                        rollback_error = %rollback_err,
+                        "restore_workspace: failed to roll back status to Archived after \
+                         git restore failure; row left as Active with no worktree_path",
+                    );
+                }
+                return Err(e.to_string());
+            }
+        };
 
+    // Persist the resolved worktree path. The claim already set status
+    // to Active; this only fills in the path that the git call just
+    // returned.
     db.update_workspace_status(&id, &WorkspaceStatus::Active, Some(&actual_path))
         .map_err(|e| e.to_string())?;
 
@@ -781,6 +1074,417 @@ pub async fn delete_workspace(
     TauriHooks::new(app.clone()).workspace_changed(&id, WorkspaceChangeKind::Deleted);
 
     Ok(())
+}
+
+/// Result of [`delete_workspaces_bulk`]. `deleted` lists IDs that were
+/// successfully hard-deleted; `failed` carries per-ID error messages for
+/// rows that survived (typically due to a transient DB error); `cancelled`
+/// lists IDs that were skipped because the user clicked Cancel before
+/// the row was attempted. The frontend uses this to drive partial-failure
+/// UI and reconcile its store one row at a time. Cancelled rows are
+/// untouched in the DB — re-running the cleanup will pick them up.
+#[derive(Debug, Serialize)]
+pub struct BulkDeleteResult {
+    pub deleted: Vec<String>,
+    pub failed: Vec<BulkDeleteFailure>,
+    pub cancelled: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BulkDeleteFailure {
+    pub id: String,
+    pub error: String,
+}
+
+/// Per-row progress event payload emitted on `bulk-cleanup-progress` while
+/// a bulk delete is in flight. The frontend filters by `request_id` so
+/// concurrent runs (rare but legal — e.g. two Storage panels open) don't
+/// cross-pollute. `name` is included so the modal can render row labels
+/// even when the workspace has already been removed from the Zustand
+/// store via the `Deleted` hook by the time the event lands.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BulkCleanupProgress {
+    request_id: String,
+    workspace_id: String,
+    name: String,
+    /// `"deleted" | "failed" | "cancelled"` — matches the three terminal
+    /// states from `ops::workspace::DeleteWorkspaceOutcome`.
+    status: &'static str,
+    error: Option<String>,
+}
+
+/// Hard-delete a batch of archived workspaces. Mirrors the single-workspace
+/// [`delete_workspace`] flow — agent shutdown, worktree removal, branch
+/// deletion, env-watcher/cache cleanup, summary materialization, MCP
+/// supervisor reconciliation — but batched so 72 archived workspaces don't
+/// require 72 round-trips.
+///
+/// **Per-row failure isolation** is the contract: missing IDs, non-Archived
+/// rows (e.g. raced restores), and transient DB errors all surface as
+/// entries in the returned `failed` list rather than aborting the whole
+/// batch. The authoritative guard against hard-deleting an Active row is
+/// the SQL precondition inside
+/// `Database::try_delete_archived_workspace_with_summary` — a row whose
+/// status flipped to `Active` between the modal snapshot and this call
+/// will be reported as `"workspace no longer archived"` and its worktree
+/// / branch will not be touched. Returns top-level `Err` only for setup
+/// failures (e.g. opening the DB).
+#[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state, supervisor),
+    fields(workspace_count = ids.len(), request_id = request_id.as_deref().unwrap_or("")),
+)]
+pub async fn delete_workspaces_bulk(
+    ids: Vec<String>,
+    request_id: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    supervisor: State<'_, Arc<McpSupervisor>>,
+) -> Result<BulkDeleteResult, String> {
+    delete_workspaces_bulk_inner(&ids, request_id.as_deref(), &app, &state, &supervisor).await
+}
+
+/// Cooperative-cancel a bulk delete that is currently in flight.
+///
+/// Idempotent: flipping a flag that's already set, or one belonging to
+/// a run that already completed and was unregistered, is a no-op. Returns
+/// `true` if a matching run was found and cancelled, `false` otherwise —
+/// the frontend uses the boolean only for telemetry and otherwise treats
+/// both outcomes the same (the run's final result will report whichever
+/// rows were skipped).
+#[tauri::command]
+#[tracing::instrument(target = "claudette::workspace", skip(state))]
+pub async fn cancel_workspaces_bulk(
+    request_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let cancels = state.bulk_cleanup_cancels.read().await;
+    match cancels.get(&request_id) {
+        Some(flag) => {
+            flag.store(true, Ordering::Relaxed);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// Shared body of [`delete_workspaces_bulk`] used by both the Tauri
+/// command (GUI) and the IPC dispatcher (CLI). Pulled into a free
+/// function — same as `archive_workspace_inner` /
+/// `create_workspace_inner` — so the CLI path runs identical agent
+/// teardown, git cleanup, env-watcher reconciliation, and MCP supervisor
+/// updates without needing to construct Tauri `State` wrappers.
+///
+/// `request_id` is `Some` when the GUI initiated the run (so cancel
+/// works and per-row progress events fire); `None` from the CLI
+/// dispatcher today — CLI sessions don't have a UI to render progress
+/// or a Cancel button, so the bookkeeping cost would be wasted.
+pub(crate) async fn delete_workspaces_bulk_inner(
+    ids: &[String],
+    request_id: Option<&str>,
+    app: &AppHandle,
+    state: &AppState,
+    supervisor: &McpSupervisor,
+) -> Result<BulkDeleteResult, String> {
+    if ids.is_empty() {
+        return Ok(BulkDeleteResult {
+            deleted: Vec::new(),
+            failed: Vec::new(),
+            cancelled: Vec::new(),
+        });
+    }
+
+    // Register the cancel flag before the first DB call. The body is
+    // pulled into `delete_workspaces_bulk_body` so we can unregister
+    // the flag (the `state.bulk_cleanup_cancels.write().await.remove(...)`
+    // below) unconditionally after it returns, including the `?`
+    // early-return paths inside the body.
+    let cancel_flag: Option<Arc<AtomicBool>> = if let Some(req_id) = request_id {
+        let flag = Arc::new(AtomicBool::new(false));
+        state
+            .bulk_cleanup_cancels
+            .write()
+            .await
+            .insert(req_id.to_string(), Arc::clone(&flag));
+        Some(flag)
+    } else {
+        None
+    };
+    let result = delete_workspaces_bulk_body(
+        ids,
+        request_id,
+        cancel_flag.as_ref(),
+        app,
+        state,
+        supervisor,
+    )
+    .await;
+    if let Some(req_id) = request_id {
+        state.bulk_cleanup_cancels.write().await.remove(req_id);
+    }
+    result
+}
+
+/// Inner body of [`delete_workspaces_bulk_inner`] — pulled out so the
+/// outer function can manage the [`AppState::bulk_cleanup_cancels`]
+/// registration lifetime around a single body call, including the `?`
+/// early-return paths below.
+async fn delete_workspaces_bulk_body(
+    ids: &[String],
+    request_id: Option<&str>,
+    cancel_flag: Option<&Arc<AtomicBool>>,
+    app: &AppHandle,
+    state: &AppState,
+    supervisor: &McpSupervisor,
+) -> Result<BulkDeleteResult, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+
+    // Collect the rows we're going to attempt to delete. We do NOT reject
+    // the whole batch when an ID is missing or no longer Archived — the
+    // authoritative guard is the SQL precondition in
+    // `try_delete_archived_workspace_with_summary` (see `src/db/workspace.rs`).
+    // Rejecting the whole batch here would mean a single raced
+    // `restore_workspace` between the modal snapshot and this call could
+    // wipe out cleanup of every other row the user asked for. Rows that
+    // don't make it into `targets` (missing) or whose status changed
+    // before the SQL guard runs (raced) surface as per-row failures
+    // instead.
+    let targets: Vec<&Workspace> = ids
+        .iter()
+        .filter_map(|id| workspaces.iter().find(|w| &w.id == id))
+        .filter(|w| w.status == WorkspaceStatus::Archived)
+        .collect();
+
+    // Snapshot per-target git metadata BEFORE the DB delete so we can
+    // still do worktree/branch cleanup for the rows whose DB transaction
+    // succeeded (post-delete the workspaces table no longer carries
+    // these fields).
+    struct TargetMeta {
+        worktree_path: Option<String>,
+        branch_name: String,
+        repo_path: Option<String>,
+    }
+    let target_meta: std::collections::HashMap<String, TargetMeta> = targets
+        .iter()
+        .map(|ws| {
+            let repo_path = repos
+                .iter()
+                .find(|r| r.id == ws.repository_id)
+                .map(|r| r.path.clone());
+            (
+                ws.id.clone(),
+                TargetMeta {
+                    worktree_path: ws.worktree_path.clone(),
+                    branch_name: ws.branch_name.clone(),
+                    repo_path,
+                },
+            )
+        })
+        .collect();
+
+    // Display names for the per-row progress event. Built from the
+    // pre-delete snapshot of the workspaces table so a row whose DB
+    // delete commits mid-event still has a name to render (the Zustand
+    // store may have evicted it via the `Deleted` hook by the time the
+    // event lands). Missing IDs (not in `workspaces` at all) fall back
+    // to the id itself on the frontend.
+    let name_by_id: std::collections::HashMap<String, String> = workspaces
+        .iter()
+        .filter(|w| ids.iter().any(|id| id == &w.id))
+        .map(|w| (w.id.clone(), w.name.clone()))
+        .collect();
+
+    // Per-row interleaved DB + agent-stop + worktree + branch + env
+    // cleanup. One loop, one cancel-check site, one terminal status
+    // per row. This shape was chosen over the prior two-batch design
+    // (DB pass → worktree pass) because:
+    //
+    // 1. Cancel between rows must skip both phases for the remaining
+    //    rows. With separate batches, a cancel after the fast DB pass
+    //    would still let the user wait through the slow worktree pass,
+    //    or — if we broke out of the worktree pass — would orphan
+    //    worktrees and branches for rows whose DB row was already
+    //    deleted. (PR #857 review, Copilot finding #3256083554.)
+    //
+    // 2. The `bulk-cleanup-progress` event for a row fires AFTER its
+    //    worktree cleanup completes, so the modal's per-row "deleted"
+    //    check matches when work is actually done — not when the
+    //    quick DB transaction committed. (PR #857 review, finding
+    //    #3256083564.)
+    //
+    // Order within each row: DB delete first (fails closed on raced
+    // restore via the in-transaction Archived guard in
+    // `try_delete_archived_workspace_with_summary`) → agent stop →
+    // worktree remove → branch delete → env unwatch + cache
+    // invalidate → emit progress. Worktree/agent/env teardown only
+    // runs when the DB delete succeeded; a failed row keeps its
+    // disk and branch state intact so retry can converge.
+    let hooks = TauriHooks::new(app.clone());
+    let mut deleted: Vec<String> = Vec::with_capacity(ids.len());
+    let mut failed: Vec<BulkDeleteFailure> = Vec::new();
+    let mut cancelled: Vec<String> = Vec::new();
+    let mut affected_repos: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut env_cleanup_paths: Vec<String> = Vec::new();
+
+    let emit_progress = |workspace_id: &str, status: &'static str, error: Option<String>| {
+        let Some(req_id) = request_id else {
+            return;
+        };
+        let payload = BulkCleanupProgress {
+            request_id: req_id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            name: name_by_id
+                .get(workspace_id)
+                .cloned()
+                .unwrap_or_else(|| workspace_id.to_string()),
+            status,
+            error,
+        };
+        if let Err(e) = app.emit("bulk-cleanup-progress", &payload) {
+            tracing::warn!(
+                target: "claudette::workspace",
+                error = %e,
+                workspace_id = workspace_id,
+                "failed to emit bulk-cleanup-progress",
+            );
+        }
+    };
+
+    for id in ids {
+        // Cancel check: every row after the user clicked Cancel is
+        // reported as `cancelled` with no DB, agent, or disk touch.
+        if cancel_flag.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            cancelled.push(id.clone());
+            emit_progress(id, "cancelled", None);
+            continue;
+        }
+
+        let repo_id_for_row = workspaces
+            .iter()
+            .find(|w| &w.id == id)
+            .map(|w| w.repository_id.clone())
+            .unwrap_or_default();
+
+        // DB delete (in-transaction Archived guard inside).
+        match db.try_delete_archived_workspace_with_summary(id) {
+            Ok(true) => {} // success — fall through to cleanup
+            Ok(false) => {
+                let err = "workspace no longer archived".to_string();
+                failed.push(BulkDeleteFailure {
+                    id: id.clone(),
+                    error: err.clone(),
+                });
+                emit_progress(id, "failed", Some(err));
+                continue;
+            }
+            Err(e) => {
+                let err = e.to_string();
+                failed.push(BulkDeleteFailure {
+                    id: id.clone(),
+                    error: err.clone(),
+                });
+                emit_progress(id, "failed", Some(err));
+                continue;
+            }
+        }
+
+        // Stop any agents running against this workspace's chat
+        // sessions. Acquire-release the write lock per row instead of
+        // holding it across the whole batch so concurrent agent
+        // operations on unrelated workspaces aren't blocked.
+        let pids_to_stop: Vec<u32> = {
+            let mut agents = state.agents.write().await;
+            let to_remove: Vec<String> = agents
+                .iter()
+                .filter(|(_, s)| s.workspace_id == *id)
+                .map(|(k, _)| k.clone())
+                .collect();
+            to_remove
+                .into_iter()
+                .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
+                .collect()
+        };
+        for pid in pids_to_stop {
+            let _ = claudette::agent::stop_agent(pid).await;
+        }
+
+        // Worktree + branch cleanup. Best-effort: a failed worktree
+        // removal (e.g. on-disk dir is gone, manual user cleanup) is
+        // logged-and-ignored — the DB row is already gone, so the
+        // "row deleted" contract holds even if disk lags.
+        if let Some(meta) = target_meta.get(id) {
+            if let Some(ref repo_path) = meta.repo_path {
+                if let Some(ref wt_path) = meta.worktree_path {
+                    let _ = git::remove_worktree(repo_path, wt_path, true).await;
+                    env_cleanup_paths.push(wt_path.clone());
+                }
+                let _ = git::branch_delete(repo_path, &meta.branch_name).await;
+            }
+        }
+
+        affected_repos.insert(repo_id_for_row);
+        deleted.push(id.clone());
+        emit_progress(id, "deleted", None);
+    }
+
+    // Env-watcher unregister + env-cache invalidate batched at the
+    // end so we acquire the watcher read lock once instead of
+    // per-row. Drops `watcher_guard` before MCP reconciliation so
+    // the read lock isn't held across the next `await`.
+    if !env_cleanup_paths.is_empty() {
+        let watcher_guard = state.env_watcher.read().await;
+        let watcher = watcher_guard.as_ref();
+        for wt_path in &env_cleanup_paths {
+            let path = Path::new(wt_path);
+            if let Some(watcher) = watcher {
+                watcher.unregister(path, None);
+            }
+            state.env_cache.invalidate(path, None);
+        }
+    }
+
+    // Single bulk hook fires the tray rebuild and emits one
+    // `workspaces-changed` event per actually-deleted id. See
+    // `TauriHooks::workspaces_changed_bulk` for the amortization
+    // rationale — 72 rows must not produce 72 tray rebuilds.
+    if !deleted.is_empty() {
+        hooks.workspaces_changed_bulk(&deleted, WorkspaceChangeKind::Deleted);
+    }
+
+    // Per affected repo: if no Active or Archived workspaces remain, drop
+    // its MCP supervisor entry and clear the frontend's MCP status pill.
+    // Skip the reconciliation entirely if the DB re-read fails: an empty
+    // fallback would make every affected repo look empty and remove
+    // every MCP supervisor entry even when workspaces still exist.
+    match db.list_workspaces() {
+        Ok(remaining) => {
+            for repo_id in affected_repos {
+                if !remaining.iter().any(|w| w.repository_id == repo_id) {
+                    supervisor.remove_repo(&repo_id).await;
+                    let _ = app.emit("mcp-status-cleared", &repo_id);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::workspace",
+                error = %e,
+                "skipping MCP supervisor reconciliation after bulk delete: \
+                 list_workspaces failed, retaining supervisor entries to \
+                 avoid clearing them for non-empty repos",
+            );
+        }
+    }
+
+    Ok(BulkDeleteResult {
+        deleted,
+        failed,
+        cancelled,
+    })
 }
 
 #[tauri::command]
@@ -890,6 +1594,43 @@ pub struct DiscoveredWorktree {
     pub head_sha: String,
     pub suggested_name: String,
     pub name_valid: bool,
+    /// Recursive on-disk size of the worktree directory. `None` only when
+    /// the `spawn_blocking` task itself panics or is cancelled (the only
+    /// way `JoinHandle::await.ok()` returns `None`). Per-entry I/O errors
+    /// inside `directory_size_bytes` are silently skipped and contribute 0
+    /// — they never produce `None`.
+    pub size_bytes: Option<u64>,
+}
+
+/// Recursively sum the apparent size of regular files under `root`.
+///
+/// Symlinks are not followed (would risk cycles and double-counting). I/O
+/// errors on individual entries are silently skipped so one unreadable
+/// subdir doesn't disqualify the whole worktree — the size is best-effort
+/// for UI display, not accounting. Returns `u64` directly because there
+/// is no fatal-error path: an unreadable root yields `0`, same as an
+/// empty dir.
+pub(super) fn directory_size_bytes(root: &Path) -> u64 {
+    let mut total: u64 = 0;
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
 }
 
 /// Validate a workspace name: ASCII alphanumeric + hyphens, no leading/trailing hyphens.
@@ -931,29 +1672,42 @@ pub async fn discover_worktrees(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| repo.path.clone());
 
-    let mut discovered = Vec::new();
+    // First pass: filter the worktree list down to entries that need a
+    // size computed. Spawn all the (blocking) size walks up front so they
+    // run in parallel on Tokio's blocking pool instead of one-at-a-time
+    // (a repo with dozens of multi-GiB sandboxes would otherwise stall
+    // the dialog open).
+    struct Pending {
+        path: String,
+        branch: String,
+        head: String,
+        suggested_name: String,
+        name_valid: bool,
+        size_handle: tokio::task::JoinHandle<u64>,
+    }
 
+    let mut pending: Vec<Pending> = Vec::new();
     for wt in worktrees {
-        // Skip the main repo entry.
         let wt_canon = std::fs::canonicalize(&wt.path)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| wt.path.clone());
+        // Skip the main repo entry and bare clones — neither is importable.
         if wt_canon == repo_canon || wt.is_bare {
             continue;
         }
-
-        // Skip detached HEAD worktrees.
+        // Skip detached HEAD worktrees — Claudette workspaces require a branch.
         let branch = match &wt.branch {
             Some(b) => b.clone(),
             None => continue,
         };
-
-        // Skip worktrees that don't exist on disk.
+        // Skip worktrees git knows about but that no longer exist on disk
+        // (these survive in `.git/worktrees/` until `git worktree prune`).
         if !Path::new(&wt.path).is_dir() {
             continue;
         }
-
-        // Skip already-tracked worktrees.
+        // Skip worktrees already claimed by a Claudette workspace row — the
+        // user already imported them once. Match by canonical path OR by
+        // branch name so a manually-checked-out duplicate is also filtered.
         if tracked_paths.contains(&wt_canon) || tracked_branches.contains(branch.as_str()) {
             continue;
         }
@@ -962,19 +1716,163 @@ pub async fn discover_worktrees(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-
         let name_valid = is_valid_workspace_name(&suggested_name);
 
-        discovered.push(DiscoveredWorktree {
-            path: wt_path_display(&wt.path),
-            branch_name: branch,
-            head_sha: wt.head,
+        let size_path = PathBuf::from(&wt.path);
+        let size_handle = tokio::task::spawn_blocking(move || directory_size_bytes(&size_path));
+
+        pending.push(Pending {
+            path: wt.path,
+            branch,
+            head: wt.head,
             suggested_name,
             name_valid,
+            size_handle,
+        });
+    }
+
+    let mut discovered = Vec::with_capacity(pending.len());
+    for p in pending {
+        let size_bytes = p.size_handle.await.ok();
+        discovered.push(DiscoveredWorktree {
+            path: wt_path_display(&p.path),
+            branch_name: p.branch,
+            head_sha: p.head,
+            suggested_name: p.suggested_name,
+            name_valid: p.name_valid,
+            size_bytes,
         });
     }
 
     Ok(discovered)
+}
+
+use crate::commands::path_util::canon_or_raw;
+
+/// Pure validation logic for `purge_stray_worktree`. Extracted from the
+/// Tauri command so it can be tested with tempdir + handcrafted inputs
+/// instead of needing a Tauri `State`. The command wires DB + git output
+/// into this function and acts on its result.
+///
+/// Returns `Ok(())` when the target is safe to purge; an error string
+/// when any guard rejects it.
+fn validate_purge_target(
+    target_path: &str,
+    repo_path: &str,
+    git_worktrees: &[git::WorktreeInfo],
+    workspace_paths: &[String],
+) -> Result<(), String> {
+    let target_canon = canon_or_raw(target_path);
+    let target_raw = target_path.to_string();
+    let repo_canon = canon_or_raw(repo_path);
+
+    if target_canon == repo_canon || target_raw == repo_canon {
+        return Err("Refusing to delete the main repository directory".into());
+    }
+
+    // Re-validate the path against the live `git worktree list` for this
+    // repo. A caller (including any future XSS injecting into a Tauri
+    // invoke) cannot use this command to delete arbitrary filesystem
+    // paths.
+    let valid_worktree_paths: std::collections::HashSet<String> = git_worktrees
+        .iter()
+        .filter(|wt| !wt.is_bare)
+        .flat_map(|wt| {
+            // Accept both canonical and raw forms — `git worktree list`
+            // may report `/tmp/foo` while the canonical is `/private/tmp/foo`.
+            let raw = wt.path.clone();
+            let canon = canon_or_raw(&wt.path);
+            [raw, canon]
+        })
+        .collect();
+    if !valid_worktree_paths.contains(&target_canon) && !valid_worktree_paths.contains(&target_raw)
+    {
+        return Err(format!(
+            "'{target_path}' is not a linked worktree of this repository"
+        ));
+    }
+
+    // Refuse if any active or archived workspace still claims this path.
+    // Compare both canonical and raw forms — a stored path whose dir was
+    // deleted will fail to canonicalize and would otherwise slip the guard.
+    let claimed = workspace_paths.iter().any(|p| {
+        let p_canon = canon_or_raw(p);
+        p_canon == target_canon
+            || p_canon == target_raw
+            || p.as_str() == target_canon.as_str()
+            || p.as_str() == target_raw.as_str()
+    });
+    if claimed {
+        return Err(
+            "Path is tracked as a Claudette workspace — archive and clean it from the workspace list instead"
+                .into(),
+        );
+    }
+
+    Ok(())
+}
+
+/// Force-remove a stray worktree the user picked from the import dialog.
+///
+/// Two-phase cleanup:
+/// 1. `git worktree remove --force` — unregisters the worktree from the
+///    parent repo's `.git/worktrees/` index and (when possible) deletes
+///    the dir.
+/// 2. If the dir still exists (git lost track, or refused), fall back to
+///    `std::fs::remove_dir_all`.
+///
+/// Safety guards delegate to `validate_purge_target` — see its docs for
+/// the full guard list. All guards are enforced server-side because the
+/// frontend isn't the only possible caller of a Tauri command.
+#[tauri::command]
+pub async fn purge_stray_worktree(
+    repo_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .ok_or("Repository not found")?;
+
+    let worktrees = git::list_worktrees(&repo.path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let workspace_paths: Vec<String> = workspaces
+        .iter()
+        .filter_map(|w| w.worktree_path.clone())
+        .collect();
+
+    validate_purge_target(&path, &repo.path, &worktrees, &workspace_paths)?;
+
+    // Phase 1: ask git to unregister + remove. Don't error out on failure;
+    // git may refuse if the worktree is locked or already gone.
+    let git_result = git::remove_worktree(&repo.path, &path, true).await;
+    if let Err(e) = &git_result {
+        tracing::warn!(
+            target: "claudette::workspace",
+            path = %path,
+            error = %e,
+            "git worktree remove failed during purge; will attempt fs cleanup"
+        );
+    }
+
+    // Phase 2: if anything's left on disk, nuke it.
+    if Path::new(&path).exists() {
+        let rm_path = path.clone();
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&rm_path))
+            .await
+            .map_err(|e| format!("join error during fs cleanup: {e}"))?
+            .map_err(|e| format!("fs cleanup failed: {e}"))?;
+    }
+
+    // Best-effort: prune stale git/worktrees index entries.
+    let _ = git::prune_worktrees(&repo.path).await;
+
+    Ok(())
 }
 
 /// Return a display-friendly path (use the raw path, not canonicalized).
@@ -1051,6 +1949,7 @@ pub async fn import_worktrees(
             status_line: String::new(),
             created_at: now_iso(),
             sort_order: 0,
+            input_values: None,
         };
 
         created.push(ws);
@@ -1146,8 +2045,7 @@ pub async fn open_workspace_in_terminal(
 
         let mut errors = Vec::new();
         for (terminal, args) in &terminals {
-            let mut cmd = tokio::process::Command::new(terminal);
-            cmd.no_console_window();
+            let mut cmd = claudette::process::command(terminal);
             for arg in args {
                 cmd.arg(arg);
             }
@@ -1193,8 +2091,7 @@ pub async fn open_workspace_in_terminal(
             end tell"#
         );
 
-        tokio::process::Command::new("osascript")
-            .no_console_window()
+        claudette::process::command("osascript")
             .arg("-e")
             .arg(&script)
             .spawn()
@@ -1229,7 +2126,7 @@ pub async fn open_workspace_in_terminal(
 
         let mut errors = Vec::new();
         for (binary, args) in attempts {
-            let mut cmd = tokio::process::Command::new(binary);
+            let mut cmd = claudette::process::command(binary);
             cmd.new_console_window();
             for arg in args {
                 cmd.arg(arg);
@@ -1302,4 +2199,253 @@ pub async fn notify_workspace_selected(
         state.scm_last_polled.write().await.remove(&id);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_fork_prelude, validate_purge_target};
+    use crate::state::{AgentSessionState, ClaudeRemoteControlStatus};
+    use claudette::git::WorktreeInfo;
+    use claudette::model::{ChatMessage, ChatRole};
+    use std::collections::HashMap;
+
+    /// Make a WorktreeInfo for tests. Only `path` matters for validation.
+    fn wt(path: &str, branch: &str) -> WorktreeInfo {
+        WorktreeInfo {
+            path: path.to_string(),
+            head: "deadbeef".into(),
+            branch: Some(branch.to_string()),
+            is_bare: false,
+        }
+    }
+
+    #[test]
+    fn validate_purge_rejects_repo_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_str().unwrap();
+        let result = validate_purge_target(repo, repo, &[], &[]);
+        assert!(
+            result.is_err(),
+            "expected repo root rejection, got {result:?}"
+        );
+        assert!(
+            result.unwrap_err().contains("main repository"),
+            "wrong rejection reason"
+        );
+    }
+
+    #[test]
+    fn validate_purge_rejects_path_not_in_worktree_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_str().unwrap();
+        // A real worktree exists, but the target is something else entirely.
+        let real_wt = dir.path().join("real-wt");
+        std::fs::create_dir_all(&real_wt).unwrap();
+        let arbitrary = dir.path().join("not-a-worktree");
+        std::fs::create_dir_all(&arbitrary).unwrap();
+
+        let worktrees = vec![wt(real_wt.to_str().unwrap(), "feature-branch")];
+        let result = validate_purge_target(arbitrary.to_str().unwrap(), repo, &worktrees, &[]);
+        assert!(
+            result.is_err(),
+            "expected arbitrary-path rejection, got {result:?}"
+        );
+        assert!(
+            result.unwrap_err().contains("not a linked worktree"),
+            "wrong rejection reason"
+        );
+    }
+
+    #[test]
+    fn validate_purge_rejects_path_still_claimed_by_workspace_even_when_dir_deleted() {
+        // The canonicalize-fails-on-deleted-dir hazard from the prior
+        // review. Stored DB path is `/tmp/foo-XYZ/wt` (which does NOT
+        // exist on disk, so canonicalize errors); target the same path
+        // canonicalized via `/private/tmp/...`. A buggy guard would
+        // compare raw stored vs canonical target and let the purge slip
+        // through.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_str().unwrap();
+        let wt_path = dir.path().join("claimed-wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let wt_str = wt_path.to_str().unwrap();
+
+        // Workspace row still claims this path (raw stored).
+        let workspace_paths = vec![wt_str.to_string()];
+        // git also still reports it (so it passes the "in git list" guard).
+        let worktrees = vec![wt(wt_str, "claimed-branch")];
+
+        let result = validate_purge_target(wt_str, repo, &worktrees, &workspace_paths);
+        assert!(
+            result.is_err(),
+            "expected workspace-claim rejection, got {result:?}"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .contains("tracked as a Claudette workspace"),
+            "wrong rejection reason"
+        );
+    }
+
+    #[test]
+    fn validate_purge_accepts_stray_worktree_in_git_list_with_no_workspace_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_str().unwrap();
+        let stray = dir.path().join("stray-wt");
+        std::fs::create_dir_all(&stray).unwrap();
+        let stray_str = stray.to_str().unwrap();
+
+        let worktrees = vec![wt(stray_str, "stray-branch")];
+        // No workspace claims this path.
+        let result = validate_purge_target(stray_str, repo, &worktrees, &[]);
+        assert!(
+            result.is_ok(),
+            "expected stray worktree to validate, got {result:?}"
+        );
+    }
+
+    fn fresh_session() -> AgentSessionState {
+        AgentSessionState {
+            workspace_id: "ws-test".into(),
+            session_id: String::new(),
+            turn_count: 0,
+            active_pid: None,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            claude_remote_control: ClaudeRemoteControlStatus::disabled(),
+            claude_remote_control_monitor_pid: None,
+            local_user_message_uuids: Default::default(),
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_fast_mode: false,
+            session_disable_1m_context: false,
+            session_backend_hash: String::new(),
+            pending_permissions: HashMap::new(),
+            running_background_tasks: Default::default(),
+            background_wake_active: false,
+            background_task_output_paths: HashMap::new(),
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            session_resolved_env_signature: String::new(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+            posted_env_trust_warning: false,
+            pending_history_prelude: None,
+        }
+    }
+
+    fn msg(id: &str, role: ChatRole, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: id.into(),
+            workspace_id: "ws-test".into(),
+            chat_session_id: "sess-test".into(),
+            role,
+            content: content.into(),
+            cost_usd: None,
+            duration_ms: None,
+            created_at: "2026-05-16T00:00:00Z".into(),
+            thinking: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        }
+    }
+
+    #[test]
+    fn apply_fork_prelude_writes_prelude_when_conversation_present() {
+        // The reported bug: user forked a session whose runtime had no
+        // copyable native transcript (Pi-source fork). UI showed every
+        // turn, but the agent's first reply was "I don't see a previous
+        // message to repeat" — the harness's session was empty. This pin
+        // locks the contract that `apply_fork_prelude` populates
+        // `pending_history_prelude` from the fork's copied chat
+        // messages, so `send_chat_message` prepends the prelude to the
+        // first turn and the agent has context.
+        let mut session = fresh_session();
+        let messages = vec![
+            msg("m1", ChatRole::User, "give me a random word"),
+            msg("m2", ChatRole::Assistant, "Umbrella"),
+            msg("m3", ChatRole::User, "repeat"),
+            msg("m4", ChatRole::Assistant, "Umbrella"),
+        ];
+
+        let wrote = apply_fork_prelude(&mut session, messages);
+
+        assert!(wrote, "non-empty conversation must produce a prelude");
+        let prelude = session
+            .pending_history_prelude
+            .as_deref()
+            .expect("prelude must be set when wrote=true");
+        assert!(prelude.contains("Umbrella"));
+        assert!(prelude.contains("give me a random word"));
+        assert!(prelude.contains("<conversation-history>"));
+    }
+
+    #[test]
+    fn apply_fork_prelude_is_a_noop_for_empty_history() {
+        // Degenerate fork case (e.g. fork at the very first checkpoint
+        // before any user turns landed) must NOT shadow an existing
+        // prelude with `None`. Returning false signals "left untouched".
+        let mut session = fresh_session();
+        session.pending_history_prelude = Some("pre-existing".into());
+
+        let wrote = apply_fork_prelude(&mut session, Vec::new());
+
+        assert!(!wrote);
+        assert_eq!(
+            session.pending_history_prelude.as_deref(),
+            Some("pre-existing"),
+            "empty input must leave any pre-existing prelude intact"
+        );
+    }
+
+    #[test]
+    fn apply_fork_prelude_filters_system_messages_out_of_conversation() {
+        // System rows in `chat_messages` describe the harness's own
+        // instruction stack (slash-command output, env-trust warnings,
+        // etc.) — NOT prior user/assistant turns. Including them in the
+        // prelude would leak Claudette-internal text into the new
+        // harness as if the prior conversation contained it.
+        let mut session = fresh_session();
+        let messages = vec![
+            msg("m1", ChatRole::System, "Workspace env loaded from .envrc"),
+            msg("m2", ChatRole::User, "hello"),
+            msg("m3", ChatRole::Assistant, "hi back"),
+        ];
+
+        let wrote = apply_fork_prelude(&mut session, messages);
+
+        assert!(wrote);
+        let prelude = session.pending_history_prelude.unwrap();
+        assert!(prelude.contains("hello"));
+        assert!(prelude.contains("hi back"));
+        assert!(
+            !prelude.contains("Workspace env loaded from .envrc"),
+            "system rows must not leak into the synthetic conversation history"
+        );
+        assert!(
+            !prelude.contains("<system>"),
+            "system role tag must not appear when no system content survives the filter"
+        );
+    }
+
+    #[test]
+    fn apply_fork_prelude_no_op_when_only_system_messages_present() {
+        // A history of just system rows produces no prior conversation
+        // — same as empty input.
+        let mut session = fresh_session();
+        let messages = vec![
+            msg("m1", ChatRole::System, "system 1"),
+            msg("m2", ChatRole::System, "system 2"),
+        ];
+        let wrote = apply_fork_prelude(&mut session, messages);
+        assert!(!wrote);
+        assert!(session.pending_history_prelude.is_none());
+    }
 }

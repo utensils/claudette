@@ -1,0 +1,36 @@
+---
+title: Agent Scheduling
+description: Native wakeups, recurring routines, and monitored background tasks.
+---
+
+Claudette can persist agent wakeups and recurring routines in its app database. Scheduled prompts are owned by a chat session and fire through the same send pipeline as a normal user message, so tray state, notifications, transcript persistence, and provider selection stay consistent.
+
+## Agent Tools
+
+When the built-in Claudette MCP bridge is available, agents can use these native tools:
+
+| Tool | Purpose |
+|---|---|
+| `ScheduleWakeup` | Schedule a one-shot wakeup with `delaySeconds` or `fireAt`, plus a prompt and optional reason. |
+| `CronCreate` | Create a routine from a standard 5-field cron expression in local time. |
+| `CronList` | List persisted wakeups and routines. |
+| `CronDelete` | Delete a routine by id or name. |
+| `Monitor` | Subscribe to future output lines from a background Bash task instead of polling. |
+
+Wakeups and routines survive app restarts. If a fire time passes while Claudette is closed, the scheduler fires the overdue task when the app starts again.
+
+If the owning workspace is archived, deleted, or otherwise has no worktree when a task comes due, Claudette pauses the task instead of retrying it forever. The Automation settings row and `routine list` payload include the disabled reason and last error so you can delete or recreate the routine deliberately.
+
+## CLI
+
+The CLI exposes routines for automation and scripts:
+
+```sh
+claudette routine list
+claudette routine create <session-id> "0 9 * * 1-5" "Check open PRs" --name weekday-prs
+claudette routine create <session-id> "30 14 28 2 *" "Review the launch checklist" --once
+claudette routine run weekday-prs
+claudette routine delete weekday-prs
+```
+
+`routine create` accepts literal prompts, `@file` prompts, and `-` for stdin, matching `chat send`.

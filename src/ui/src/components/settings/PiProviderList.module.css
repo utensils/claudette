@@ -1,0 +1,201 @@
+/* Provider list rendered inside the Pi card and inside the
+ * `/login` provider picker. Visual tokens compose with the existing
+ * Settings palette (`--divider`, `--text-muted`, …) so theme changes
+ * drive this surface automatically.
+ *
+ * Each row is a two-line flex layout, not a fixed-column grid, so a
+ * long description doesn't push the action buttons off the right
+ * edge. Top line carries label + counts + source pill + buttons;
+ * bottom line is the description (truncated by ellipsis if it can't
+ * fit). The status dot spans both lines via `align-items: flex-start`
+ * + a fixed top offset so it visually anchors the row header. */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--divider);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--divider);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--chat-input-bg);
+  transition: background var(--transition-fast);
+  min-width: 0;
+}
+
+.row:hover {
+  background: var(--hover-bg);
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+
+.statusDotConfigured {
+  background: var(--status-running);
+}
+
+.statusDotEnvOnly {
+  background: var(--text-muted);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.headerLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.modelCount {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
+  flex-shrink: 0;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.sourcePill {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: var(--hover-bg);
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  /* No text-transform — pill content includes env-var names such as
+   * `$OPENROUTER_API_KEY` whose casing is meaningful in a shell. The
+   * earlier `text-transform: lowercase` rendered them as
+   * `$openrouter_api_key`, which is an invalid env var name. */
+}
+
+.sourcePillEnvHint {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--divider);
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.description {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn {
+  background: var(--selected-bg);
+  border: 1px solid var(--divider);
+  color: var(--text-primary);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  composes: btn;
+  background: var(--accent-primary);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+
+.btnPrimary:hover:not(:disabled) {
+  /* The theme only defines `--accent-primary` + `--accent-bg`; there
+   * is no dedicated hover token. Use the existing low-alpha accent
+   * wash so the hover state composes cleanly across all themes.   */
+  background: var(--accent-bg);
+  color: var(--accent-primary);
+}
+
+.btnDanger {
+  composes: btn;
+  color: var(--status-stopped);
+  border-color: var(--status-stopped);
+}
+
+.summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.disclosure {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+}
+
+.disclosure:hover {
+  color: var(--text-primary);
+}
+
+.empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 12px;
+  background: var(--chat-input-bg);
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--divider);
+}

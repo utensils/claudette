@@ -9,18 +9,8 @@ const appStore = vi.hoisted(() => ({
   setUsageInsightsEnabled: vi.fn((next: boolean) => {
     appStore.usageInsightsEnabled = next;
   }),
-  pluginManagementEnabled: false,
-  setPluginManagementEnabled: vi.fn((next: boolean) => {
-    appStore.pluginManagementEnabled = next;
-  }),
-  claudeRemoteControlEnabled: false,
-  setClaudeRemoteControlEnabled: vi.fn((next: boolean) => {
-    appStore.claudeRemoteControlEnabled = next;
-  }),
-  communityRegistryEnabled: false,
-  setCommunityRegistryEnabled: vi.fn((next: boolean) => {
-    appStore.communityRegistryEnabled = next;
-  }),
+  settingsFocus: null as string | null,
+  clearSettingsFocus: vi.fn(),
 }));
 
 const serviceMocks = vi.hoisted(() => ({
@@ -72,9 +62,9 @@ async function renderSettings(): Promise<HTMLElement> {
 
 function findUsageToggle(container: HTMLElement): HTMLButtonElement {
   const toggle = container.querySelector(
-    'button[aria-label="experimental_usage_aria"]',
+    'button[aria-label="experimental_claude_code_usage_aria"]',
   );
-  if (!toggle) throw new Error("Usage Insights toggle not found");
+  if (!toggle) throw new Error("Claude Code Usage toggle not found");
   return toggle as HTMLButtonElement;
 }
 
@@ -91,7 +81,9 @@ function findConfirmButton(container: HTMLElement): HTMLButtonElement | null {
 
 beforeEach(() => {
   appStore.usageInsightsEnabled = false;
+  appStore.settingsFocus = null;
   appStore.setUsageInsightsEnabled.mockClear();
+  appStore.clearSettingsFocus.mockClear();
   serviceMocks.setAppSetting.mockClear();
   serviceMocks.setAppSetting.mockResolvedValue(undefined);
 });
@@ -155,6 +147,15 @@ describe("ExperimentalSettings — Usage Insights consent gate", () => {
     expect(serviceMocks.setAppSetting).toHaveBeenCalledWith(
       "usage_insights_enabled",
       "false",
+    );
+  });
+  it("does not render the removed OpenRouter balance toggle", async () => {
+    const container = await renderSettings();
+    const switches = Array.from(container.querySelectorAll('[role="switch"]'));
+
+    expect(switches).toHaveLength(1);
+    expect(switches[0]?.getAttribute("aria-label")).toBe(
+      "experimental_claude_code_usage_aria",
     );
   });
 });

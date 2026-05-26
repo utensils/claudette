@@ -1,30 +1,48 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { setAppSetting } from "../../../services/tauri";
 import { UsageInsightsConfirmModal } from "./UsageInsightsConfirmModal";
+import { CLAUDE_CODE_USAGE_FOCUS } from "../focusKeys";
 import styles from "../Settings.module.css";
+
+// Re-export for legacy callers; new code should import from
+// `../focusKeys` directly to keep settings imports out of the
+// composer chunk.
+export { CLAUDE_CODE_USAGE_FOCUS };
 
 export function ExperimentalSettings() {
   const { t } = useTranslation("settings");
+  const settingsFocus = useAppStore((s) => s.settingsFocus);
+  const clearSettingsFocus = useAppStore((s) => s.clearSettingsFocus);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
-  const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
-  const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
-  const claudeRemoteControlEnabled = useAppStore(
-    (s) => s.claudeRemoteControlEnabled,
-  );
-  const setClaudeRemoteControlEnabled = useAppStore(
-    (s) => s.setClaudeRemoteControlEnabled,
-  );
-  const communityRegistryEnabled = useAppStore(
-    (s) => s.communityRegistryEnabled,
-  );
-  const setCommunityRegistryEnabled = useAppStore(
-    (s) => s.setCommunityRegistryEnabled,
-  );
   const [error, setError] = useState<string | null>(null);
   const [usageConfirmOpen, setUsageConfirmOpen] = useState(false);
+  const usageRowRef = useRef<HTMLDivElement>(null);
+  const [usageRowFocused, setUsageRowFocused] = useState(false);
+
+  // Deep-link from the composer's greyed-out usage indicator
+  // (`openSettings("experimental", "claude-code-usage")`). Mirror
+  // ClaudeCodeAuthSetting's pattern: scroll into view, apply the
+  // shared `authFocusRow` highlight for a couple of seconds, then
+  // clear the focus key so the highlight doesn't re-trigger.
+  useEffect(() => {
+    if (settingsFocus !== CLAUDE_CODE_USAGE_FOCUS) return;
+    const frame = requestAnimationFrame(() => {
+      usageRowRef.current?.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+      setUsageRowFocused(true);
+      clearSettingsFocus();
+    });
+    const timer = window.setTimeout(() => setUsageRowFocused(false), 2400);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [clearSettingsFocus, settingsFocus]);
 
   const applyUsageInsights = async (next: boolean) => {
     setUsageInsightsEnabled(next);
@@ -46,123 +64,23 @@ export function ExperimentalSettings() {
     await applyUsageInsights(false);
   };
 
-  const handlePluginManagementToggle = async () => {
-    const next = !pluginManagementEnabled;
-    setPluginManagementEnabled(next);
-    try {
-      setError(null);
-      await setAppSetting("plugin_management_enabled", next ? "true" : "false");
-    } catch (e) {
-      setPluginManagementEnabled(!next);
-      setError(String(e));
-    }
-  };
-
-  const handleClaudeRemoteControlToggle = async () => {
-    const next = !claudeRemoteControlEnabled;
-    setClaudeRemoteControlEnabled(next);
-    try {
-      setError(null);
-      await setAppSetting("claude_remote_control_enabled", next ? "true" : "false");
-    } catch (e) {
-      setClaudeRemoteControlEnabled(!next);
-      setError(String(e));
-    }
-  };
-
-  const handleCommunityRegistryToggle = async () => {
-    const next = !communityRegistryEnabled;
-    setCommunityRegistryEnabled(next);
-    try {
-      setError(null);
-      await setAppSetting(
-        "community_registry_enabled",
-        next ? "true" : "false",
-      );
-    } catch (e) {
-      setCommunityRegistryEnabled(!next);
-      setError(String(e));
-    }
-  };
-
   return (
     <div>
       <h2 className={styles.sectionTitle}>{t("experimental_title")}</h2>
 
       {error && <div className={styles.error}>{error}</div>}
 
-      <div className={styles.settingRow}>
-        <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>{t("experimental_plugin_mgmt")}</div>
-          <div className={styles.settingDescription}>
-            {t("experimental_plugin_mgmt_desc")}
-          </div>
-        </div>
-        <div className={styles.settingControl}>
-          <button
-            className={styles.toggle}
-            role="switch"
-            aria-checked={pluginManagementEnabled}
-            aria-label={t("experimental_plugin_mgmt_aria")}
-            data-checked={pluginManagementEnabled}
-            onClick={handlePluginManagementToggle}
-          >
-            <div className={styles.toggleKnob} />
-          </button>
-        </div>
-      </div>
-
-      <div className={styles.settingRow}>
+      <div
+        ref={usageRowRef}
+        className={`${styles.settingRow} ${usageRowFocused ? styles.authFocusRow : ""}`}
+        id="claude-code-usage-setting"
+      >
         <div className={styles.settingInfo}>
           <div className={styles.settingLabel}>
-            {t("experimental_claude_remote_control")}
+            {t("experimental_claude_code_usage")}
           </div>
           <div className={styles.settingDescription}>
-            {t("experimental_claude_remote_control_desc")}
-          </div>
-        </div>
-        <div className={styles.settingControl}>
-          <button
-            className={styles.toggle}
-            role="switch"
-            aria-checked={claudeRemoteControlEnabled}
-            aria-label={t("experimental_claude_remote_control_aria")}
-            data-checked={claudeRemoteControlEnabled}
-            onClick={handleClaudeRemoteControlToggle}
-          >
-            <div className={styles.toggleKnob} />
-          </button>
-        </div>
-      </div>
-
-      <div className={styles.settingRow}>
-        <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>
-            {t("experimental_community_registry")}
-          </div>
-          <div className={styles.settingDescription}>
-            {t("experimental_community_registry_desc")}
-          </div>
-        </div>
-        <div className={styles.settingControl}>
-          <button
-            className={styles.toggle}
-            role="switch"
-            aria-checked={communityRegistryEnabled}
-            aria-label={t("experimental_community_registry_aria")}
-            data-checked={communityRegistryEnabled}
-            onClick={handleCommunityRegistryToggle}
-          >
-            <div className={styles.toggleKnob} />
-          </button>
-        </div>
-      </div>
-
-      <div className={styles.settingRow}>
-        <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>{t("experimental_usage")}</div>
-          <div className={styles.settingDescription}>
-            {t("experimental_usage_desc")}
+            {t("experimental_claude_code_usage_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -170,7 +88,7 @@ export function ExperimentalSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={usageInsightsEnabled}
-            aria-label={t("experimental_usage_aria")}
+            aria-label={t("experimental_claude_code_usage_aria")}
             data-checked={usageInsightsEnabled}
             onClick={handleUsageToggle}
           >

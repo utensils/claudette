@@ -6,7 +6,8 @@ use tauri::{AppHandle, State};
 use claudette::config;
 use claudette::db::{Database, is_duplicate_repository_path_error};
 use claudette::git;
-use claudette::model::Repository;
+use claudette::model::{Repository, RepositoryInputField, validate_input_schema};
+use claudette::process::command;
 
 use crate::state::AppState;
 
@@ -100,6 +101,7 @@ pub async fn add_repository(
         archive_script_auto_run: false,
         base_branch,
         default_remote,
+        required_inputs: None,
         path_valid: true,
     };
 
@@ -193,6 +195,29 @@ pub async fn set_archive_script_auto_run(
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.update_repository_archive_script_auto_run(&repo_id, enabled)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Replace the repo's declared input schema. An empty `schema` (or omitted)
+/// clears the column so the workspace-create prompt is suppressed again.
+///
+/// Validates env-var-name shape and rejects duplicate keys before writing —
+/// the editor enforces this client-side too, but the server is the authority.
+#[tauri::command]
+pub async fn update_repository_required_inputs(
+    repo_id: String,
+    schema: Vec<RepositoryInputField>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    validate_input_schema(&schema)?;
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let serialized = if schema.is_empty() {
+        None
+    } else {
+        Some(schema.as_slice())
+    };
+    db.update_repository_required_inputs(&repo_id, serialized)
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -432,7 +457,8 @@ async fn init_repository_inner(
     app: &AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Repository, String> {
-    let init_ok = tokio::process::Command::new("git")
+    let git_bin = claudette::git::resolve_git_path_blocking();
+    let init_ok = command(&git_bin)
         .arg("-C")
         .arg(dir)
         .args(["init", "-b", "main"])
@@ -446,20 +472,20 @@ async fn init_repository_inner(
 
     // Set a repo-local identity so the empty commit succeeds even when the
     // user has no global git config. These values live only in .git/config.
-    let _ = tokio::process::Command::new("git")
+    let _ = command(&git_bin)
         .arg("-C")
         .arg(dir)
         .args(["config", "user.email", "claudette@localhost"])
         .output()
         .await;
-    let _ = tokio::process::Command::new("git")
+    let _ = command(&git_bin)
         .arg("-C")
         .arg(dir)
         .args(["config", "user.name", "Claudette"])
         .output()
         .await;
 
-    let commit_ok = tokio::process::Command::new("git")
+    let commit_ok = command(&git_bin)
         .arg("-C")
         .arg(dir)
         .args(["commit", "--allow-empty", "-m", "init"])
@@ -495,6 +521,7 @@ async fn init_repository_inner(
         archive_script_auto_run: false,
         base_branch: Some("main".to_string()),
         default_remote: None,
+        required_inputs: None,
         path_valid: true,
     };
 

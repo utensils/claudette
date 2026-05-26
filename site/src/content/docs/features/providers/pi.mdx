@@ -9,12 +9,32 @@ This is a production provider path. It is always available in normal builds and 
 
 ## Setup
 
-1. Install and configure Pi normally.
-2. Run `pi auth` in a terminal and connect the providers you want Pi to use.
-3. Launch Claudette. Pi's model list is refreshed automatically on startup — the Bun sidecar runs `ModelRegistry.getAvailable()` and the chat-header model picker shows the result. Use **Settings > Models > Pi > Refresh models** to re-run discovery if you change provider credentials while Claudette is running.
+1. Install Pi (the `pi` CLI is optional but useful for `pi auth` and `pi /login` outside Claudette).
+2. Launch Claudette and open **Settings > Models > Pi**. The card now embeds a per-provider configuration list (see [Configuring providers](#configuring-providers) below) — configure GitHub Copilot, OpenRouter, OpenAI, Anthropic, Google Gemini, DeepSeek, and a handful of others without leaving Claudette.
+3. The model list refreshes automatically after each configure / sign-in round-trip. Use **Refresh models** to force a re-discovery if you change credentials outside Claudette.
 4. Pick a Pi model as the default in **Settings > Models > Default model**, or choose one per chat from the model picker.
 
-The Pi card does not ask for a base URL or API key. Provider credentials stay in Pi's own auth/config storage.
+The Pi card does not need a base URL or a card-level API key — keys are scoped per provider via the inline list.
+
+### Configuring providers
+
+The Pi card surfaces a curated list of providers Pi knows how to talk to:
+
+- **Default visible** — GitHub Copilot (OAuth, supports GHES), OpenRouter, OpenAI, Anthropic, Google Gemini, DeepSeek (API keys).
+- **More providers…** disclosure — xAI, Groq, Cerebras, Mistral, Fireworks, OpenCode Zen (API keys).
+- **Env-only** — Amazon Bedrock, Google Vertex AI, Azure OpenAI — these need too many environment variables to model in a dialog; the row links to Pi's docs and reflects the configured state once the env vars are set.
+
+For each row:
+
+- API-key providers open a **Configure** dialog where you paste the key. A **"Keep this key private to Claudette"** checkbox controls storage scope:
+  - Unchecked (default) → key is written to Pi's `~/.pi/agent/auth.json`. Visible to the terminal `pi` CLI too.
+  - Checked → key is stored in Claudette's OS keychain under bucket `piProviderSecrets` and pushed to the harness as the matching env var (e.g. `OPENROUTER_API_KEY`) at spawn time. Invisible to terminal `pi`.
+- OAuth providers (currently GitHub Copilot) open a **Sign in** modal that drives Pi's device-code flow. For Copilot the modal prompts for an optional GitHub Enterprise Server domain, displays the verification URL + user code, and closes when Pi reports success.
+- Env-only providers open the relevant Pi docs page in a browser; the row's status dot turns green once Pi detects the env vars on next refresh.
+
+The card also shows a per-row source label once configured (`via auth.json`, `via $OPENROUTER_API_KEY`, `via models.json`, …) so you can tell which credential path Pi will actually use.
+
+OpenRouter-backed Pi turns report per-turn token usage and cost in the chat footer and the composer usage meter. Claudette also polls OpenRouter's `/credits` endpoint with the OpenRouter key configured for Pi and shows remaining / used credits next to the local token totals when the call succeeds.
 
 ## Harness Architecture
 
@@ -52,7 +72,7 @@ Default Pi selection uses the existing global model settings:
 
 ### Anthropic via Pi is blocked for Claude subscription users
 
-When the local Claude CLI is signed in with an OAuth subscription token (`claude auth status` reports `authMethod: oauth_token`), Claudette hides Pi's **Anthropic** sub-section in the picker and the Rust resolver also refuses any chat-send that would route an `anthropic/*` model through Pi (`ensure_anthropic_not_routed_through_pi_via_oauth` in `src-tauri/src/commands/agent_backends.rs`). The block exists so Claude OAuth tokens never leave the Claude CLI subprocess. Non-Anthropic Pi sub-sections (OpenAI, Google, Ollama, …) continue to work normally.
+When the local Claude CLI is signed in with an OAuth subscription token (`claude auth status` reports `authMethod: oauth_token`), Claudette hides Pi's **Anthropic** sub-section in the picker and the Rust resolver also refuses any chat-send that would route an `anthropic/*` model through Pi (`ensure_anthropic_not_routed_through_pi_via_oauth` in `src-tauri/src/commands/agent_backends/runtime_dispatch.rs`). The block exists so Claude OAuth tokens never leave the Claude CLI subprocess. Non-Anthropic Pi sub-sections (OpenAI, Google, Ollama, …) continue to work normally.
 
 ### Routing other backends through Pi
 
@@ -61,8 +81,37 @@ Beyond the dedicated Pi card, Ollama, LM Studio, OpenAI API, Custom OpenAI, and 
 ## Slash Commands
 
 - `/model` lists Pi models when they are available and accepts provider-qualified ids such as `pi/openai/gpt-5.4`.
-- `/login` for a Pi-selected chat points you back to Pi auth/config guidance; run `pi auth` in a terminal.
+- `/login` for a Pi-selected chat opens the **Pi provider picker** modal (Pi is multi-provider, so `/login` doesn't blind-launch one OAuth flow the way it does for Codex or Claude Code — you pick which provider to configure).
 - `/permissions` keeps controlling Claudette's permission mode for Pi, Claude Code, and Codex.
+
+## Context Lifecycle
+
+Pi sessions surface the same end-of-turn affordances as the Claude CLI gateway:
+
+- **Auto-compaction is visible.** When Pi's native context manager fires
+  `compaction_start` for any trigger — manual `/compact`, threshold (the
+  `keepRecentTokens` budget), or overflow (context window exhausted) —
+  the chat flips to **Compacting context…** instead of leaving a
+  generic spinner. On success the `compact_boundary` divider renders
+  the pre/post token counts and the meter resets to the post-compaction
+  baseline; on auto-compaction failure the status returns to **Running**
+  without a divider so the surviving turn keeps streaming.
+- **The context meter shows end-of-turn occupancy.** The meter reads
+  `AgentSession.getContextUsage()` (Pi's own end-of-turn context size +
+  the model's actual context window) rather than a cumulative tally
+  across the agent loop's internal LLM rounds. A 136 k turn on a 272 k
+  model reads ~50%, not 1100%.
+
+## Tool Execution
+
+Pi tool calls — including the shell-backed `bash` and Pi's exec tools —
+resolve as soon as the spawned command exits, even when the command
+backgrounded a descendant that inherited stdout / stderr (a typical
+example is `bash -c "codex exec …"`, where the Codex CLI forks helper
+processes that hold the inherited pipe open). If you press Stop on the
+chat, the running command is cancelled via the abort signal. There is
+no automatic per-command timeout; pressing Stop is the only way to
+cancel a genuinely stuck command.
 
 ## Troubleshooting
 

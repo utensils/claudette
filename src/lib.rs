@@ -1,9 +1,11 @@
 pub mod agent;
 pub mod agent_backend;
+pub mod agent_files;
 pub mod agent_mcp;
 pub mod audio;
 pub mod cesp;
 pub mod chat;
+pub mod checkpoint_backfill;
 pub mod claude_flags_store;
 pub mod claude_help;
 pub mod community;
@@ -34,9 +36,12 @@ pub mod plugin;
 pub mod plugin_runtime;
 pub mod process;
 pub mod rpc;
+pub mod scheduling;
 pub mod scm;
 pub mod slash_commands;
 pub mod snapshot;
+pub mod transport;
+pub mod usage;
 pub mod workspace_alloc;
 pub mod workspace_sync;
 

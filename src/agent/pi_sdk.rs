@@ -6,18 +6,16 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::process::{ChildStdin, Command};
+use tokio::process::ChildStdin;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::process::CommandWindowExt as _;
-
-use super::environment::apply_resolved_env_to_command;
+use super::environment::build_agent_command;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
-    InnerStreamEvent, StartContentBlock, StreamEvent, TurnHandle, UserContentBlock,
-    UserEventMessage, UserMessageContent,
+    InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TokenUsageIteration, TurnHandle,
+    UserContentBlock, UserEventMessage, UserMessageContent,
 };
 
 type PiStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
@@ -39,6 +37,13 @@ struct PiTurnOutput {
     thinking: String,
     tool_block_indices: HashMap<String, u32>,
     next_tool_block_index: u32,
+    /// Latest mid-turn error from the sidecar. Pi's `agent_end` does
+    /// NOT carry an errorMessage at the event level, so we capture
+    /// the `AssistantMessageEvent { type: "error" }` and
+    /// `auto_retry_end { success: false, finalError }` events the
+    /// harness now forwards as `turn_error`, and fold the latest
+    /// into the eventual `turn_end`. Cleared on every `turn_end`.
+    pending_error: Option<String>,
 }
 
 impl PiTurnOutput {
@@ -48,6 +53,7 @@ impl PiTurnOutput {
             thinking: String::new(),
             tool_block_indices: HashMap::new(),
             next_tool_block_index: FIRST_TOOL_BLOCK_INDEX,
+            pending_error: None,
         }
     }
 
@@ -95,12 +101,22 @@ pub struct PiSdkOptions {
     /// through Pi without the user having to maintain a separate
     /// `~/.pi/agent/models.json`.
     pub pi_provider_override: Option<crate::agent_backend::PiProviderOverride>,
+    /// Extra env vars injected into the harness process, populated
+    /// from Claudette's keychain-backed "keep this key private" path
+    /// in the provider auth UI. Maps a Pi-recognized env var name
+    /// (e.g. `OPENROUTER_API_KEY`) to its value. Empty by default.
+    pub pi_provider_env: Vec<(String, String)>,
 }
 
 pub struct PiSdkSession {
     pid: u32,
     stdin: Option<PiStdin>,
     event_tx: broadcast::Sender<AgentEvent>,
+    /// Side channel for control-plane events that don't belong on the
+    /// chat AgentEvent stream — OAuth challenge URLs, OAuth progress
+    /// updates, and OAuth completion. Subscribed to by `pi_control.rs`
+    /// for the Settings provider-management flow.
+    control_tx: broadcast::Sender<PiControlEvent>,
     pending: PendingRequests,
     next_request_id: AtomicI64,
     working_dir: PathBuf,
@@ -118,6 +134,12 @@ struct PiSpawnConfig<'a> {
     working_dir: &'a Path,
     resolved_env: Option<&'a crate::env_provider::ResolvedEnv>,
     workspace_env: Option<&'a crate::env::WorkspaceEnv>,
+    /// Extra env vars injected after `resolved_env` / `workspace_env`
+    /// (so they win when keys collide). Used by Claudette's
+    /// "keychain-only" provider auth path to push `OPENROUTER_API_KEY`,
+    /// `OPENAI_API_KEY`, etc. into the harness process without
+    /// touching `~/.pi/agent/auth.json`.
+    extra_env: Option<&'a [(String, String)]>,
     cache_command_line: bool,
 }
 
@@ -131,6 +153,11 @@ impl PiSdkSession {
             working_dir,
             resolved_env: options.resolved_env.as_ref(),
             workspace_env: options.workspace_env.as_ref(),
+            extra_env: if options.pi_provider_env.is_empty() {
+                None
+            } else {
+                Some(&options.pi_provider_env)
+            },
             cache_command_line: true,
         })
         .await?;
@@ -145,7 +172,21 @@ impl PiSdkSession {
     }
 
     pub async fn discover_models(working_dir: &Path) -> Result<Vec<PiSdkModel>, String> {
-        let session = Self::start_control(working_dir).await?;
+        Self::discover_models_with_env(working_dir, None).await
+    }
+
+    /// Same as `discover_models`, but threads Claudette's keychain-
+    /// only provider secrets into the control session's env so
+    /// `getAvailable()` sees those providers as configured. The Tauri
+    /// layer passes the `pi_local_secret_env()` snapshot here so
+    /// "Refresh models" surfaces keychain-stored OpenRouter / OpenAI /
+    /// etc. credentials without the user having to also write them to
+    /// `~/.pi/agent/auth.json`.
+    pub async fn discover_models_with_env(
+        working_dir: &Path,
+        extra_env: Option<&[(String, String)]>,
+    ) -> Result<Vec<PiSdkModel>, String> {
+        let session = Self::start_control(working_dir, extra_env).await?;
         let value = session
             .send_request(json!({ "type": "discover_models" }))
             .await?;
@@ -159,14 +200,49 @@ impl PiSdkSession {
         Ok(models)
     }
 
-    async fn start_control(working_dir: &Path) -> Result<Self, String> {
+    /// Spawn a short-lived harness used purely for control-plane
+    /// IPC (discovery, provider auth, etc.) — no chat session, no
+    /// resolved env, no init-event cache. Exposed to the sibling
+    /// `pi_control` module so the Settings provider-management flow
+    /// can reuse the same spawn/init pipeline.
+    ///
+    /// `extra_env` lets callers push Claudette-private provider
+    /// secrets (keychain-only path) into the control session so
+    /// `list_providers` reports `configured: true` even when nothing
+    /// is in `~/.pi/agent/auth.json`.
+    pub(super) async fn start_control(
+        working_dir: &Path,
+        extra_env: Option<&[(String, String)]>,
+    ) -> Result<Self, String> {
         Self::spawn_initialized(PiSpawnConfig {
             working_dir,
             resolved_env: None,
             workspace_env: None,
+            extra_env,
             cache_command_line: false,
         })
         .await
+    }
+
+    /// Subscribe to control-plane events (OAuth challenges, progress,
+    /// completion). Subscribe BEFORE issuing the corresponding request
+    /// or early events can race past you.
+    pub fn subscribe_control(&self) -> broadcast::Receiver<PiControlEvent> {
+        self.control_tx.subscribe()
+    }
+
+    /// Send a raw IPC request and await its response. Exposed to the
+    /// `pi_control` module so it can dispatch new request types
+    /// without re-implementing the request/response correlation here.
+    pub(super) async fn send_request_raw(&self, request: Value) -> Result<Value, String> {
+        self.send_request(request).await
+    }
+
+    /// Tell the sidecar to release its session state. Idempotent; safe
+    /// to call on a session that was never started.
+    pub async fn dispose(&self) -> Result<(), String> {
+        self.send_request(json!({ "type": "dispose" })).await?;
+        Ok(())
     }
 
     /// Spawn the Pi sidecar, wire its stdio readers + exit watcher, and
@@ -178,10 +254,14 @@ impl PiSdkSession {
         crate::missing_cli::precheck_cwd(config.working_dir)?;
 
         let pi_path = resolve_pi_harness_path().await;
-        let mut cmd = Command::new(&pi_path);
-        cmd.no_console_window();
-        cmd.current_dir(config.working_dir)
-            .stdin(std::process::Stdio::piped())
+        let built_command = build_agent_command(
+            pi_path.as_os_str(),
+            &[],
+            config.working_dir,
+            config.resolved_env,
+        );
+        let mut cmd = built_command.command;
+        cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         crate::env::enriched_env().apply(&mut cmd);
@@ -190,6 +270,11 @@ impl PiSdkSession {
         }
         if let Some(env) = config.workspace_env {
             env.apply(&mut cmd);
+        }
+        if let Some(extras) = config.extra_env {
+            for (k, v) in extras {
+                cmd.env(k, v);
+            }
         }
         if let Some(package_dir) = resolve_pi_package_dir(&pi_path) {
             cmd.env("PI_PACKAGE_DIR", package_dir);
@@ -220,10 +305,12 @@ impl PiSdkSession {
             .ok_or_else(|| "Failed to capture Pi SDK harness stderr".to_string())?;
 
         let (event_tx, _) = broadcast::channel(2048);
+        let (control_tx, _) = broadcast::channel(64);
         let session = Self {
             pid,
             stdin: Some(Arc::new(tokio::sync::Mutex::new(stdin))),
             event_tx,
+            control_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
             working_dir: config.working_dir.to_path_buf(),
@@ -256,10 +343,12 @@ impl PiSdkSession {
     #[doc(hidden)]
     pub fn new_for_test(pid: u32) -> Self {
         let (event_tx, _) = broadcast::channel(128);
+        let (control_tx, _) = broadcast::channel(64);
         Self {
             pid,
             stdin: None,
             event_tx,
+            control_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
             working_dir: PathBuf::from("/tmp"),
@@ -359,6 +448,80 @@ impl PiSdkSession {
     pub async fn interrupt_turn(&self) -> Result<(), String> {
         self.send_request(json!({ "type": "abort" })).await?;
         Ok(())
+    }
+
+    /// Trigger Pi's native context compaction via the sidecar's
+    /// `compact` request. Returns a [`TurnHandle`] shaped exactly like
+    /// [`Self::send_turn`]'s so `send_chat_message` can plug it into the
+    /// same per-turn event pump without branching.
+    ///
+    /// Pi's `AgentSession.compact()` aborts any current operation,
+    /// summarizes the conversation, and reports its lifecycle via
+    /// `compaction_start` / `compaction_end` events on the session
+    /// subscription. [`route_pi_message`] translates a successful
+    /// `compaction_end` into a `compact_boundary` System event plus a
+    /// synthetic `Result`: the boundary persists the `COMPACTION:...`
+    /// sentinel, and the `Result` terminates this pump so the chat
+    /// session's status flips back to Idle.
+    pub async fn start_compact(&self) -> Result<TurnHandle, String> {
+        // Subscribe BEFORE the request so the `compaction_start` status
+        // event and the eventual boundary can't slip past before the
+        // per-turn pump exists.
+        let mut broadcast_rx = self.event_tx.subscribe();
+        let cached = self.init_cache.lock().await.clone();
+        self.send_request(json!({ "type": "compact" })).await?;
+
+        let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
+        // Replay the cached command-line + init events first, exactly as
+        // `send_turn` does. The chat bridge's `got_init` flag is set when
+        // it sees the `System { subtype: "init" }` event; the live init
+        // is emitted once during `start_session`, before this per-turn
+        // receiver subscribed. Without the replay `got_init` stays false
+        // for the compaction turn, and a Pi process crash during/after
+        // compaction would hit `send_chat_message`'s `!got_init` branch —
+        // misclassified as an init failure, wrongly clearing session
+        // state and DB rows instead of the gentler mid-turn-crash path.
+        if let Some(event) = cached.command_line
+            && mpsc_tx.send(event).await.is_err()
+        {
+            return Err("Pi SDK harness compact receiver closed".to_string());
+        }
+        if let Some(event) = cached.init
+            && mpsc_tx.send(event).await.is_err()
+        {
+            return Err("Pi SDK harness compact receiver closed".to_string());
+        }
+        tokio::spawn(async move {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(event) => {
+                        let is_turn_end =
+                            matches!(&event, AgentEvent::Stream(StreamEvent::Result { .. }));
+                        let is_process_exit = matches!(&event, AgentEvent::ProcessExited(_));
+                        if mpsc_tx.send(event).await.is_err() {
+                            break;
+                        }
+                        if is_turn_end || is_process_exit {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "pi-sdk",
+                            dropped_events = n,
+                            "broadcast lag — pi compact pump missed events"
+                        );
+                    }
+                }
+            }
+        });
+
+        Ok(TurnHandle {
+            event_rx: mpsc_rx,
+            pid: self.pid,
+        })
     }
 
     pub async fn send_control_response(
@@ -469,6 +632,7 @@ impl PiSdkSession {
 
     fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
         let event_tx = self.event_tx.clone();
+        let control_tx = self.control_tx.clone();
         let pending = self.pending.clone();
         let turn_output = self.turn_output.clone();
         let init_cache = self.init_cache.clone();
@@ -481,8 +645,15 @@ impl PiSdkSession {
                 }
                 match serde_json::from_str::<PiHarnessMessage>(&line) {
                     Ok(message) => {
-                        route_pi_message(&event_tx, &pending, &turn_output, &init_cache, message)
-                            .await;
+                        route_pi_message(
+                            &event_tx,
+                            &control_tx,
+                            &pending,
+                            &turn_output,
+                            &init_cache,
+                            message,
+                        )
+                        .await;
                     }
                     Err(err) => {
                         let msg = format!("Failed to parse Pi SDK harness line: {err}: {line}");
@@ -518,6 +689,57 @@ impl PiSdkSession {
             let _ = event_tx.send(AgentEvent::ProcessExited(status));
         });
     }
+}
+
+/// Cumulative-across-the-turn usage emitted by the harness on
+/// `turn_end`. Populates the top-level `TokenUsage` fields, which
+/// `TurnFooter` / `CompletedTurn` surface as "total work for this
+/// Claudette-level turn" (see `pickMeterUsageFromResult`'s docs and the
+/// `aggregate semantics` comment in `useAgentStream.ts`'s `result`
+/// branch). Sums every assistant message's `usage.*` for this turn so
+/// the footer doesn't under-report on multi-iteration agent loops.
+#[derive(Debug, Clone, Deserialize)]
+struct PiAggregateUsage {
+    #[serde(default, rename = "inputTokens")]
+    input_tokens: Option<u64>,
+    #[serde(default, rename = "outputTokens")]
+    output_tokens: Option<u64>,
+    #[serde(default, rename = "cacheReadTokens")]
+    cache_read_tokens: Option<u64>,
+    #[serde(default, rename = "cacheCreationTokens")]
+    cache_creation_tokens: Option<u64>,
+    /// Sum of per-message `totalTokens`. Distinct from
+    /// `PiIterationUsage::total_tokens`, which is end-of-turn context
+    /// occupancy.
+    #[serde(default, rename = "totalTokens")]
+    total_tokens: Option<u64>,
+}
+
+/// Per-final-call usage snapshot emitted by the harness on `turn_end`.
+/// Maps onto Claudette's `TokenUsage` shape (specifically the
+/// `iterations[0]` slot that `pickMeterUsageFromResult` reads first),
+/// translating Pi's `Usage` field names (`input`, `output`, `cacheRead`,
+/// `cacheWrite`) into Claudette's wire names.
+#[derive(Debug, Clone, Deserialize)]
+struct PiIterationUsage {
+    #[serde(default, rename = "inputTokens")]
+    input_tokens: Option<u64>,
+    #[serde(default, rename = "outputTokens")]
+    output_tokens: Option<u64>,
+    #[serde(default, rename = "cacheReadTokens")]
+    cache_read_tokens: Option<u64>,
+    #[serde(default, rename = "cacheCreationTokens")]
+    cache_creation_tokens: Option<u64>,
+    /// Authoritative end-of-turn context size from
+    /// `AgentSession.getContextUsage().tokens`, or the last assistant
+    /// `usage.totalTokens` when the session API returns null/undefined.
+    #[serde(default, rename = "totalTokens")]
+    total_tokens: Option<u64>,
+    /// Runtime context window from
+    /// `AgentSession.getContextUsage().contextWindow`. When present it
+    /// overrides the static UI model-registry capacity.
+    #[serde(default, rename = "modelContextWindow")]
+    model_context_window: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -584,9 +806,124 @@ enum PiHarnessMessage {
     TurnEnd {
         #[serde(default)]
         error: Option<String>,
+        /// Cumulative-across-the-turn totals. Populates the top-level
+        /// `TokenUsage` fields the TurnFooter / CompletedTurn surface
+        /// as "total work for this turn".
+        ///
+        /// Absent on resumed pre-fix sessions (a sidecar predating
+        /// this payload). In that case the route layer skips building
+        /// a `TokenUsage` entirely — the meter holds its previous
+        /// reading and the footer omits token counts, which is the
+        /// same fail-safe as a missing CLI `usage` block.
+        #[serde(default)]
+        aggregate: Option<PiAggregateUsage>,
+        /// Per-final-call usage snapshot, populated by the harness from
+        /// the last `AssistantMessage.usage` plus
+        /// `AgentSession.getContextUsage()` for the authoritative
+        /// end-of-turn context size. The Rust side routes this into
+        /// `TokenUsage.iterations[0]`, which `pickMeterUsageFromResult`
+        /// reads in preference to the top-level aggregate.
+        #[serde(default)]
+        iteration: Option<PiIterationUsage>,
+        #[serde(default, rename = "totalCostUsd")]
+        total_cost_usd: Option<f64>,
+        #[serde(default, rename = "durationMs")]
+        duration_ms: Option<i64>,
+    },
+    /// Mid-turn failure surfaced by the harness when Pi's
+    /// `AssistantMessageEvent` returns an `error` variant or
+    /// `auto_retry_end` fails. The handler folds the error into
+    /// `turn_output` so the eventual `turn_end` carries it even if
+    /// pi-agent-core's top-level `agent_end` carries no
+    /// errorMessage (which is the common case — see the helper in
+    /// `main.ts`).
+    #[serde(rename = "turn_error")]
+    TurnError {
+        #[serde(default)]
+        error: Option<String>,
+    },
+    /// Pi began native context compaction. `reason` is `"manual"` (a
+    /// user `/compact`), `"threshold"` (auto-compaction crossed the
+    /// keep-recent budget), or `"overflow"` (context window exhausted).
+    /// Arrives on the same session subscription as turn events.
+    ///
+    /// We currently flip the UI to "Compacting" regardless of trigger,
+    /// so `reason` isn't read on the route side — but the harness
+    /// continues to send it for log/diagnostic clarity and future
+    /// per-trigger affordances. `#[allow(dead_code)]` keeps the field
+    /// in the deserialized shape without tripping the unused-field lint.
+    #[serde(rename = "compaction_start")]
+    CompactionStart {
+        #[serde(default)]
+        #[allow(dead_code)]
+        reason: Option<String>,
+    },
+    /// Pi finished native context compaction. The sidecar flattens Pi's
+    /// `CompactionResult` and collapses "explicit abort" and "generic
+    /// failure" into a single `aborted` flag meaning "did NOT free
+    /// context". On the success path `tokens_before` / `tokens_after` /
+    /// `duration_ms` feed the compaction divider; on the failure path
+    /// `error_message` carries the reason.
+    #[serde(rename = "compaction_end")]
+    CompactionEnd {
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
+        aborted: bool,
+        #[serde(default, rename = "willRetry")]
+        will_retry: bool,
+        #[serde(default, rename = "errorMessage")]
+        error_message: Option<String>,
+        #[serde(default, rename = "tokensBefore")]
+        tokens_before: Option<u64>,
+        #[serde(default, rename = "tokensAfter")]
+        tokens_after: Option<u64>,
+        #[serde(default, rename = "durationMs")]
+        duration_ms: Option<u64>,
     },
     #[serde(rename = "error")]
     Error {
+        #[serde(default)]
+        error: Option<String>,
+    },
+    // Pi provider-auth flow events. The harness emits these unsolicited
+    // during an OAuth login (the request/response pair only carries the
+    // "we started" / "we finished" signal; the URL + user code live in
+    // the asynchronous events below). Forwarded to `control_tx` so the
+    // Settings UI subscriber can render the device-code modal.
+    #[serde(rename = "oauth_challenge")]
+    OAuthChallenge {
+        #[serde(rename = "challengeId")]
+        challenge_id: String,
+        #[serde(rename = "providerId")]
+        provider_id: String,
+        kind: String,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        instructions: Option<String>,
+        #[serde(default)]
+        message: Option<String>,
+        #[serde(default)]
+        placeholder: Option<String>,
+        #[serde(default, rename = "allowEmpty")]
+        allow_empty: bool,
+    },
+    #[serde(rename = "oauth_progress")]
+    OAuthProgress {
+        #[serde(rename = "challengeId")]
+        challenge_id: String,
+        #[serde(rename = "providerId")]
+        provider_id: String,
+        message: String,
+    },
+    #[serde(rename = "oauth_complete")]
+    OAuthComplete {
+        #[serde(rename = "challengeId")]
+        challenge_id: String,
+        #[serde(rename = "providerId")]
+        provider_id: String,
+        ok: bool,
         #[serde(default)]
         error: Option<String>,
     },
@@ -594,8 +931,55 @@ enum PiHarnessMessage {
     Unknown,
 }
 
+/// Control-plane events that flow over a side channel separate from the
+/// main agent event stream. Used by the Settings provider-management UI
+/// to drive the OAuth device-code modal.
+///
+/// The `type` discriminant stays snake_case to match the harness wire
+/// shape (`oauth_challenge` / `oauth_progress` / `oauth_complete`), but
+/// the *fields* serialize camelCase so the React modal can read
+/// `challengeId` / `providerId` / `allowEmpty` directly. Without the
+/// inner camelCase rename, the frontend received every id as
+/// `undefined` and the OAuth flow's challenge filtering and prompt
+/// submission both broke silently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum PiControlEvent {
+    // Variants get explicit `rename` because serde's default conversion
+    // of `OAuthChallenge` to snake_case is `o_auth_challenge` (it
+    // treats the leading capitalized "O" + "Auth" as two words).
+    // Pin to the wire shape the harness emits.
+    #[serde(rename = "oauth_challenge", rename_all = "camelCase")]
+    OAuthChallenge {
+        challenge_id: String,
+        provider_id: String,
+        /// `"auth"` → display URL + instructions; `"prompt"` → display
+        /// `message` and an input field (e.g. GHES domain).
+        kind: String,
+        url: Option<String>,
+        instructions: Option<String>,
+        message: Option<String>,
+        placeholder: Option<String>,
+        allow_empty: bool,
+    },
+    #[serde(rename = "oauth_progress", rename_all = "camelCase")]
+    OAuthProgress {
+        challenge_id: String,
+        provider_id: String,
+        message: String,
+    },
+    #[serde(rename = "oauth_complete", rename_all = "camelCase")]
+    OAuthComplete {
+        challenge_id: String,
+        provider_id: String,
+        ok: bool,
+        error: Option<String>,
+    },
+}
+
 async fn route_pi_message(
     event_tx: &broadcast::Sender<AgentEvent>,
+    control_tx: &broadcast::Sender<PiControlEvent>,
     pending: &PendingRequests,
     turn_output: &TurnOutput,
     init_cache: &InitCacheHandle,
@@ -747,6 +1131,7 @@ async fn route_pi_message(
                         content_block: Some(StartContentBlock::ToolUse {
                             id: id.clone(),
                             name,
+                            input: None,
                         }),
                     },
                 }));
@@ -819,12 +1204,39 @@ async fn route_pi_message(
                 is_synthetic: false,
             }));
         }
-        PiHarnessMessage::TurnEnd { error } => {
-            let mut output = turn_output.lock().await;
-            let error_text = error
+        PiHarnessMessage::TurnError { error } => {
+            // Defer surfacing — `turn_end` carries the consolidated
+            // error block. Stashing here lets a turn that emits
+            // multiple errors (e.g. retry-then-final-fail) collapse
+            // into one assistant block instead of three.
+            let trimmed = error
                 .as_ref()
                 .map(|e| e.trim().to_string())
                 .filter(|e| !e.is_empty());
+            if let Some(err) = trimmed {
+                let mut output = turn_output.lock().await;
+                output.pending_error = Some(err);
+            }
+        }
+        PiHarnessMessage::TurnEnd {
+            error,
+            aggregate,
+            iteration,
+            total_cost_usd,
+            duration_ms,
+        } => {
+            let mut output = turn_output.lock().await;
+            // Merge any mid-turn `turn_error` events the harness
+            // forwarded with the `agent_end` errorMessage walk.
+            // Either source can carry the user-facing failure, and
+            // we prefer the explicit end-of-turn error when both
+            // exist (it's the authoritative final state).
+            let pending_error = output.pending_error.take();
+            let from_turn_end = error
+                .as_ref()
+                .map(|e| e.trim().to_string())
+                .filter(|e| !e.is_empty());
+            let error_text = from_turn_end.or(pending_error);
             let mut content = Vec::new();
             if !output.thinking.trim().is_empty() {
                 content.push(ContentBlock::Thinking {
@@ -842,10 +1254,14 @@ async fn route_pi_message(
             // `Result.result`, so without this an error after partial
             // text would finalize with only the partial text visible and
             // the failure invisible.
+            //
+            // The harness pre-formats `err` as markdown via
+            // `renderProviderErrorMarkdown` (the **Error · HTTP X** label
+            // + parsed message), so we embed it verbatim instead of
+            // adding our own "Pi turn failed:" prefix that would
+            // duplicate the label.
             if let Some(err) = error_text.as_ref() {
-                content.push(ContentBlock::Text {
-                    text: format!("Pi turn failed: {err}"),
-                });
+                content.push(ContentBlock::Text { text: err.clone() });
             }
             if !content.is_empty() {
                 let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Assistant {
@@ -865,20 +1281,218 @@ async fn route_pi_message(
                 (false, Some(err)) => format!("{}\n\n{}", output.text, err),
                 _ => output.text.clone(),
             };
+            // Pi splits the usage payload into two snapshots:
+            //  * `aggregate` — cumulative across every assistant message
+            //    in this turn. Drives `TokenUsage`'s top-level fields
+            //    (TurnFooter / CompletedTurn semantics).
+            //  * `iteration` — per-final-call snapshot built from the
+            //    last `AssistantMessage.usage` plus
+            //    `AgentSession.getContextUsage()`. Drives
+            //    `iterations[0]`, which `pickMeterUsageFromResult` reads
+            //    in preference to the aggregate for the ContextMeter's
+            //    end-of-turn occupancy reading.
+            //
+            // `model_context_window` lives only on `iteration` (Pi's
+            // session API exposes it there); it's also lifted to the
+            // top level so consumers that don't crack iterations get
+            // the live capacity. Either snapshot is sufficient to
+            // populate a `TokenUsage` — emit one only when at least
+            // one is present, so resumed pre-fix sessions (no payload
+            // at all) result in `usage: None` rather than a zeroed
+            // misreading.
+            let usage = if aggregate.is_some() || iteration.is_some() {
+                let iterations = iteration.as_ref().map(|it| {
+                    vec![TokenUsageIteration {
+                        total_tokens: it.total_tokens,
+                        input_tokens: it.input_tokens.unwrap_or(0),
+                        output_tokens: it.output_tokens.unwrap_or(0),
+                        cache_creation_input_tokens: it.cache_creation_tokens,
+                        cache_read_input_tokens: it.cache_read_tokens,
+                        model_context_window: it.model_context_window,
+                    }]
+                });
+                // Aggregate is the source of truth for top-level
+                // fields; fall back to iteration when aggregate is
+                // missing (older harness builds that only sent
+                // iteration). model_context_window is iteration-only.
+                let agg_input = aggregate
+                    .as_ref()
+                    .and_then(|a| a.input_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.input_tokens))
+                    .unwrap_or(0);
+                let agg_output = aggregate
+                    .as_ref()
+                    .and_then(|a| a.output_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.output_tokens))
+                    .unwrap_or(0);
+                let agg_cache_read = aggregate
+                    .as_ref()
+                    .and_then(|a| a.cache_read_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.cache_read_tokens));
+                let agg_cache_creation = aggregate
+                    .as_ref()
+                    .and_then(|a| a.cache_creation_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.cache_creation_tokens));
+                let agg_total = aggregate
+                    .as_ref()
+                    .and_then(|a| a.total_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.total_tokens));
+                Some(TokenUsage {
+                    total_tokens: agg_total,
+                    input_tokens: agg_input,
+                    output_tokens: agg_output,
+                    cache_creation_input_tokens: agg_cache_creation,
+                    cache_read_input_tokens: agg_cache_read,
+                    model_context_window: iteration.as_ref().and_then(|it| it.model_context_window),
+                    iterations,
+                })
+            } else {
+                None
+            };
             let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Result {
                 subtype: subtype.to_string(),
                 result: Some(result_text),
-                total_cost_usd: None,
-                duration_ms: None,
-                usage: None,
+                total_cost_usd,
+                duration_ms,
+                usage,
             }));
             output.text.clear();
             output.thinking.clear();
+        }
+        PiHarnessMessage::CompactionStart { .. } => {
+            // Always flip the UI to "Compacting" — the turn's existing
+            // spinner is a generic "Running" indicator, not a compacting
+            // affordance, so users had no visual cue that auto-compaction
+            // (threshold/overflow) was the reason a turn paused mid-stream.
+            // `CompactionEnd` clears the status by emitting either
+            // `compact_boundary` (success) or the synthetic `status:running`
+            // event (auto-abort) — see the matching branch below.
+            let _ = event_tx.send(pi_compacting_status_event());
+        }
+        PiHarnessMessage::CompactionEnd {
+            reason,
+            aborted,
+            will_retry,
+            error_message,
+            tokens_before,
+            tokens_after,
+            duration_ms,
+        } => {
+            let is_manual = reason.as_deref() == Some("manual");
+            if aborted {
+                // No context was freed. For a manual /compact surface a
+                // visible notice as an assistant text block (Pi's
+                // harness already routes operational errors this way).
+                // Auto-compaction failures stay quiet on the chat
+                // surface: the turn continues and a `will_retry` run may
+                // still succeed, so a mid-turn notice would be noise.
+                // But we MUST clear the "Compacting" status the matching
+                // `CompactionStart` set — no `compact_boundary` will
+                // follow on the abort path, so without an explicit
+                // status reset `agent_status` would stay stuck on
+                // "Compacting" until the turn itself ends.
+                if is_manual {
+                    let detail = error_message
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|m| !m.is_empty())
+                        .unwrap_or("Pi could not compact the conversation.");
+                    let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Assistant {
+                        message: AssistantMessage {
+                            content: vec![ContentBlock::Text {
+                                text: format!("Compaction did not complete: {detail}"),
+                            }],
+                        },
+                    }));
+                } else {
+                    if !will_retry {
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "pi-sdk",
+                            reason = reason.as_deref().unwrap_or("unknown"),
+                            error = error_message.as_deref().unwrap_or(""),
+                            "pi auto-compaction failed"
+                        );
+                    }
+                    let _ = event_tx.send(pi_status_running_event());
+                }
+            } else {
+                // Success → compact_boundary System event. `send.rs`'s
+                // sentinel writer persists the COMPACTION:... row and the
+                // CompactionDivider renders. `trigger` keeps Pi's wire
+                // vocabulary (`manual` / `threshold` / `overflow`); the
+                // divider's label table maps each to a friendly string.
+                let trigger = reason
+                    .clone()
+                    .filter(|r| !r.is_empty())
+                    .unwrap_or_else(|| "manual".to_string());
+                let _ = event_tx.send(pi_compact_boundary_event(
+                    crate::agent::types::CompactMetadata {
+                        trigger,
+                        pre_tokens: tokens_before.unwrap_or(0),
+                        post_tokens: tokens_after.unwrap_or(0),
+                        duration_ms: duration_ms.unwrap_or(0),
+                    },
+                ));
+            }
+            // The manual /compact pump (set up by `start_compact`)
+            // terminates on a Result; emit one so `session.agent_status`
+            // flips back to Idle. Auto-compaction rides an active turn
+            // whose own `turn_end` produces the Result — emitting one
+            // here would cut that turn short.
+            if is_manual {
+                let _ = event_tx.send(pi_compaction_finish_event());
+            }
         }
         PiHarnessMessage::Error { error } => {
             let _ = event_tx.send(AgentEvent::Stderr(
                 error.unwrap_or_else(|| "Pi SDK harness error".to_string()),
             ));
+        }
+        PiHarnessMessage::OAuthChallenge {
+            challenge_id,
+            provider_id,
+            kind,
+            url,
+            instructions,
+            message,
+            placeholder,
+            allow_empty,
+        } => {
+            let _ = control_tx.send(PiControlEvent::OAuthChallenge {
+                challenge_id,
+                provider_id,
+                kind,
+                url,
+                instructions,
+                message,
+                placeholder,
+                allow_empty,
+            });
+        }
+        PiHarnessMessage::OAuthProgress {
+            challenge_id,
+            provider_id,
+            message,
+        } => {
+            let _ = control_tx.send(PiControlEvent::OAuthProgress {
+                challenge_id,
+                provider_id,
+                message,
+            });
+        }
+        PiHarnessMessage::OAuthComplete {
+            challenge_id,
+            provider_id,
+            ok,
+            error,
+        } => {
+            let _ = control_tx.send(PiControlEvent::OAuthComplete {
+                challenge_id,
+                provider_id,
+                ok,
+                error,
+            });
         }
         PiHarnessMessage::Unknown => {}
     }
@@ -955,6 +1569,98 @@ fn pi_command_line_event(path: &Path) -> AgentEvent {
     )))
 }
 
+/// In-flight indicator for a manual Pi compaction. The frontend
+/// `useAgentStream` listener flips `workspace.agent_status` to
+/// `"Compacting"` on this exact shape (`subtype: "status"` +
+/// `status: "compacting"`), matching the Codex affordance.
+fn pi_compacting_status_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "status".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: Some("compacting".to_string()),
+        compact_result: None,
+        compact_metadata: None,
+        command_line: None,
+    })
+}
+
+/// Companion to [`pi_compacting_status_event`]: clears the "Compacting"
+/// affordance without producing a compaction divider. Emitted when an
+/// auto-compaction aborts mid-turn — the turn keeps streaming, so the
+/// status needs to flip back to "Running" but no `compact_boundary`
+/// belongs in the chat (the abort freed no context). Frontend handles
+/// `status: "running"` by setting `agent_status` back to `"Running"`.
+fn pi_status_running_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "status".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: Some("running".to_string()),
+        compact_result: None,
+        compact_metadata: None,
+        command_line: None,
+    })
+}
+
+/// `compact_boundary` System event for a successful Pi compaction.
+/// `send_chat_message`'s sentinel writer persists the `COMPACTION:...`
+/// row from `compact_metadata`, and the `CompactionDivider` renders.
+/// `compact_result` stays `None`: the `StreamEvent::System` contract
+/// reserves it for the end-of-compaction *status* event (Claude CLI's
+/// pattern); the boundary carries its payload in `compact_metadata`.
+fn pi_compact_boundary_event(meta: crate::agent::types::CompactMetadata) -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "compact_boundary".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: None,
+        compact_result: None,
+        compact_metadata: Some(meta),
+        command_line: None,
+    })
+}
+
+/// Synthetic terminal event that ends the per-turn pump `start_compact`
+/// set up, so the chat session's status flips back to `"Idle"`. Mirrors
+/// the `subtype: "success"` Result Claude's CLI emits at the end of its
+/// `/compact` turn. Always `success`: the compaction *operation*
+/// completed even when it freed nothing — a failure, if any, is already
+/// surfaced as an assistant notice.
+fn pi_compaction_finish_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::Result {
+        subtype: "success".to_string(),
+        result: None,
+        total_cost_usd: None,
+        duration_ms: None,
+        usage: None,
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiSdkModel {
     pub id: String,
@@ -970,21 +1676,25 @@ mod tests {
     use tokio::sync::Mutex;
     use tokio::time::{Duration, timeout};
 
-    /// Build the four route_pi_message dependencies pre-wired together.
-    /// Returns the sender alongside a receiver so tests can drain the
-    /// emitted stream events.
+    /// Build the route_pi_message dependencies pre-wired together.
+    /// Returns the senders alongside a receiver so tests can drain the
+    /// emitted stream events. `control_tx` is created but no test
+    /// receiver is wired by default — pin a subscriber yourself if
+    /// you need to assert on control-plane events.
     fn pi_state() -> (
         broadcast::Sender<AgentEvent>,
+        broadcast::Sender<PiControlEvent>,
         broadcast::Receiver<AgentEvent>,
         PendingRequests,
         TurnOutput,
         InitCacheHandle,
     ) {
         let (event_tx, rx) = broadcast::channel::<AgentEvent>(64);
+        let (control_tx, _) = broadcast::channel::<PiControlEvent>(64);
         let pending: PendingRequests = Arc::new(Mutex::new(BTreeMap::new()));
         let turn_output: TurnOutput = Arc::new(Mutex::new(PiTurnOutput::fresh()));
         let init_cache: InitCacheHandle = Arc::new(Mutex::new(InitCache::default()));
-        (event_tx, rx, pending, turn_output, init_cache)
+        (event_tx, control_tx, rx, pending, turn_output, init_cache)
     }
 
     async fn next_event(rx: &mut broadcast::Receiver<AgentEvent>) -> AgentEvent {
@@ -996,6 +1706,119 @@ mod tests {
 
     fn try_recv_now(rx: &mut broadcast::Receiver<AgentEvent>) -> Option<AgentEvent> {
         rx.try_recv().ok()
+    }
+
+    /// The harness emits two usage snapshots on `turn_end`:
+    ///  * `aggregate` (cumulative across all assistant messages in
+    ///    this Claudette-level turn) — drives the TurnFooter.
+    ///  * `iteration` (per-final-call) — drives the ContextMeter via
+    ///    `TokenUsage.iterations[0]`.
+    ///
+    /// Both use the `inputTokens` / `outputTokens` / `cacheReadTokens`
+    /// / `cacheCreationTokens` / `totalTokens` shape; `iteration` also
+    /// carries `modelContextWindow`. The Rust side has to deserialize
+    /// that shape verbatim — a refactor that renames or reshapes any
+    /// field here silently regresses the meter or the footer. Pin the
+    /// wire format.
+    #[test]
+    fn turn_end_usage_wire_format() {
+        let line = r#"{
+            "type": "turn_end",
+            "aggregate": {
+                "inputTokens": 410700,
+                "outputTokens": 9000,
+                "cacheReadTokens": 0,
+                "cacheCreationTokens": 0,
+                "totalTokens": 419700
+            },
+            "iteration": {
+                "inputTokens": 136900,
+                "outputTokens": 3000,
+                "cacheReadTokens": 0,
+                "cacheCreationTokens": 0,
+                "totalTokens": 139900,
+                "modelContextWindow": 272000
+            },
+            "totalCostUsd": 0.42,
+            "durationMs": 513000
+        }"#;
+        let msg: PiHarnessMessage = serde_json::from_str(line).unwrap();
+        match msg {
+            PiHarnessMessage::TurnEnd {
+                aggregate: Some(agg),
+                iteration: Some(it),
+                total_cost_usd,
+                duration_ms,
+                ..
+            } => {
+                assert_eq!(agg.input_tokens, Some(410_700));
+                assert_eq!(agg.output_tokens, Some(9000));
+                assert_eq!(agg.total_tokens, Some(419_700));
+                assert_eq!(it.input_tokens, Some(136_900));
+                assert_eq!(it.output_tokens, Some(3000));
+                assert_eq!(it.total_tokens, Some(139_900));
+                assert_eq!(it.model_context_window, Some(272_000));
+                assert_eq!(total_cost_usd, Some(0.42));
+                assert_eq!(duration_ms, Some(513_000));
+            }
+            other => panic!("expected TurnEnd with both snapshots, got {other:?}"),
+        }
+    }
+
+    /// Sessions resumed mid-stream from an older harness build won't
+    /// send `aggregate` or `iteration`. The deserializer must accept
+    /// that case and let the route layer skip building a TokenUsage
+    /// rather than blow up the reader loop.
+    #[test]
+    fn turn_end_without_usage_parses() {
+        let line = r#"{"type":"turn_end"}"#;
+        let msg: PiHarnessMessage = serde_json::from_str(line).unwrap();
+        assert!(matches!(
+            msg,
+            PiHarnessMessage::TurnEnd {
+                aggregate: None,
+                iteration: None,
+                total_cost_usd: None,
+                duration_ms: None,
+                error: None,
+            }
+        ));
+    }
+
+    fn turn_end(error: Option<&str>) -> PiHarnessMessage {
+        PiHarnessMessage::TurnEnd {
+            error: error.map(str::to_string),
+            aggregate: None,
+            iteration: None,
+            total_cost_usd: None,
+            duration_ms: None,
+        }
+    }
+
+    fn turn_end_with_usage() -> PiHarnessMessage {
+        // Multi-iteration turn: the agent loop ran three model calls, so
+        // aggregate is roughly 3 × per-final-call. The footer reads the
+        // aggregate; the meter reads `iterations[0]` (the per-final-call).
+        PiHarnessMessage::TurnEnd {
+            error: None,
+            aggregate: Some(PiAggregateUsage {
+                input_tokens: Some(300),
+                output_tokens: Some(150),
+                cache_read_tokens: Some(60),
+                cache_creation_tokens: Some(15),
+                total_tokens: Some(525),
+            }),
+            iteration: Some(PiIterationUsage {
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                cache_read_tokens: Some(20),
+                cache_creation_tokens: Some(5),
+                total_tokens: Some(175),
+                model_context_window: Some(272_000),
+            }),
+            total_cost_usd: Some(0.0123),
+            duration_ms: Some(4321),
+        }
     }
 
     #[test]
@@ -1083,10 +1906,11 @@ mod tests {
     /// app-server path leaves the field absent, so this is Pi-only.
     #[tokio::test]
     async fn pi_tool_request_injects_codex_agent_label() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
 
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1118,9 +1942,10 @@ mod tests {
     /// route file changes through the wrong card.
     #[tokio::test]
     async fn pi_tool_request_file_change_uses_file_change_approval() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1159,9 +1984,10 @@ mod tests {
     /// without the metadata it can't inject.
     #[tokio::test]
     async fn pi_tool_request_with_non_object_input_skips_injection() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1188,7 +2014,7 @@ mod tests {
     /// failure delivers the harness-reported error string verbatim.
     #[tokio::test]
     async fn response_success_wakes_pending_oneshot() {
-        let (event_tx, _rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, _rx, pending, turn_output, init_cache) = pi_state();
         let (tx, rx) = oneshot::channel();
         pending.lock().await.insert(
             "id-1".to_string(),
@@ -1199,6 +2025,7 @@ mod tests {
         );
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1218,7 +2045,7 @@ mod tests {
 
     #[tokio::test]
     async fn response_failure_propagates_error_string() {
-        let (event_tx, _rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, _rx, pending, turn_output, init_cache) = pi_state();
         let (tx, rx) = oneshot::channel();
         pending.lock().await.insert(
             "id-2".to_string(),
@@ -1229,6 +2056,7 @@ mod tests {
         );
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1249,9 +2077,10 @@ mod tests {
     /// poison the pending map — the harness logs and continues.
     #[tokio::test]
     async fn response_for_unknown_id_is_swallowed() {
-        let (event_tx, _rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, _rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1271,9 +2100,10 @@ mod tests {
     /// subscribers — the chat bridge's `got_init` flag depends on this.
     #[tokio::test]
     async fn ready_emits_and_caches_init_event() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1300,11 +2130,12 @@ mod tests {
     /// pre-allocated ContentBlockStart events (text=0, thinking=1).
     #[tokio::test]
     async fn turn_start_emits_message_and_block_starts() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         // Pollute prior state so we can verify the reset.
         turn_output.lock().await.text.push_str("stale");
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1324,9 +2155,10 @@ mod tests {
 
     #[tokio::test]
     async fn assistant_delta_appends_text_and_streams_block() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1337,6 +2169,7 @@ mod tests {
         .await;
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1365,9 +2198,10 @@ mod tests {
 
     #[tokio::test]
     async fn thinking_delta_appends_thinking_and_streams_block_one() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1395,9 +2229,10 @@ mod tests {
     /// streams the args as an InputJson delta in the same block.
     #[tokio::test]
     async fn tool_update_start_opens_block_and_streams_args() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1444,10 +2279,11 @@ mod tests {
     /// block.
     #[tokio::test]
     async fn tool_update_update_phase_emits_synthetic_user_result() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         // Prime the index by emitting a start first
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1464,6 +2300,7 @@ mod tests {
 
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1499,12 +2336,13 @@ mod tests {
     /// the SDK transcript reflects the tool output.
     #[tokio::test]
     async fn tool_result_closes_block_and_forwards_payload() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         // Open block first
         turn_output.lock().await.tool_index("call-r");
 
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1552,9 +2390,10 @@ mod tests {
     /// an invalid index and confuse the frontend's block table.
     #[tokio::test]
     async fn tool_result_without_prior_start_skips_block_stop() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1588,7 +2427,7 @@ mod tests {
     /// final Assistant message and a Result with subtype `success`.
     #[tokio::test]
     async fn turn_end_success_finalizes_assistant_and_result() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         {
             let mut output = turn_output.lock().await;
             output.text.push_str("final answer");
@@ -1596,10 +2435,11 @@ mod tests {
         }
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd { error: None },
+            turn_end(None),
         )
         .await;
         let assistant = next_event(&mut rx).await;
@@ -1623,22 +2463,159 @@ mod tests {
         }
     }
 
+    /// Pi's agent_end carries per-assistant-message usage. The harness
+    /// sums it into turn_end, and Rust must preserve it on Result so
+    /// the regular chat bridge updates the footer and Usage meter.
+    #[tokio::test]
+    async fn turn_end_maps_usage_cost_and_duration_to_result() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        turn_output.lock().await.text.push_str("metered answer");
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            turn_end_with_usage(),
+        )
+        .await;
+        let _assistant = next_event(&mut rx).await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result {
+                usage,
+                total_cost_usd,
+                duration_ms,
+                ..
+            }) => {
+                let usage = usage.expect("Pi usage should be forwarded");
+                // Top-level fields are the cumulative turn aggregate
+                // (TurnFooter / CompletedTurn semantics). They must
+                // NOT be the per-final-call snapshot — otherwise a
+                // multi-iteration turn under-reports total work.
+                assert_eq!(usage.total_tokens, Some(525));
+                assert_eq!(usage.input_tokens, 300);
+                assert_eq!(usage.output_tokens, 150);
+                assert_eq!(usage.cache_read_input_tokens, Some(60));
+                assert_eq!(usage.cache_creation_input_tokens, Some(15));
+                // model_context_window is iteration-only on the
+                // protocol side (Pi exposes it via getContextUsage),
+                // but we lift it to the top level too so consumers
+                // that don't crack `iterations` still see the live
+                // capacity.
+                assert_eq!(usage.model_context_window, Some(272_000));
+                // iterations[0] is the per-final-call snapshot for the
+                // ContextMeter — must reflect just the final call, not
+                // the cumulative.
+                let iters = usage.iterations.expect("iterations[0] must be populated");
+                assert_eq!(iters.len(), 1);
+                assert_eq!(iters[0].input_tokens, 100);
+                assert_eq!(iters[0].output_tokens, 50);
+                assert_eq!(iters[0].cache_read_input_tokens, Some(20));
+                assert_eq!(iters[0].cache_creation_input_tokens, Some(5));
+                assert_eq!(iters[0].total_tokens, Some(175));
+                assert_eq!(iters[0].model_context_window, Some(272_000));
+                assert_eq!(total_cost_usd, Some(0.0123));
+                assert_eq!(duration_ms, Some(4321));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    /// Pre-aggregate harness builds (or any future sidecar variant
+    /// that emits only the per-final-call snapshot) must still
+    /// produce a usable `TokenUsage`. The route layer falls back to
+    /// the iteration values for the top-level fields when aggregate
+    /// is absent — better to show single-iteration totals than no
+    /// totals at all.
+    #[tokio::test]
+    async fn turn_end_iteration_only_falls_back_to_iteration_for_top_level() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        turn_output.lock().await.text.push_str("answer");
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnEnd {
+                error: None,
+                aggregate: None,
+                iteration: Some(PiIterationUsage {
+                    input_tokens: Some(100),
+                    output_tokens: Some(50),
+                    cache_read_tokens: Some(20),
+                    cache_creation_tokens: Some(5),
+                    total_tokens: Some(175),
+                    model_context_window: Some(272_000),
+                }),
+                total_cost_usd: None,
+                duration_ms: None,
+            },
+        )
+        .await;
+        let _assistant = next_event(&mut rx).await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result {
+                usage: Some(usage), ..
+            }) => {
+                // No aggregate available → top-level mirrors iteration.
+                assert_eq!(usage.input_tokens, 100);
+                assert_eq!(usage.output_tokens, 50);
+                assert_eq!(usage.cache_read_input_tokens, Some(20));
+                assert_eq!(usage.cache_creation_input_tokens, Some(5));
+                assert_eq!(usage.total_tokens, Some(175));
+                let iters = usage.iterations.expect("iterations populated");
+                assert_eq!(iters[0].input_tokens, 100);
+            }
+            other => panic!("expected Result with usage, got {other:?}"),
+        }
+    }
+
+    /// Turn-end with neither aggregate nor iteration (a sidecar
+    /// predating this payload, or a turn that produced no LLM usage
+    /// at all) must produce `usage: None` rather than zeroes. Zeroes
+    /// would poison the meter; `None` lets it hold its previous
+    /// reading.
+    #[tokio::test]
+    async fn turn_end_without_usage_emits_no_token_usage() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        turn_output.lock().await.text.push_str("answer");
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            turn_end(None),
+        )
+        .await;
+        let _assistant = next_event(&mut rx).await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result { usage, .. }) => {
+                assert!(
+                    usage.is_none(),
+                    "no aggregate + no iteration → no TokenUsage"
+                );
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
     /// Turn-end with an error must surface the error text both as a
     /// trailing assistant block (so the chat shows the failure even
     /// after partial output) and inside Result.result (consumers that
     /// only read the Result still see it).
     #[tokio::test]
     async fn turn_end_error_surfaces_error_in_assistant_and_result() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         turn_output.lock().await.text.push_str("partial");
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd {
-                error: Some("rate limit".to_string()),
-            },
+            turn_end(Some("rate limit")),
         )
         .await;
         match next_event(&mut rx).await {
@@ -1673,13 +2650,14 @@ mod tests {
     /// still emitted so the chat bridge knows the turn closed.
     #[tokio::test]
     async fn turn_end_with_empty_output_skips_assistant() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd { error: None },
+            turn_end(None),
         )
         .await;
         match next_event(&mut rx).await {
@@ -1691,11 +2669,168 @@ mod tests {
         assert!(try_recv_now(&mut rx).is_none());
     }
 
+    /// A mid-turn `turn_error` (forwarded by the harness from a Pi
+    /// `AssistantMessageEvent { type: "error" }` or a failed
+    /// `auto_retry_end`) followed by a clean-looking `turn_end` must
+    /// still surface the error to the user. Without this, every
+    /// Copilot 401 / OpenRouter 5xx came through as "Agent stopped"
+    /// with no chat message.
     #[tokio::test]
-    async fn error_message_emits_stderr() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+    async fn turn_error_promotes_pending_error_into_turn_end() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnError {
+                error: Some("401 Unauthorized".to_string()),
+            },
+        )
+        .await;
+        // turn_error itself produces no chat event — it stashes the
+        // error on turn_output until turn_end finalizes the turn.
+        assert!(try_recv_now(&mut rx).is_none());
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            turn_end(None),
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                let last = message.content.last().expect("error block");
+                match last {
+                    ContentBlock::Text { text } => {
+                        assert!(text.contains("401 Unauthorized"), "got {text:?}")
+                    }
+                    other => panic!("expected Text, got {other:?}"),
+                }
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result {
+                subtype, result, ..
+            }) => {
+                assert_eq!(subtype, "error");
+                assert!(result.unwrap().contains("401 Unauthorized"));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    /// When BOTH `turn_error` (mid-turn) and `turn_end { error }`
+    /// (agent_end walk surfaced one too) arrive, `turn_end`'s error
+    /// wins. It's the authoritative final state — if Pi reports a
+    /// different message there, that's what the user should see.
+    #[tokio::test]
+    async fn turn_end_error_wins_over_pending_error() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnError {
+                error: Some("retry-time error".to_string()),
+            },
+        )
+        .await;
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            turn_end(Some("final 500")),
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                let last = message.content.last().expect("error block");
+                match last {
+                    ContentBlock::Text { text } => {
+                        assert!(text.contains("final 500"), "got {text:?}");
+                        assert!(!text.contains("retry-time error"), "got {text:?}");
+                    }
+                    other => panic!("expected Text, got {other:?}"),
+                }
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        let _ = next_event(&mut rx).await;
+    }
+
+    /// Pending error must be cleared between turns so a successful
+    /// turn N+1 doesn't inherit turn N's failure.
+    #[tokio::test]
+    async fn pending_error_is_cleared_between_turns() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnError {
+                error: Some("turn1 failed".to_string()),
+            },
+        )
+        .await;
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            turn_end(None),
+        )
+        .await;
+        // Drain turn-1 finalize events.
+        let _ = next_event(&mut rx).await;
+        let _ = next_event(&mut rx).await;
+
+        // Turn 2: clean run; must NOT re-surface the turn-1 error.
+        turn_output.lock().await.text.push_str("hello");
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            turn_end(None),
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                for block in &message.content {
+                    if let ContentBlock::Text { text } = block {
+                        assert!(!text.contains("turn1 failed"));
+                    }
+                }
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) => {
+                assert_eq!(subtype, "success");
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn error_message_emits_stderr() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1715,9 +2850,10 @@ mod tests {
     /// strand the user.
     #[tokio::test]
     async fn error_message_with_no_text_falls_back_to_default() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1730,13 +2866,350 @@ mod tests {
         }
     }
 
+    /// Drain every event currently buffered on the receiver.
+    fn drain_events(rx: &mut broadcast::Receiver<AgentEvent>) -> Vec<AgentEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    /// The sidecar emits camelCase keys; pin the rename mapping so a
+    /// wire-shaped success `compaction_end` deserializes with every
+    /// field populated.
+    #[test]
+    fn parses_compaction_end_success() {
+        let line = r#"{"type":"compaction_end","reason":"manual","aborted":false,"willRetry":false,"tokensBefore":120000,"tokensAfter":30000,"durationMs":4200}"#;
+        match serde_json::from_str::<PiHarnessMessage>(line).unwrap() {
+            PiHarnessMessage::CompactionEnd {
+                reason,
+                aborted,
+                will_retry,
+                error_message,
+                tokens_before,
+                tokens_after,
+                duration_ms,
+            } => {
+                assert_eq!(reason.as_deref(), Some("manual"));
+                assert!(!aborted);
+                assert!(!will_retry);
+                assert!(error_message.is_none());
+                assert_eq!(tokens_before, Some(120000));
+                assert_eq!(tokens_after, Some(30000));
+                assert_eq!(duration_ms, Some(4200));
+            }
+            other => panic!("expected CompactionEnd, got {other:?}"),
+        }
+    }
+
+    /// The aborted/failed variant carries no token counts — make sure
+    /// the absent fields default cleanly and `errorMessage` decodes.
+    #[test]
+    fn parses_compaction_end_aborted_without_tokens() {
+        let line = r#"{"type":"compaction_end","reason":"manual","aborted":true,"willRetry":false,"errorMessage":"context provider 500"}"#;
+        match serde_json::from_str::<PiHarnessMessage>(line).unwrap() {
+            PiHarnessMessage::CompactionEnd {
+                aborted,
+                error_message,
+                tokens_before,
+                tokens_after,
+                duration_ms,
+                ..
+            } => {
+                assert!(aborted);
+                assert_eq!(error_message.as_deref(), Some("context provider 500"));
+                assert!(tokens_before.is_none());
+                assert!(tokens_after.is_none());
+                assert!(duration_ms.is_none());
+            }
+            other => panic!("expected CompactionEnd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_compaction_start() {
+        let msg: PiHarnessMessage =
+            serde_json::from_str(r#"{"type":"compaction_start","reason":"threshold"}"#).unwrap();
+        match msg {
+            PiHarnessMessage::CompactionStart { reason } => {
+                assert_eq!(reason.as_deref(), Some("threshold"));
+            }
+            other => panic!("expected CompactionStart, got {other:?}"),
+        }
+    }
+
+    /// A manual /compact runs a dedicated per-turn pump, so its
+    /// `compaction_start` flips the UI to "Compacting" via a
+    /// `status` System event.
+    #[tokio::test]
+    async fn route_compaction_start_manual_emits_compacting_status() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionStart {
+                reason: Some("manual".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected status System event, got {other:?}"),
+        }
+        assert!(try_recv_now(&mut rx).is_none());
+    }
+
+    /// Auto-compaction (threshold/overflow) must also flip the UI to
+    /// "Compacting". The active turn's generic "Running" spinner is
+    /// indistinguishable from a normal LLM call, so without this event
+    /// users had no signal that Pi paused to compact — they saw a
+    /// stalled turn and ran `/compact` manually.
+    #[tokio::test]
+    async fn route_compaction_start_threshold_emits_compacting_status() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionStart {
+                reason: Some("threshold".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected status System event, got {other:?}"),
+        }
+        assert!(try_recv_now(&mut rx).is_none());
+    }
+
+    /// Same goes for `overflow` (context window exhausted) — the user
+    /// needs the same affordance regardless of which auto-trigger
+    /// fired.
+    #[tokio::test]
+    async fn route_compaction_start_overflow_emits_compacting_status() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionStart {
+                reason: Some("overflow".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::System { status, .. }) => {
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected status System event, got {other:?}"),
+        }
+    }
+
+    /// A successful manual `compaction_end` produces exactly the
+    /// compact_boundary System event (carrying Pi's token counts) plus
+    /// the synthetic Result that terminates `start_compact`'s pump.
+    #[tokio::test]
+    async fn route_compaction_end_manual_success_emits_boundary_and_finish() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionEnd {
+                reason: Some("manual".to_string()),
+                aborted: false,
+                will_retry: false,
+                error_message: None,
+                tokens_before: Some(120000),
+                tokens_after: Some(30000),
+                duration_ms: Some(4200),
+            },
+        )
+        .await;
+        let events = drain_events(&mut rx);
+        assert_eq!(events.len(), 2, "boundary + finish, nothing else");
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                compact_metadata,
+                compact_result,
+                ..
+            }) => {
+                assert_eq!(subtype, "compact_boundary");
+                assert!(compact_result.is_none());
+                let meta = compact_metadata.as_ref().expect("compact_metadata set");
+                assert_eq!(meta.trigger, "manual");
+                assert_eq!(meta.pre_tokens, 120000);
+                assert_eq!(meta.post_tokens, 30000);
+                assert_eq!(meta.duration_ms, 4200);
+            }
+            other => panic!("expected compact_boundary System event, got {other:?}"),
+        }
+        match &events[1] {
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) => {
+                assert_eq!(subtype, "success");
+            }
+            other => panic!("expected synthetic Result, got {other:?}"),
+        }
+    }
+
+    /// Auto-compaction rides an active turn whose own `turn_end`
+    /// produces the Result — a threshold `compaction_end` emits only the
+    /// divider boundary, never a Result that would cut the turn short.
+    #[tokio::test]
+    async fn route_compaction_end_threshold_success_emits_boundary_only() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionEnd {
+                reason: Some("threshold".to_string()),
+                aborted: false,
+                will_retry: false,
+                error_message: None,
+                tokens_before: Some(150000),
+                tokens_after: Some(40000),
+                duration_ms: Some(3100),
+            },
+        )
+        .await;
+        let events = drain_events(&mut rx);
+        assert_eq!(events.len(), 1, "boundary only — no terminating Result");
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                compact_metadata,
+                ..
+            }) => {
+                assert_eq!(subtype, "compact_boundary");
+                assert_eq!(
+                    compact_metadata.as_ref().expect("metadata set").trigger,
+                    "threshold",
+                );
+            }
+            other => panic!("expected compact_boundary System event, got {other:?}"),
+        }
+    }
+
+    /// A failed manual compaction freed no context: surface a visible
+    /// assistant notice (never a divider) plus the Result that ends the
+    /// pump. The error text rides the notice.
+    #[tokio::test]
+    async fn route_compaction_end_manual_aborted_emits_notice_and_finish() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionEnd {
+                reason: Some("manual".to_string()),
+                aborted: true,
+                will_retry: false,
+                error_message: Some("context provider 500".to_string()),
+                tokens_before: None,
+                tokens_after: None,
+                duration_ms: None,
+            },
+        )
+        .await;
+        let events = drain_events(&mut rx);
+        assert_eq!(events.len(), 2, "notice + finish, no boundary");
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                let text = match message.content.first() {
+                    Some(ContentBlock::Text { text }) => text.as_str(),
+                    other => panic!("expected text content, got {other:?}"),
+                };
+                assert!(
+                    text.contains("context provider 500"),
+                    "carries the error: {text}"
+                );
+            }
+            other => panic!("expected assistant notice, got {other:?}"),
+        }
+        assert!(
+            matches!(
+                &events[1],
+                AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
+            ),
+            "manual pump must still terminate on a Result",
+        );
+    }
+
+    /// An auto-compaction failure must not inject a notice or
+    /// terminating Result — the turn it rides owns those — but it MUST
+    /// clear the "Compacting" status that the matching
+    /// `CompactionStart` set. Otherwise `agent_status` stays stuck on
+    /// "Compacting" until the turn itself ends.
+    #[tokio::test]
+    async fn route_compaction_end_threshold_aborted_emits_running_status() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionEnd {
+                reason: Some("threshold".to_string()),
+                aborted: true,
+                will_retry: false,
+                error_message: Some("boom".to_string()),
+                tokens_before: None,
+                tokens_after: None,
+                duration_ms: None,
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("running"));
+            }
+            other => panic!("expected status:running System event, got {other:?}"),
+        }
+        assert!(
+            try_recv_now(&mut rx).is_none(),
+            "must not emit a boundary or notice on auto-abort",
+        );
+    }
+
     /// Unknown variants (e.g. a future-protocol message Claudette
     /// doesn't recognize yet) must not crash the reader loop.
     #[tokio::test]
     async fn unknown_variant_is_silently_ignored() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1827,6 +3300,44 @@ mod tests {
             }
             other => panic!("expected System command_line, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn pi_control_event_uses_camel_case_field_names() {
+        // The React OAuth modal reads `challengeId` / `providerId` /
+        // `allowEmpty` straight off the Tauri event payload. If these
+        // serialize as snake_case the UI receives undefined ids,
+        // silently dropping every challenge into the filter check.
+        // Pin the wire shape so a future struct rename can't regress.
+        let event = PiControlEvent::OAuthChallenge {
+            challenge_id: "c1".to_string(),
+            provider_id: "github-copilot".to_string(),
+            kind: "auth".to_string(),
+            url: Some("https://github.com/login/device".to_string()),
+            instructions: Some("ABCD-1234".to_string()),
+            message: None,
+            placeholder: None,
+            allow_empty: false,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "oauth_challenge");
+        assert_eq!(json["challengeId"], "c1");
+        assert_eq!(json["providerId"], "github-copilot");
+        assert_eq!(json["allowEmpty"], false);
+        assert!(json.get("challenge_id").is_none());
+        assert!(json.get("provider_id").is_none());
+        assert!(json.get("allow_empty").is_none());
+
+        let complete = PiControlEvent::OAuthComplete {
+            challenge_id: "c1".to_string(),
+            provider_id: "openrouter".to_string(),
+            ok: true,
+            error: None,
+        };
+        let json = serde_json::to_value(&complete).unwrap();
+        assert_eq!(json["type"], "oauth_complete");
+        assert_eq!(json["challengeId"], "c1");
+        assert_eq!(json["providerId"], "openrouter");
     }
 
     #[test]

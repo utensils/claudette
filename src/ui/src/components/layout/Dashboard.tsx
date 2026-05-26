@@ -13,7 +13,11 @@ import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { formatElapsedSeconds } from "../chat/chatHelpers";
 import { WelcomeEmptyState } from "./WelcomeEmptyState";
 import { useCreateWorkspace } from "../../hooks/useCreateWorkspace";
+import { useScmProvider } from "../../hooks/useScmProvider";
 import { restoreWorkspace } from "../../services/tauri";
+import { RepoIssuesSection } from "../project/RepoIssuesSection";
+import { RepoPullRequestsSection } from "../project/RepoPullRequestsSection";
+import { useWorkspaceElapsedSeconds } from "../../hooks/useWorkspaceElapsedSeconds";
 import styles from "./Dashboard.module.css";
 
 /** Strip markdown syntax for a clean one-line preview. */
@@ -58,19 +62,7 @@ const WorkspaceCard = memo(function WorkspaceCard({
   // also uses it for grouping; here we only need this row's slice.
   const summary = useAppStore((s) => s.scmSummary[ws.id]);
   const isRunning = isAgentBusy(ws.agent_status);
-  const promptStartTime = useAppStore((s) => s.promptStartTime[ws.id] ?? null);
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    if (!isRunning || promptStartTime == null) {
-      setElapsed(0);
-      return;
-    }
-    setElapsed(Math.floor((Date.now() - promptStartTime) / 1000));
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - promptStartTime) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isRunning, promptStartTime]);
+  const elapsed = useWorkspaceElapsedSeconds(ws.id, isRunning);
 
   const statusColor =
     isRunning
@@ -388,6 +380,7 @@ export function Dashboard() {
                 : "This project doesn't have any active workspaces yet."
             }
           />
+          <ProjectViewScmLists repoId={scopedRepo.id} />
           {scopedWorkspaceRows.length > 0 && (
             <div className={styles.workspacesSection}>
               <button
@@ -425,19 +418,32 @@ export function Dashboard() {
           )}
           {scopedArchivedWorkspaces.length > 0 && (
             <div className={styles.workspacesSection}>
-              <button
-                type="button"
-                className={styles.workspacesHeader}
-                onClick={() => setArchivedOpen((v) => !v)}
-                aria-expanded={archivedOpen}
-              >
-                {archivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                <Archive size={12} className={styles.archivedIcon} aria-hidden="true" />
-                <span className={styles.workspacesTitle}>Archived</span>
-                <span className={styles.headerCount}>
-                  {scopedArchivedWorkspaces.length}
-                </span>
-              </button>
+              <div className={styles.archivedHeaderRow}>
+                <button
+                  type="button"
+                  className={styles.workspacesHeader}
+                  onClick={() => setArchivedOpen((v) => !v)}
+                  aria-expanded={archivedOpen}
+                >
+                  {archivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  <Archive size={12} className={styles.archivedIcon} aria-hidden="true" />
+                  <span className={styles.workspacesTitle}>Archived</span>
+                  <span className={styles.headerCount}>
+                    {scopedArchivedWorkspaces.length}
+                  </span>
+                </button>
+                {!scopedRepo.remote_connection_id && (
+                  <button
+                    type="button"
+                    className={styles.archivedCleanupBtn}
+                    onClick={() =>
+                      openModal("bulkCleanupArchived", { repoId: scopedRepo.id })
+                    }
+                  >
+                    Clean up…
+                  </button>
+                )}
+              </div>
               {archivedOpen && (
                 <ul className={styles.archivedList}>
                   {scopedArchivedWorkspaces.map((ws) => (
@@ -544,5 +550,30 @@ export function Dashboard() {
         </div>
       </BoundedScrollPane>
     </div>
+  );
+}
+
+/// Renders the project-view Issues + Pull Requests sections when the
+/// feature flag is on AND the repo has a resolved SCM provider. The
+/// sections handle their own loading / empty / error / unsupported
+/// states internally, so this wrapper only owns the two-gate visibility
+/// decision and the fetch staging order.
+///
+/// We intentionally render the SCM panel between the WelcomeEmptyState
+/// card and the Workspaces section per the spec, so a user scanning the
+/// project view sees "what's outstanding upstream" before "what's
+/// outstanding locally".
+function ProjectViewScmLists({ repoId }: { repoId: string }) {
+  const enabled = useAppStore((s) => s.projectViewIssuesPrsEnabled);
+  const provider = useScmProvider(enabled ? repoId : null);
+  if (!enabled) return null;
+  // Provider lookup still in flight: render nothing so we don't flash
+  // a placeholder. A missing provider also falls through here (null).
+  if (!provider) return null;
+  return (
+    <>
+      <RepoIssuesSection repoId={repoId} />
+      <RepoPullRequestsSection repoId={repoId} />
+    </>
   );
 }

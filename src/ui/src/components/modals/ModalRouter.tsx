@@ -1,6 +1,7 @@
 import { useAppStore } from "../../stores/useAppStore";
 import { AddRepoModal } from "./AddRepoModal";
 import { AddRemoteModal } from "./AddRemoteModal";
+import { BulkCleanupArchivedModal } from "./BulkCleanupArchivedModal";
 import { DeleteWorkspaceModal } from "./DeleteWorkspaceModal";
 import { RemoveRepoModal } from "./RemoveRepoModal";
 import { RelinkRepoModal } from "./RelinkRepoModal";
@@ -14,6 +15,8 @@ import { ConfirmNightlyChannelModal } from "./ConfirmNightlyChannelModal";
 import { MissingCliModal } from "./MissingCliModal";
 import { KeyboardShortcutsModal } from "./KeyboardShortcutsModal";
 import { EnvTrustModal } from "./EnvTrustModal";
+import { PiLoginModalRoute } from "./PiLoginModalRoute";
+import { RequiredInputsModal } from "./RequiredInputsModal";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -25,6 +28,8 @@ export function ModalRouter() {
       return <AddRemoteModal />;
     case "deleteWorkspace":
       return <DeleteWorkspaceModal />;
+    case "bulkCleanupArchived":
+      return <BulkCleanupArchivedModal />;
     case "removeRepo":
       return <RemoveRepoModal />;
     case "relinkRepo":
@@ -49,6 +54,10 @@ export function ModalRouter() {
       return <KeyboardShortcutsModal />;
     case "envTrust":
       return <EnvTrustModal />;
+    case "piLogin":
+      return <PiLoginModalRoute />;
+    case "requiredInputs":
+      return <RequiredInputsModal />;
     default:
       return null;
   }

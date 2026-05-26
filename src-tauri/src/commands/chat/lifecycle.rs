@@ -182,9 +182,239 @@ pub async fn reset_agent_session(
     Ok(())
 }
 
+/// Result of applying a cross-harness migration to an
+/// `AgentSessionState`.
+///
+/// Caller releases the agents-map lock between this snapshot and the
+/// awaits that act on its fields (subprocess kill, permission denies,
+/// DB writes) — matching `take_stop_snapshot`'s pattern.
+pub(super) struct MigrationSnapshot {
+    /// Session id the prior harness was using. Empty if the session
+    /// had never reached a first turn under any harness. Caller
+    /// retires this in the DB and (when Pi is compiled in) removes
+    /// the matching session directory.
+    pub prior_session_id: String,
+    /// Fresh UUID the new harness will use for its session id.
+    /// Already written into the in-memory `AgentSessionState` —
+    /// caller persists it via `save_chat_session_state`.
+    pub new_session_id: String,
+    /// PID of the prior persistent subprocess, if one was running.
+    /// Caller terminates it after releasing the lock.
+    pub pid_to_kill: Option<u32>,
+    /// Pending permission requests draining the prior harness, paired
+    /// with the harness handle they belong to. Caller denies them
+    /// with a "session migrated" reason.
+    pub drained_permissions: Option<(Arc<AgentSession>, Vec<PendingPermission>)>,
+}
+
+/// Mutate `session` so the next turn flows through a new harness
+/// with the prior conversation queued as a prelude.
+///
+/// Pure on `session` — does no I/O. Splits the lock-held mutation
+/// out of [`prepare_cross_harness_migration`] so the test suite can
+/// pin the contract without standing up an `AppState`.
+pub(super) fn apply_migration_to_session(
+    session: &mut AgentSessionState,
+    prelude: Option<String>,
+) -> MigrationSnapshot {
+    let drained_permissions = drain_pending_permissions(session);
+    let prior_persistent = session.persistent_session.clone();
+    let pid_to_kill = session.active_pid.take();
+    let prior_session_id = std::mem::take(&mut session.session_id);
+
+    let new_session_id = uuid::Uuid::new_v4().to_string();
+    session.session_id = new_session_id.clone();
+    session.turn_count = 0;
+    session.persistent_session = None;
+    session.session_backend_hash = String::new();
+    session.pending_history_prelude = prelude;
+    // Clear state coupled to the now-dead persistent process. `mcp_bridge`
+    // documents itself as "dropped when `persistent_session = None` so the
+    // listener task is cancelled and the socket file unlinked" — leaving the
+    // Arc set leaks the bridge listener + Unix socket past the migration and
+    // may attach stale bridge state to the new session id (especially when
+    // the new harness — e.g. Pi — never uses the bridge). The Claude
+    // remote-control fields are documented as "Ephemeral … for the current
+    // persistent process": the monitor exits with the persistent CLI we
+    // just killed via `pid_to_kill`, so the pid field is stale; the status
+    // struct must reset so the next spawn starts from `disabled()`.
+    session.mcp_bridge = None;
+    session.claude_remote_control_monitor_pid = None;
+    session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+
+    // `prior_persistent` is needed both for `agent::stop_agent`
+    // (handled via `pid_to_kill`) and for `deny_drained_permissions`
+    // (handled via `drained_permissions` below). We surface the
+    // `Arc<AgentSession>` only for the permission-deny path; the
+    // process kill path uses pid alone.
+    let drained_permissions = match (drained_permissions, prior_persistent) {
+        (Some((_, drained)), Some(ps)) => Some((ps, drained)),
+        _ => None,
+    };
+
+    MigrationSnapshot {
+        prior_session_id,
+        new_session_id,
+        pid_to_kill,
+        drained_permissions,
+    }
+}
+
+/// Queue a cross-harness migration so the next turn carries the prior
+/// conversation as a prelude.
+///
+/// Used by the frontend `applySelectedModel` helper when the model
+/// swap crosses harnesses (e.g. Anthropic Claude Code -> Codex
+/// app-server, or Codex -> Pi SDK). The destination harness's native
+/// transcript format is incompatible with the source's, so we can't
+/// hand `claude --resume <sid>` or Codex `thread/resume` a transcript
+/// it understands. Instead we:
+///
+/// 1. Load every persisted `chat_messages` row for this session.
+/// 2. Render them as a single user-message prelude (see
+///    `agent::history_seeder::build_migration_prelude`).
+/// 3. Stash the prelude on the in-memory `AgentSessionState`.
+/// 4. Mint a fresh `session_id` and zero `turn_count` so the next
+///    spawn under the new harness starts cleanly (no stale JSONL or
+///    Pi session-dir collision).
+/// 5. Tear down any persistent subprocess so the next turn respawns
+///    under the new harness.
+///
+/// The user's chat history (the rows in `chat_messages`) is
+/// untouched: the UI keeps showing every prior turn as normal. The
+/// prelude is invisible to the UI — it only reaches the new harness
+/// as the leading text of turn 1.
+///
+/// If there are no messages to seed (a brand-new chat being switched
+/// before its first turn), this command still mints a fresh session
+/// id so the harness change is honored cleanly.
+#[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(app, state),
+    fields(chat_session_id = %session_id),
+)]
+pub async fn prepare_cross_harness_migration(
+    session_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let chat_session_id = session_id;
+
+    // Pull every persisted message for this chat session, ordered by
+    // creation. Use the session-scoped DB API so we don't scan the
+    // whole workspace; ordering is preserved by the underlying
+    // `ORDER BY created_at, rowid` in the DB layer.
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Chat session not found")?;
+    let workspace_id = chat_session.workspace_id.clone();
+    let messages: Vec<ChatMessage> = db
+        .list_chat_messages_for_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|m| !matches!(m.role, ChatRole::System))
+        .collect();
+
+    let prelude = agent::history_seeder::build_migration_prelude(&messages);
+
+    // When this command runs after an app restart (or for any session
+    // whose `AgentSessionState` is not yet in `state.agents`), we
+    // materialize a fresh entry below. Seed `session_id` and
+    // `turn_count` from the persisted `chat_sessions` row so
+    // `apply_migration_to_session`'s `prior_session_id` snapshot
+    // captures the REAL prior runtime session id — otherwise the
+    // post-migration cleanup (`end_agent_session` + `remove_pi_session_dir`)
+    // skips silently, leaving orphan `agent_sessions` rows and stale Pi
+    // session directories under `data/pi-sessions/<sid>/` even though the
+    // DB knew about the prior id.
+    let persisted_prior_sid = chat_session.session_id.clone().unwrap_or_default();
+    let persisted_prior_turn_count = chat_session.turn_count;
+
+    // Tear down the prior harness's persistent subprocess (if any).
+    // The new harness can't reuse it — different binary, different
+    // protocol. Capturing the snapshot under the lock then releasing
+    // before the awaits keeps the lock window tight (mirrors
+    // `reset_agent_session`'s pattern).
+    let snapshot = {
+        let mut agents = state.agents.write().await;
+        let session = agents
+            .entry(chat_session_id.clone())
+            .or_insert_with(|| AgentSessionState {
+                workspace_id: workspace_id.clone(),
+                session_id: persisted_prior_sid.clone(),
+                turn_count: persisted_prior_turn_count,
+                active_pid: None,
+                custom_instructions: None,
+                needs_attention: false,
+                attention_kind: None,
+                attention_notification_sent: false,
+                persistent_session: None,
+                claude_remote_control: crate::state::ClaudeRemoteControlStatus::disabled(),
+                claude_remote_control_monitor_pid: None,
+                local_user_message_uuids: Default::default(),
+                mcp_config_dirty: false,
+                session_plan_mode: false,
+                session_allowed_tools: Vec::new(),
+                session_fast_mode: false,
+                session_disable_1m_context: false,
+                session_backend_hash: String::new(),
+                pending_permissions: Default::default(),
+                running_background_tasks: Default::default(),
+                background_wake_active: false,
+                background_task_output_paths: Default::default(),
+                session_exited_plan: false,
+                session_resolved_env: Default::default(),
+                session_resolved_env_signature: String::new(),
+                mcp_bridge: None,
+                last_user_msg_id: None,
+                posted_env_trust_warning: false,
+                pending_history_prelude: None,
+            });
+
+        apply_migration_to_session(session, prelude)
+    };
+
+    if let Some((ps, drained)) = snapshot.drained_permissions {
+        deny_drained_permissions(drained, &ps, "Session migrated to a different runtime.").await;
+    }
+    if let Some(pid) = snapshot.pid_to_kill {
+        let _ = agent::stop_agent(pid).await;
+    }
+
+    // Persist the fresh session_id + turn_count so
+    // `send_chat_message`'s session-restore branch starts the new
+    // harness from a clean slate.
+    db.save_chat_session_state(&chat_session_id, &snapshot.new_session_id, 0)
+        .map_err(|e| e.to_string())?;
+    // Retire the prior session id (if any) so the agent_sessions
+    // table doesn't accumulate orphan rows pointing at the old
+    // transcript, and the Pi session dir for that id is cleaned up.
+    // Belt-and-suspenders fallback: if the in-memory snapshot's
+    // `prior_session_id` was empty (e.g. the `AgentSessionState`
+    // entry existed but had never been wired to a runtime sid), trust
+    // the persisted `chat_sessions.session_id` we captured before
+    // taking the lock so we still retire the row the DB knew about.
+    let prior_sid_for_cleanup = if snapshot.prior_session_id.is_empty() {
+        persisted_prior_sid
+    } else {
+        snapshot.prior_session_id.clone()
+    };
+    if !prior_sid_for_cleanup.is_empty() {
+        let _ = db.end_agent_session(&prior_sid_for_cleanup, false);
+        #[cfg(feature = "pi-sdk")]
+        super::remove_pi_session_dir(&state.db_path, &prior_sid_for_cleanup).await;
+    }
+
+    crate::tray::rebuild_tray(&app);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::take_stop_snapshot;
+    use super::{apply_migration_to_session, take_stop_snapshot};
     use crate::state::AgentSessionState;
     use claudette::agent::{AgentHarnessKind, AgentSession, CodexAppServerSession};
     use std::collections::HashMap;
@@ -220,6 +450,7 @@ mod tests {
             mcp_bridge: None,
             last_user_msg_id: None,
             posted_env_trust_warning: false,
+            pending_history_prelude: None,
         }
     }
 
@@ -311,5 +542,133 @@ mod tests {
         assert!(!session.needs_attention);
         assert!(session.attention_kind.is_none());
         assert!(!session.attention_notification_sent);
+    }
+
+    #[test]
+    fn apply_migration_mints_fresh_session_id_and_zeroes_turn_count() {
+        // Regression pin for the cross-harness contract: the new
+        // harness must start with a fresh sid + turn_count=0 so its
+        // own resume mechanism (`--resume`, Codex thread/resume, Pi
+        // continueRecent) decides "no prior history" — the prelude
+        // we'll merge into the next user turn IS the resume payload.
+        let mut session = fresh_session("sess-claude-old", 5, Some(11111));
+        let prior = session.session_id.clone();
+
+        let snapshot = apply_migration_to_session(&mut session, Some("PRELUDE".into()));
+
+        assert_eq!(snapshot.prior_session_id, prior);
+        assert_ne!(session.session_id, prior, "must mint a new sid");
+        assert!(!session.session_id.is_empty());
+        assert_eq!(session.turn_count, 0);
+        assert!(session.persistent_session.is_none());
+        assert!(
+            session.session_backend_hash.is_empty(),
+            "blanking the hash forces the drift check to respawn under the new harness"
+        );
+        assert_eq!(
+            session.pending_history_prelude.as_deref(),
+            Some("PRELUDE"),
+            "prelude must be queued so send_chat_message prepends it"
+        );
+    }
+
+    #[test]
+    fn apply_migration_handles_empty_prelude() {
+        // Migrating a brand-new chat (no prior messages) still needs
+        // to honour the harness switch — fresh sid, zero turn count,
+        // but no prelude (no history to seed).
+        let mut session = fresh_session("sess-fresh", 0, None);
+        let snapshot = apply_migration_to_session(&mut session, None);
+
+        assert_eq!(snapshot.prior_session_id, "sess-fresh");
+        assert!(!session.session_id.is_empty());
+        assert_eq!(session.turn_count, 0);
+        assert!(
+            session.pending_history_prelude.is_none(),
+            "no history to seed means no prelude"
+        );
+    }
+
+    #[test]
+    fn apply_migration_captures_pid_for_teardown() {
+        // The Tauri command awaits `agent::stop_agent(pid)` outside
+        // the lock; if the snapshot loses the pid the prior harness
+        // keeps running in the background and consuming resources.
+        let mut session = fresh_session("sess-running", 3, Some(42));
+        let snapshot = apply_migration_to_session(&mut session, Some("p".into()));
+        assert_eq!(snapshot.pid_to_kill, Some(42));
+        assert!(
+            session.active_pid.is_none(),
+            "active_pid must move to the snapshot so the caller can kill without racing"
+        );
+    }
+
+    #[test]
+    fn apply_migration_preserves_attention_state() {
+        // Attention flags are UI-side. The user can still respond to
+        // an outstanding question even after migrating models — the
+        // question itself was persisted to chat_messages and is
+        // re-served on the next render. Migration must not silently
+        // wipe needs_attention.
+        let mut session = fresh_session("sess-with-q", 4, Some(99));
+        session.needs_attention = true;
+        session.attention_kind = Some(crate::state::AttentionKind::Ask);
+        session.attention_notification_sent = true;
+
+        let _snapshot = apply_migration_to_session(&mut session, Some("p".into()));
+
+        assert!(session.needs_attention);
+        assert!(matches!(
+            session.attention_kind,
+            Some(crate::state::AttentionKind::Ask)
+        ));
+        assert!(session.attention_notification_sent);
+    }
+
+    #[test]
+    fn apply_migration_clears_persistent_process_coupled_state() {
+        // mcp_bridge, claude_remote_control_monitor_pid, and
+        // claude_remote_control are all documented as lifecycle-coupled
+        // to `persistent_session`. The migration tears down the prior
+        // persistent process (`pid_to_kill`) and nulls
+        // `persistent_session`; the bridge Arc and remote-control
+        // shadow state must reset alongside or we leak the bridge
+        // listener / unix socket and carry stale remote-control status
+        // into a new session id (especially under harnesses like Pi
+        // that don't use the bridge at all).
+        use crate::state::{ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
+
+        let mut session = fresh_session("sess-rc-active", 3, Some(77));
+        session.claude_remote_control_monitor_pid = Some(88);
+        session.claude_remote_control = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Connected,
+            session_url: Some("https://example/sess".into()),
+            connect_url: None,
+            environment_id: None,
+            detail: None,
+            last_error: None,
+        };
+
+        let _snapshot = apply_migration_to_session(&mut session, Some("p".into()));
+
+        assert!(
+            session.mcp_bridge.is_none(),
+            "mcp_bridge must drop with the prior persistent process"
+        );
+        assert!(
+            session.claude_remote_control_monitor_pid.is_none(),
+            "remote-control monitor pid is stale once the prior CLI is killed"
+        );
+        assert!(
+            matches!(
+                session.claude_remote_control.state,
+                ClaudeRemoteControlLifecycle::Disabled
+            ),
+            "remote-control status must reset to disabled for the new spawn"
+        );
+        assert!(
+            session.claude_remote_control.session_url.is_none(),
+            "stale session_url must be cleared so it does not appear next to the new sid"
+        );
     }
 }

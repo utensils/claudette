@@ -46,6 +46,7 @@ export interface PersistedViewStateV1 {
   sidebarWidth: number;
   rightSidebarWidth: number;
   terminalHeight: number;
+  composerHeight: number;
   rightSidebarTab: RightSidebarTab;
   sidebarGroupBy: SidebarGroupBy;
   sidebarRepoFilter: string;
@@ -334,6 +335,7 @@ function parsePersistedViewState(raw: string | null): PersistedViewState | null 
     sidebarWidth: clampNumber(parsed.sidebarWidth, 150, 600, 260),
     rightSidebarWidth: clampNumber(parsed.rightSidebarWidth, 150, 600, 250),
     terminalHeight: clampNumber(parsed.terminalHeight, 100, 800, 300),
+    composerHeight: clampNumber(parsed.composerHeight, 52, 1200, 52),
     rightSidebarTab: parseRightSidebarTab(parsed.rightSidebarTab, "files"),
     sidebarGroupBy: parseSidebarGroupBy(parsed.sidebarGroupBy, "repo"),
     sidebarRepoFilter: typeof parsed.sidebarRepoFilter === "string" ? parsed.sidebarRepoFilter : "all",
@@ -448,7 +450,8 @@ export function buildPersistedViewState(state: AppState): PersistedViewStateV1 {
     sidebarWidth: state.sidebarWidth,
     rightSidebarWidth: state.rightSidebarWidth,
     terminalHeight: state.terminalHeight,
-    rightSidebarTab: state.rightSidebarTab,
+    composerHeight: state.composerHeight,
+    rightSidebarTab: "files",
     sidebarGroupBy: state.sidebarGroupBy,
     sidebarRepoFilter: state.sidebarRepoFilter,
     sidebarShowArchived: state.sidebarShowArchived,
@@ -477,7 +480,6 @@ async function loadLegacyPanelState(): Promise<Partial<AppState>> {
     sbW,
     rsbW,
     termH,
-    rsbTab,
     sbGroup,
     sbArch,
   ] = await Promise.all([
@@ -487,7 +489,6 @@ async function loadLegacyPanelState(): Promise<Partial<AppState>> {
     getAppSetting(LEGACY_KEYS.sidebarWidth),
     getAppSetting(LEGACY_KEYS.rightSidebarWidth),
     getAppSetting(LEGACY_KEYS.terminalHeight),
-    getAppSetting(LEGACY_KEYS.rightSidebarTab),
     getAppSetting(LEGACY_KEYS.sidebarGroupBy),
     getAppSetting(LEGACY_KEYS.sidebarShowArchived),
   ]);
@@ -505,9 +506,6 @@ async function loadLegacyPanelState(): Promise<Partial<AppState>> {
   if (rsbWN !== null) updates.rightSidebarWidth = rsbWN;
   const termHN = parseClampedInt(termH, 100, 800);
   if (termHN !== null) updates.terminalHeight = termHN;
-  if (rsbTab && (RIGHT_SIDEBAR_TABS as readonly string[]).includes(rsbTab)) {
-    updates.rightSidebarTab = rsbTab as RightSidebarTab;
-  }
   if (sbGroup && (SIDEBAR_GROUP_BYS as readonly string[]).includes(sbGroup)) {
     updates.sidebarGroupBy = sbGroup as SidebarGroupBy;
   }
@@ -598,7 +596,7 @@ export function applyPersistedViewState(
     sidebarWidth: persisted.sidebarWidth,
     rightSidebarWidth: persisted.rightSidebarWidth,
     terminalHeight: persisted.terminalHeight,
-    rightSidebarTab: persisted.rightSidebarTab,
+    composerHeight: persisted.composerHeight,
     sidebarGroupBy: persisted.sidebarGroupBy,
     sidebarRepoFilter:
       persisted.sidebarRepoFilter === "all" || activeRepositoryIds.has(persisted.sidebarRepoFilter)

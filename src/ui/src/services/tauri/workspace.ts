@@ -2,13 +2,22 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Workspace } from "../../types";
 import type { CreateWorkspaceResult, SetupResult } from "../../types/repository";
 import type { WorkspaceEnvTrustNeededPayload } from "../../types/env";
+import type { RepositoryInputValues } from "../../types/repositoryInput";
 
 export function createWorkspace(
   repoId: string,
   name: string,
-  skipSetup?: boolean
+  skipSetup?: boolean,
+  /** Values for the repo's declared `required_inputs`. Omit when the repo
+   *  has no schema (the backend ignores the field in that case). */
+  inputValues?: RepositoryInputValues | null,
 ): Promise<CreateWorkspaceResult> {
-  return invoke("create_workspace", { repoId, name, skipSetup: skipSetup ?? false });
+  return invoke("create_workspace", {
+    repoId,
+    name,
+    skipSetup: skipSetup ?? false,
+    inputValues: inputValues ?? null,
+  });
 }
 
 export interface ForkWorkspaceResult {
@@ -61,6 +70,66 @@ export function reorderWorkspaces(
 
 export function deleteWorkspace(id: string): Promise<void> {
   return invoke("delete_workspace", { id });
+}
+
+export interface BulkDeleteFailure {
+  id: string;
+  error: string;
+}
+
+export interface BulkDeleteResult {
+  deleted: string[];
+  failed: BulkDeleteFailure[];
+  /**
+   * IDs that were skipped because the user cancelled mid-batch. These
+   * rows are untouched in the DB — re-running cleanup picks them up.
+   * Empty when the run finished naturally.
+   */
+  cancelled: string[];
+}
+
+/**
+ * `requestId` identifies the run for two purposes: (a) so the backend
+ * can emit `bulk-cleanup-progress` events tagged with the same id, which
+ * lets the modal filter out unrelated runs; and (b) so `cancelWorkspacesBulk`
+ * can target this specific run. Generate a fresh UUID per click —
+ * reusing one across clicks would let a stale cancel land on a new run.
+ *
+ * Pass `null` for headless / CLI-style use (no live progress, no cancel).
+ */
+export function deleteWorkspacesBulk(
+  ids: string[],
+  requestId: string | null,
+): Promise<BulkDeleteResult> {
+  return invoke("delete_workspaces_bulk", { ids, requestId });
+}
+
+/**
+ * Cooperatively cancel a bulk delete in flight. Idempotent — flipping
+ * a flag for an already-completed run is a no-op. Resolves to `true`
+ * when a matching run was found and signalled, `false` otherwise.
+ */
+export function cancelWorkspacesBulk(requestId: string): Promise<boolean> {
+  return invoke("cancel_workspaces_bulk", { requestId });
+}
+
+/**
+ * Per-row payload from the `bulk-cleanup-progress` Tauri event. Emitted
+ * once per workspace as the run iterates, in the same order the rows
+ * are processed. `status` is one of:
+ *   - `"deleted"` — DB row is gone; worktree/branch cleanup happens
+ *     asynchronously after the event fires.
+ *   - `"failed"` — DB delete refused (raced restore, SQLITE_BUSY, etc.);
+ *     `error` carries the message.
+ *   - `"cancelled"` — user clicked Cancel before this row was attempted;
+ *     the DB is untouched.
+ */
+export interface BulkCleanupProgress {
+  requestId: string;
+  workspaceId: string;
+  name: string;
+  status: "deleted" | "failed" | "cancelled";
+  error?: string;
 }
 
 /**

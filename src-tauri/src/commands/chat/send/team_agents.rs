@@ -43,7 +43,7 @@ impl TeamAgentInputTracker {
             event:
                 InnerStreamEvent::ContentBlockStart {
                     index,
-                    content_block: Some(StartContentBlock::ToolUse { id, name }),
+                    content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
                 },
         }) = event
             && name == "Agent"
@@ -188,7 +188,7 @@ fn spawn_claudette_send_chat_child(
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let prompt_file = write_secure_prompt_file(content)?;
 
-    let mut cmd = std::process::Command::new(exe);
+    let mut cmd = claudette::process::std_command(exe);
     cmd.arg("--claudette-send-chat")
         .arg("--session-id")
         .arg(session_id)

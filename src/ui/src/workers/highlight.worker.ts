@@ -1,8 +1,14 @@
 /**
  * Shiki syntax-highlighting worker.
  *
- * Holds a single Shiki highlighter loaded with `github-light` + `github-dark`
- * themes. Grammars are loaded on demand via the fine-grained `@shikijs/langs/*`
+ * Holds a single Shiki highlighter loaded with the Claudette theme (see
+ * `../styles/shikiClaudetteTheme.ts`). The theme's `foreground` values are
+ * `var(--syntax-*)` references, so emitted spans inherit per-theme colors
+ * from the active Claudette theme without the worker needing to know which
+ * theme is active. No more dual-theme (`github-light` + `github-dark`)
+ * machinery — light/dark switching happens entirely via the CSS cascade.
+ *
+ * Grammars are loaded on demand via the fine-grained `@shikijs/langs/*`
  * dynamic imports below — only languages actually requested at runtime are
  * fetched, and Vite splits each into its own chunk. Plugin-contributed
  * grammars are registered ahead of time via `register-grammar` messages
@@ -30,6 +36,10 @@ import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createOnigurumaEngine } from "shiki/engine/oniguruma";
 import { toHtml } from "hast-util-to-html";
 import type { Element, ElementContent, Root } from "hast";
+import {
+  buildClaudetteShikiTheme,
+  CLAUDETTE_SHIKI_THEME_NAME,
+} from "../styles/shikiClaudetteTheme";
 
 // Each entry imports a single grammar. Vite code-splits each into its own
 // chunk; only languages actually used are downloaded.
@@ -100,10 +110,10 @@ const failedLangs = new Set<string>();
 function getHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighterCore({
-      themes: [
-        import("@shikijs/themes/github-light"),
-        import("@shikijs/themes/github-dark"),
-      ],
+      // Single Claudette theme whose token colors are `var(--syntax-*)`
+      // references. The cascade resolves them per-theme at render time —
+      // no separate light/dark themes needed.
+      themes: [buildClaudetteShikiTheme()],
       langs: [],
       engine: createOnigurumaEngine(import("shiki/wasm")),
     });
@@ -200,8 +210,7 @@ async function highlight(code: string, lang: string): Promise<string | null> {
     const useLang = lang ? await ensureLang(hl, lang) : "text";
     const root = hl.codeToHast(code, {
       lang: useLang,
-      themes: { light: "github-light", dark: "github-dark" },
-      defaultColor: false,
+      theme: CLAUDETTE_SHIKI_THEME_NAME,
     });
     const codeEl = findCodeElement(root);
     if (!codeEl) return null;

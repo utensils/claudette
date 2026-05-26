@@ -24,6 +24,7 @@ pub(crate) fn make_repo(id: &str, path: &str, name: &str) -> Repository {
         archive_script_auto_run: false,
         base_branch: None,
         default_remote: None,
+        required_inputs: None,
         path_valid: true,
     }
 }
@@ -40,6 +41,7 @@ pub(crate) fn make_workspace(id: &str, repo_id: &str, name: &str) -> Workspace {
         status_line: String::new(),
         created_at: String::new(),
         sort_order: 0,
+        input_values: None,
     }
 }
 

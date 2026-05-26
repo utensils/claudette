@@ -44,7 +44,7 @@ const appStore = vi.hoisted(() => ({
 }));
 
 const serviceMocks = vi.hoisted(() => ({
-  getAppSetting: vi.fn(() => Promise.resolve(null)),
+  getAppSetting: vi.fn((_key: string) => Promise.resolve(null as string | null)),
   setAppSetting: vi.fn(() => Promise.resolve()),
   deleteAppSetting: vi.fn(() => Promise.resolve()),
   listAppSettingsWithPrefix: vi.fn(() => Promise.resolve([])),
@@ -157,6 +157,26 @@ vi.mock("../../../stores/useAppStore", () => {
 });
 
 vi.mock("../../../services/tauri", () => serviceMocks);
+
+// Stub the Pi provider-auth Tauri commands so the embedded
+// `PiProviderManager` in the Pi card doesn't error in jsdom (no real
+// Tauri IPC, no harness sidecar). Tests that need to assert on the
+// manager's behavior should override individual mocks rather than
+// adding logic here.
+vi.mock("../../../services/tauri/piProviders", () => ({
+  piListProviders: vi.fn(() =>
+    Promise.resolve({ defaultVisibleCount: 6, providers: [] }),
+  ),
+  piSetProviderApiKey: vi.fn(() => Promise.resolve()),
+  piClearProviderApiKey: vi.fn(() => Promise.resolve()),
+  piOAuthStart: vi.fn(() =>
+    Promise.resolve({ challengeId: "test", providerId: "openrouter" }),
+  ),
+  piOAuthSubmitInput: vi.fn(() => Promise.resolve()),
+  piOAuthCancel: vi.fn(() => Promise.resolve()),
+  listenPiOAuthEvents: vi.fn(() => Promise.resolve(() => {})),
+  PI_OAUTH_EVENT_CHANNEL: "pi://oauth/event",
+}));
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, callback: (event: { payload: unknown }) => void) => {
@@ -296,6 +316,37 @@ describe("ModelSettings", () => {
     expect(container.textContent).toContain("models_backends_title");
     expect(container.textContent).toContain("auth_setting_label");
     expect(container.textContent).toContain("auth_status_signed_in");
+  });
+
+  it("shows default plan mode for Claude-compatible defaults", async () => {
+    const container = await renderModelSettings();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector('button[aria-label="models_default_plan_mode"]'),
+    ).not.toBeNull();
+  });
+
+  it("shows default plan mode when the selected default backend is Codex", async () => {
+    serviceMocks.getAppSetting.mockImplementation((key: string) => {
+      if (key === "default_model") return Promise.resolve("gpt-5.4");
+      if (key === "default_agent_backend") return Promise.resolve("codex");
+      if (key === "default_plan_mode") return Promise.resolve("true");
+      return Promise.resolve(null);
+    });
+
+    const container = await renderModelSettings();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector('button[aria-label="models_default_plan_mode"]'),
+    ).not.toBeNull();
   });
 
   it("honors the Claude auth focus target from the Models provider section", async () => {

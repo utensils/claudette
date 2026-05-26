@@ -3,16 +3,15 @@ use std::path::Path;
 use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
-use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
-use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
+use crate::process::sanitize_claude_subprocess_env;
 
 use super::AgentSettings;
 use super::args::{build_claude_args, build_stdin_message};
 use super::binary::resolve_claude_path;
-use super::environment::{apply_resolved_env_to_command, apply_teammate_command_override};
+use super::environment::{apply_teammate_command_override, build_agent_command};
 use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 
 /// Events emitted by an agent turn (stream events + process lifecycle).
@@ -106,13 +105,9 @@ pub async fn run_turn(
 
     sanitize_claude_subprocess_env(&mut cmd);
 
-    // Apply user-provided env-provider output (direnv / mise / nix-devshell /
-    // dotenv) BEFORE the workspace's CLAUDETTE_* markers so those always win,
-    // and BEFORE the settings-driven 1M-context toggle so the UI choice
-    // cannot be overridden by a provider that happens to export the same key.
-    if let Some(env) = resolved_env {
-        apply_resolved_env_to_command(&mut cmd, env);
-    }
+    // build_agent_command applies the merged env-provider map for direct
+    // spawns, or wraps Nix workspaces in `nix develop --command` so the
+    // agent gets the clean devshell instead of direnv/profile output.
     settings.backend_runtime.apply_to_command(&mut cmd);
 
     cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
@@ -178,7 +173,7 @@ pub async fn run_turn(
     // canonical record. `is_resume == false` is the canonical "first turn"
     // signal already used elsewhere in this function.
     if !is_resume {
-        emit_invocation_event(&event_tx, &claude_path, &args);
+        emit_invocation_event(&event_tx, &invocation_program, &invocation_args);
     }
 
     // Stdout reader task — parse stream-json events
@@ -262,16 +257,14 @@ pub async fn stop_agent(pid: u32) -> Result<(), String> {
 async fn stop_agent_force(pid: u32) -> std::io::Result<std::process::Output> {
     #[cfg(unix)]
     {
-        tokio::process::Command::new("kill")
-            .no_console_window()
+        crate::process::command("kill")
             .args(["-9", &pid.to_string()])
             .output()
             .await
     }
     #[cfg(windows)]
     {
-        tokio::process::Command::new("taskkill")
-            .no_console_window()
+        crate::process::command("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .output()
             .await
@@ -290,14 +283,12 @@ pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
     // Send the graceful signal. Errors here are non-fatal — the force
     // escalation below covers any "process didn't respond" case.
     #[cfg(unix)]
-    let _ = tokio::process::Command::new("kill")
-        .no_console_window()
+    let _ = crate::process::command("kill")
         .args(["-15", &pid.to_string()])
         .output()
         .await;
     #[cfg(windows)]
-    let _ = tokio::process::Command::new("taskkill")
-        .no_console_window()
+    let _ = crate::process::command("taskkill")
         .args(["/PID", &pid.to_string(), "/T"])
         .output()
         .await;
@@ -326,8 +317,7 @@ pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
 async fn pid_is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        let probe = tokio::process::Command::new("kill")
-            .no_console_window()
+        let probe = crate::process::command("kill")
             .args(["-0", &pid.to_string()])
             .output()
             .await;
@@ -335,8 +325,7 @@ async fn pid_is_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        let probe = tokio::process::Command::new("tasklist")
-            .no_console_window()
+        let probe = crate::process::command("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
             .output()
             .await;
@@ -365,8 +354,7 @@ mod tests {
     #[tokio::test]
     async fn test_stop_agent_graceful_stops_process_before_escalation() {
         // Spawn a process that traps SIGTERM and exits cleanly.
-        let mut child = tokio::process::Command::new("sh")
-            .no_console_window()
+        let mut child = crate::process::command("sh")
             .args(["-c", "trap 'exit 0' TERM; sleep 5"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -387,8 +375,7 @@ mod tests {
             .expect("failed to reap child");
 
         // kill -0 should fail for a dead process.
-        let probe = tokio::process::Command::new("kill")
-            .no_console_window()
+        let probe = crate::process::command("kill")
             .args(["-0", &pid.to_string()])
             .output()
             .await;

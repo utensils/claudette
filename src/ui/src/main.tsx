@@ -31,6 +31,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { ErrorBoundary } from "./components/layout/ErrorBoundary";
 import { prewarmHighlighter } from "./utils/highlight";
 import { bootstrapGrammarRegistry } from "./utils/grammarRegistry";
+// Dev-only: registers window.__CLAUDETTE_THEME_PROOF__ so theme authors can
+// audit every token from the devtools console. No effect in release builds.
+import "./utils/themeProof";
 import App from "./App.tsx";
 
 const platform = navigator.platform.toLowerCase();

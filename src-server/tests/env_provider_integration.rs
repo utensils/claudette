@@ -70,6 +70,7 @@ fn make_repo(path: &str) -> Repository {
         archive_script_auto_run: false,
         base_branch: None,
         default_remote: None,
+        required_inputs: None,
         path_valid: true,
     }
 }
@@ -86,6 +87,7 @@ fn make_workspace(repo_id: &str, worktree: &str) -> Workspace {
         status_line: String::new(),
         created_at: "2026-01-01 00:00:00".into(),
         sort_order: 0,
+        input_values: None,
     }
 }
 
@@ -169,7 +171,7 @@ async fn server_applies_resolved_env_to_spawned_command() {
     )
     .await;
 
-    let mut cmd = tokio::process::Command::new("sh");
+    let mut cmd = claudette::process::command("sh");
     cmd.arg("-c").arg("printf '%s' \"$FOO\"");
     // Drop FOO from the parent env so we can't accidentally pass.
     cmd.env_remove("FOO");

@@ -7,13 +7,15 @@ describe("editor view-state (word wrap, line numbers, font zoom)", () => {
       editorWordWrap: true,
       editorLineNumbersEnabled: true,
       editorFontZoom: 1,
+      revealActiveFileInTree: true,
     });
   });
 
-  it("defaults to wrap on, line numbers on, zoom 1.0", () => {
+  it("defaults to wrap on, line numbers on, active-file reveal on, zoom 1.0", () => {
     const state = useAppStore.getState();
     expect(state.editorWordWrap).toBe(true);
     expect(state.editorLineNumbersEnabled).toBe(true);
+    expect(state.revealActiveFileInTree).toBe(true);
     expect(state.editorFontZoom).toBe(1);
   });
 
@@ -27,6 +29,11 @@ describe("editor view-state (word wrap, line numbers, font zoom)", () => {
   it("setEditorLineNumbersEnabled toggles the flag", () => {
     useAppStore.getState().setEditorLineNumbersEnabled(false);
     expect(useAppStore.getState().editorLineNumbersEnabled).toBe(false);
+  });
+
+  it("setRevealActiveFileInTree toggles the flag", () => {
+    useAppStore.getState().setRevealActiveFileInTree(false);
+    expect(useAppStore.getState().revealActiveFileInTree).toBe(false);
   });
 
   it("setEditorFontZoom clamps to the [0.7, 2] range", () => {

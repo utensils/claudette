@@ -15,7 +15,10 @@ import {
 } from "./editActivitySummary";
 import { resolveToolSummary } from "./toolMetadata";
 import { isSkillActivity, skillActivationName } from "./toolActivityGroups";
+import { parseMcpToolName } from "./mcpToolName";
+import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import type { DiffLayer } from "../../types/diff";
+import { parseAskUserQuestion } from "../../hooks/parseAgentQuestion";
 
 interface ToolActivityRowProps {
   activity: ToolActivity;
@@ -27,6 +30,10 @@ interface ToolActivityRowProps {
    *  pick up the compact treatment from a `.inlineTurnActivities`
    *  ancestor instead. */
   inline?: boolean;
+  /** Set when the row is rendered inside an MCP group container (whose
+   *  header already shows the server name): drop the redundant
+   *  `mcp__<server>__` prefix and display the bare tool name. */
+  mcp?: boolean;
 }
 
 interface ToolDetails {
@@ -91,6 +98,7 @@ function GenericToolActivityRow({
   activity,
   searchQuery,
   worktreePath,
+  mcp,
 }: ToolActivityRowProps) {
   const expanded = useAppStore((s) => !!s.expandedToolUseIds[activity.toolUseId]);
   const toggleToolUseExpanded = useAppStore((s) => s.toggleToolUseExpanded);
@@ -103,6 +111,12 @@ function GenericToolActivityRow({
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
   const editSummary = summarizeToolActivityEdit(activity);
   const summary = activitySummaryText(activity);
+  // Inside an MCP container the server is already in the group header, so
+  // show just the bare tool name (`search_datadog_dashboards`) instead of
+  // the full `mcp__datadog__search_datadog_dashboards`.
+  const displayName = mcp
+    ? (parseMcpToolName(activity.toolName)?.tool ?? activity.toolName)
+    : activity.toolName;
   const details = useMemo(() => toolDetails(activity), [activity]);
   const cachedHtml = details.lang
     ? getCachedHighlight(details.content, details.lang)
@@ -125,6 +139,10 @@ function GenericToolActivityRow({
   const openEditedFile = useCallback(
     (filePath: string) => {
       if (!selectedWorkspaceId) return;
+      // Agent-managed files (plans, memory) live outside the worktree, so
+      // they have no diff entry and no worktree-relative form — route them
+      // straight to a read-only Monaco tab.
+      if (tryOpenAgentFileTab(selectedWorkspaceId, filePath, openFileTab)) return;
       const relativePath = relativizePath(filePath, worktreePath).replace(/\\/g, "/");
       const diffTarget = findDiffTarget(relativePath, diffFiles, diffStagedFiles);
       if (diffTarget) {
@@ -145,6 +163,10 @@ function GenericToolActivityRow({
     ],
   );
 
+  // The visible row shows the stripped `displayName`, but the toggle's
+  // accessible label keeps the full `activity.toolName` (incl. the
+  // `mcp__<server>__` prefix) so screen-reader users get an unambiguous,
+  // server-qualified name — two servers can each expose a `query` tool.
   const label = `${expanded ? "Collapse" : "Expand"} ${activity.toolName} input details`;
 
   return (
@@ -179,7 +201,7 @@ function GenericToolActivityRow({
             className={styles.toolName}
             style={{ color: toolColor(activity.toolName) }}
           >
-            {activity.toolName}
+            {displayName}
           </span>
         )}
         {!editSummary && summary && (
@@ -287,6 +309,30 @@ function readableToolInput(
   input: Record<string, unknown>,
 ): ToolDetails | null {
   const normalized = toolName.toLowerCase();
+
+  if (normalized === "askuserquestion") {
+    const questions = parseAskUserQuestion(input);
+    if (questions.length > 0) {
+      const lines = ["questions:"];
+      for (const q of questions) {
+        lines.push(`  - question: ${yamlScalar(q.question)}`);
+        if (q.header) lines.push(`    header: ${yamlScalar(q.header)}`);
+        if (q.multiSelect) lines.push("    multiSelect: true");
+        if (q.options.length > 0) {
+          lines.push("    options:");
+          for (const option of q.options) {
+            lines.push(`      - label: ${yamlScalar(option.label)}`);
+            if (option.description) {
+              lines.push(
+                `        description: ${yamlScalar(option.description)}`,
+              );
+            }
+          }
+        }
+      }
+      return { content: lines.join("\n"), lang: "yaml" };
+    }
+  }
 
   if (normalized === "edit") {
     const details = replacementDetails(input, {

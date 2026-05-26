@@ -44,7 +44,7 @@ function makeDeps(overrides: Partial<EditorActionsDeps> = {}): EditorActionsDeps
     setAllFilesDirExpanded: vi.fn(),
     rightSidebarVisible: false,
     showRightSidebar: vi.fn(),
-    setRightSidebarTab: vi.fn(),
+    setRightSidebarTabForWorkspace: vi.fn(),
     openCommandPaletteFileMode: vi.fn(),
     wordWrap: true,
     setWordWrap: vi.fn(),
@@ -145,7 +145,7 @@ describe("buildEditorActions — file menu", () => {
     const deps = makeDeps({ rightSidebarVisible: false });
     buildEditorActions(deps).onRevealInFiles();
     expect(deps.showRightSidebar).toHaveBeenCalledTimes(1);
-    expect(deps.setRightSidebarTab).toHaveBeenCalledWith("files");
+    expect(deps.setRightSidebarTabForWorkspace).toHaveBeenCalledWith("ws-1", "files");
     expect(deps.setAllFilesDirExpanded).toHaveBeenCalledWith(
       "ws-1",
       "src/",
@@ -166,7 +166,7 @@ describe("buildEditorActions — file menu", () => {
     const deps = makeDeps({ rightSidebarVisible: true });
     buildEditorActions(deps).onRevealInFiles();
     expect(deps.showRightSidebar).not.toHaveBeenCalled();
-    expect(deps.setRightSidebarTab).toHaveBeenCalledWith("files");
+    expect(deps.setRightSidebarTabForWorkspace).toHaveBeenCalledWith("ws-1", "files");
   });
 });
 

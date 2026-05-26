@@ -740,6 +740,154 @@ fn direnv_export_stamp_filter_keeps_legit_paths_containing_direnv_segments() {
 }
 
 #[test]
+fn direnv_export_watches_list_drops_nix_direnv_layout_artifacts() {
+    // Regression for issue #888: nix-direnv writes derived build
+    // artifacts into the worktree's own `.direnv/` directory
+    // (`flake-profile-<sha>` symlinks + `.rc`, `flake-inputs/`,
+    // `bin/nix-direnv-reload`, `added_paths`) and direnv reports them
+    // in `DIRENV_WATCHES` for its shell hook. Watching them is
+    // self-defeating — every successful evaluation re-touches one and
+    // primes the next spurious cache eviction. They must be dropped;
+    // the real source files outside `.direnv/` must survive.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let envrc_path = format!("{worktree}/.envrc");
+    let flake_nix = format!("{worktree}/flake.nix");
+    let flake_lock = format!("{worktree}/flake.lock");
+    let layout_artifacts = [
+        format!("{worktree}/.direnv/flake-profile-3b9c1f2a"),
+        format!("{worktree}/.direnv/flake-profile-3b9c1f2a.rc"),
+        format!("{worktree}/.direnv/flake-inputs/abcd1234"),
+        format!("{worktree}/.direnv/bin/nix-direnv-reload"),
+        format!("{worktree}/.direnv/added_paths"),
+    ];
+    let mut paths: Vec<&str> = vec![envrc_path.as_str(), flake_nix.as_str(), flake_lock.as_str()];
+    paths.extend(layout_artifacts.iter().map(|s| s.as_str()));
+    let encoded = encode_direnv_watches(&paths);
+
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+    let env_json = serde_json::to_string(&serde_json::json!({
+        "FOO": "bar",
+        "DIRENV_WATCHES": encoded,
+    }))
+    .unwrap();
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().unwrap();
+    let watched_tbl: mlua::Table = result.get("watched").unwrap();
+    let len = watched_tbl.len().unwrap() as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).unwrap())
+        .collect();
+
+    // Real source files survive — the legitimate invalidation triggers.
+    for src_path in [&envrc_path, &flake_nix, &flake_lock] {
+        assert!(
+            watched.contains(src_path),
+            "{src_path} must survive the .direnv layout filter; got {watched:?}"
+        );
+    }
+    // nix-direnv's internal artifacts are dropped.
+    for artifact in &layout_artifacts {
+        assert!(
+            !watched.contains(artifact),
+            "nix-direnv artifact {artifact} leaked into watched; cache will thrash. got {watched:?}"
+        );
+    }
+}
+
+#[test]
+fn direnv_export_layout_filter_is_anchored_to_worktree() {
+    // The `.direnv/` filter must be anchored to `<worktree>/.direnv/`,
+    // not match a bare `.direnv` path component anywhere. A workspace
+    // whose worktree itself happens to live under an unrelated
+    // `.direnv/` ancestor directory must keep its real `.envrc` /
+    // `flake.lock` — dropping those would silently stop the EnvCache
+    // from noticing genuine edits.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
+    // A worktree path that contains `.direnv` as an ancestor segment.
+    let worktree = "/home/dev/.direnv/checkouts/myrepo";
+    let envrc_path = format!("{worktree}/.envrc");
+    let flake_lock = format!("{worktree}/flake.lock");
+    // A genuine nix-direnv artifact under THIS worktree's own
+    // `.direnv/` — still must be dropped.
+    let real_artifact = format!("{worktree}/.direnv/flake-profile-deadbeef");
+    let encoded = encode_direnv_watches(&[
+        envrc_path.as_str(),
+        flake_lock.as_str(),
+        real_artifact.as_str(),
+    ]);
+
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+    let env_json = serde_json::to_string(&serde_json::json!({
+        "FOO": "bar",
+        "DIRENV_WATCHES": encoded,
+    }))
+    .unwrap();
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().unwrap();
+    let watched_tbl: mlua::Table = result.get("watched").unwrap();
+    let len = watched_tbl.len().unwrap() as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).unwrap())
+        .collect();
+
+    assert!(
+        watched.contains(&envrc_path),
+        ".envrc under a `.direnv` ancestor must survive; got {watched:?}"
+    );
+    assert!(
+        watched.contains(&flake_lock),
+        "flake.lock under a `.direnv` ancestor must survive; got {watched:?}"
+    );
+    assert!(
+        !watched.contains(&real_artifact),
+        "the worktree's own .direnv/ artifact must still be dropped; got {watched:?}"
+    );
+}
+
+#[test]
 fn direnv_export_strip_is_prefix_based_for_future_markers() {
     // The strip matches `^DIRENV_` rather than a hardcoded deny-list,
     // so if direnv ships a new internal marker (e.g. `DIRENV_LAYOUT_*`
@@ -1058,6 +1206,19 @@ fn nix_detect_skips_plain_repo() {
     ));
 }
 
+/// PATH the stubbed `nix develop --command` probe returns in
+/// `nix_export_returns`. Shaped like a real devshell PATH — store tool
+/// dirs prepended to a host PATH — and includes the `/path-not-set`
+/// placeholder plus an empty segment so the helper-based tests also
+/// exercise the plugin's PATH cleaning.
+const NIX_DEVSHELL_PROBE_PATH: &str =
+    "/nix/store/aaaa-devshell/bin:/path-not-set::/nix/store/bbbb-cargo/bin:/usr/bin:/bin";
+
+/// `NIX_DEVSHELL_PROBE_PATH` after the plugin drops the `/path-not-set`
+/// placeholder and the empty segment.
+const NIX_DEVSHELL_CLEAN_PATH: &str =
+    "/nix/store/aaaa-devshell/bin:/nix/store/bbbb-cargo/bin:/usr/bin:/bin";
+
 /// Drive env-nix-devshell's `export` with a stubbed `host.exec` that
 /// returns a `nix print-dev-env --json`-shaped payload built from
 /// `variables` (a map of `NAME -> {type, value}`). Returns the env_map
@@ -1080,16 +1241,26 @@ fn nix_export_returns(
 
     let payload = serde_json::json!({ "variables": variables });
     let payload_json = serde_json::to_string(&payload).unwrap();
+    // The plugin makes two `nix` calls: `print-dev-env --json` for the
+    // structured vars, then a `nix develop --command` probe for the
+    // real PATH. Stub both; the probe returns NIX_DEVSHELL_PROBE_PATH.
+    let probe = NIX_DEVSHELL_PROBE_PATH;
     let stub = format!(
         r#"
         host.exec = function(cmd, args)
             if cmd ~= "nix" then error("expected cmd='nix', got: " .. tostring(cmd)) end
-            if type(args) ~= "table" or args[1] ~= "print-dev-env" or args[2] ~= "--json" then
-                error("expected args[1..2]={{'print-dev-env','--json'}}")
+            if args[1] == "print-dev-env" then
+                if args[2] ~= "--json" then
+                    error("expected print-dev-env --json")
+                end
+                return {{ stdout = [==[{payload_json}]==], stderr = "", code = 0 }}
+            elseif args[1] == "develop" then
+                return {{ stdout = [==[{probe}]==], stderr = "", code = 0 }}
+            else
+                error("unexpected nix subcommand: " .. tostring(args[1]))
             end
-            return {{ stdout = [==[{payload_json}]==], stderr = "", code = 0 }}
         end
-        "#
+        "#,
     );
     lua.load(&stub).exec().expect("install stub");
 
@@ -1123,6 +1294,11 @@ fn nix_export_returns(
 /// contain `~/.claude/.credentials.json`. Pin the denylist so the
 /// regression cannot return silently: if any of these names re-appear
 /// in the exported env, this test fails before the user does.
+///
+/// `PATH` is the one denylist name that still ends up in the env — the
+/// `/path-not-set` placeholder from `--json` is dropped, but the plugin
+/// replaces it with the real devshell PATH from the `nix develop`
+/// probe. The assertion below pins that distinction.
 #[test]
 fn nix_export_drops_sandbox_and_bash_builtin_vars() {
     // Mirror the real payload shape — everything is type=exported with
@@ -1178,7 +1354,6 @@ fn nix_export_drops_sandbox_and_bash_builtin_vars() {
     // real values in the agent subprocess.
     let banned = [
         "HOME",
-        "PATH",
         "SHELL",
         "TMPDIR",
         "TMP",
@@ -1229,6 +1404,14 @@ fn nix_export_drops_sandbox_and_bash_builtin_vars() {
     // Non-sandbox vars must pass through — otherwise the filter is too
     // wide and would silently break real devshell exports.
     assert_eq!(env.get("LANG").map(String::as_str), Some("en_US.UTF-8"));
+
+    // PATH must be present — but as the probed devshell PATH, never the
+    // `/path-not-set` placeholder the `--json` payload carried.
+    assert_eq!(
+        env.get("PATH").map(String::as_str),
+        Some(NIX_DEVSHELL_CLEAN_PATH),
+        "PATH must be the real devshell PATH from the `nix develop` probe"
+    );
 }
 
 /// Filter is a denylist of names — values are not inspected. A
@@ -1314,18 +1497,29 @@ fn nix_export_shell_nix_uses_file_arg_and_watches_shell_nix() {
         r#"
         host.exec = function(cmd, args)
             if cmd ~= "nix" then error("expected cmd='nix', got: " .. tostring(cmd)) end
-            -- `-L` (print-build-logs) was added so streaming surfaces
-            -- per-derivation build output in the EnvProvisioningConsole.
-            -- The shell.nix path slides to args[5] as a result.
-            if type(args) ~= "table"
-                or args[1] ~= "print-dev-env"
-                or args[2] ~= "--json"
-                or args[3] ~= "-L"
-                or args[4] ~= "-f"
-                or args[5] ~= "{expected_shell}" then
-                error("expected shell.nix args")
+            if args[1] == "print-dev-env" then
+                -- `-L` (print-build-logs) was added so streaming surfaces
+                -- per-derivation build output in the EnvProvisioningConsole.
+                -- The shell.nix path slides to args[5] as a result.
+                if args[2] ~= "--json"
+                    or args[3] ~= "-L"
+                    or args[4] ~= "-f"
+                    or args[5] ~= "{expected_shell}" then
+                    error("expected shell.nix print-dev-env args")
+                end
+                return {{ stdout = [==[{payload_json}]==], stderr = "", code = 0 }}
+            elseif args[1] == "develop" then
+                -- The PATH probe must target the same shell.nix:
+                --   nix develop -f <shell.nix> --command sh -c '...'
+                if args[2] ~= "-f"
+                    or args[3] ~= "{expected_shell}"
+                    or args[4] ~= "--command" then
+                    error("expected shell.nix `nix develop` probe args")
+                end
+                return {{ stdout = [==[/nix/store/shell-only/bin:/usr/bin]==], stderr = "", code = 0 }}
+            else
+                error("unexpected nix subcommand: " .. tostring(args[1]))
             end
-            return {{ stdout = [==[{payload_json}]==], stderr = "", code = 0 }}
         end
         "#
     );
@@ -1346,8 +1540,156 @@ fn nix_export_shell_nix_uses_file_arg_and_watches_shell_nix() {
     let watched = table_strings(watched_tbl);
 
     assert_eq!(env_tbl.get::<String>("SHELL_ONLY").unwrap(), "yes");
+    // The `nix develop` PATH probe targets the same shell.nix and its
+    // result lands on PATH.
+    assert_eq!(
+        env_tbl.get::<String>("PATH").unwrap(),
+        "/nix/store/shell-only/bin:/usr/bin"
+    );
     assert!(watched.iter().any(|p| p.ends_with("shell.nix")));
     assert!(!watched.iter().any(|p| p.ends_with("flake.nix")));
+}
+
+/// On a flake repo the plugin probes the real devshell PATH with
+/// `nix develop --command sh -c 'printf %s "$PATH"'` (no installable
+/// arg — `--command` follows `develop` directly) and exports the
+/// result, stripping the `/path-not-set` placeholder and empty
+/// segments. Pins issue #915's core fix.
+#[test]
+fn nix_export_recovers_devshell_path_for_flake() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
+    let lua = make_vm("env-nix-devshell", &["nix"], tmp.path());
+
+    let stub = r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "nix" then error("expected cmd='nix'") end
+            if args[1] == "print-dev-env" then
+                return { stdout = [==[{"variables":{}}]==], stderr = "", code = 0 }
+            elseif args[1] == "develop" then
+                if args[2] ~= "--command"
+                    or args[3] ~= "sh"
+                    or args[4] ~= "-c"
+                    or args[5] ~= [[printf %s "$PATH"]] then
+                    error("unexpected develop probe args")
+                end
+                return { stdout = "/nix/store/dev/bin:/path-not-set::/usr/bin", stderr = "", code = 0 }
+            else
+                error("unexpected nix subcommand")
+            end
+        end
+    "#;
+    lua.load(stub).exec().expect("install stub");
+
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = NIX_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().expect("export");
+    let env_tbl: mlua::Table = result.get("env").expect("env field");
+    assert_eq!(
+        env_tbl.get::<String>("PATH").unwrap(),
+        "/nix/store/dev/bin:/usr/bin",
+        "probe PATH must be exported with /path-not-set and empty segments stripped"
+    );
+}
+
+#[test]
+fn nix_export_preserves_semicolon_path_separator() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
+    let lua = make_vm("env-nix-devshell", &["nix"], tmp.path());
+
+    let stub = r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "nix" then error("expected cmd='nix'") end
+            if args[1] == "print-dev-env" then
+                return { stdout = [==[{"variables":{}}]==], stderr = "", code = 0 }
+            elseif args[1] == "develop" then
+                return {
+                    stdout = [[C:\nix\store\devshell\bin;/path-not-set;;C:\Windows\System32]],
+                    stderr = "",
+                    code = 0,
+                }
+            else
+                error("unexpected nix subcommand")
+            end
+        end
+    "#;
+    lua.load(stub).exec().expect("install stub");
+
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = NIX_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().expect("export");
+    let env_tbl: mlua::Table = result.get("env").expect("env field");
+    assert_eq!(
+        env_tbl.get::<String>("PATH").unwrap(),
+        r"C:\nix\store\devshell\bin;C:\Windows\System32",
+        "semicolon-separated PATHs must keep their separator while being cleaned"
+    );
+}
+
+/// When the `nix develop` PATH probe fails, the plugin keeps the
+/// `print-dev-env` vars and simply omits PATH — it must not abort the
+/// whole export (issue #915, "degrade gracefully").
+#[test]
+fn nix_export_keeps_other_vars_when_path_probe_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
+    let lua = make_vm("env-nix-devshell", &["nix"], tmp.path());
+
+    let stub = r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "nix" then error("expected cmd='nix'") end
+            if args[1] == "print-dev-env" then
+                return {
+                    stdout = [==[{"variables":{"CC":{"type":"exported","value":"clang"}}}]==],
+                    stderr = "", code = 0,
+                }
+            elseif args[1] == "develop" then
+                return { stdout = "", stderr = "no devShell", code = 1 }
+            else
+                error("unexpected nix subcommand")
+            end
+        end
+    "#;
+    lua.load(stub).exec().expect("install stub");
+
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = NIX_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua
+        .load(&script)
+        .eval()
+        .expect("export must not abort when the PATH probe fails");
+    let env_tbl: mlua::Table = result.get("env").expect("env field");
+    assert_eq!(
+        env_tbl.get::<String>("CC").unwrap(),
+        "clang",
+        "print-dev-env vars must survive a failed PATH probe"
+    );
+    assert!(
+        env_tbl.get::<mlua::Value>("PATH").unwrap().is_nil(),
+        "PATH must be absent when the probe fails, not a broken value"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1472,7 +1814,7 @@ async fn integration_direnv_export_returns_env() {
 
     // direnv requires the .envrc to be allowed. direnv reads HOME for
     // its allow-cache location, which we've redirected above.
-    let status = std::process::Command::new("direnv")
+    let status = crate::process::std_command("direnv")
         .arg("allow")
         .current_dir(tmp.path())
         .status()
@@ -1555,7 +1897,7 @@ async fn integration_mise_export_returns_env() {
     .unwrap();
 
     // mise requires explicit trust for per-project config.
-    let status = std::process::Command::new("mise")
+    let status = crate::process::std_command("mise")
         .arg("trust")
         .current_dir(tmp.path())
         .status()
@@ -2069,5 +2411,22 @@ async fn integration_nix_devshell_export_returns_env() {
             .and_then(|v| v.as_deref()),
         Some("ok"),
         "expected CLAUDETTE_NIX_TEST=ok in merged env; full resolved = {resolved:#?}"
+    );
+
+    // #915: the devshell's real PATH must be recovered via the
+    // `nix develop` probe and exported — not the `/path-not-set`
+    // placeholder, and not absent.
+    let path = resolved
+        .vars
+        .get("PATH")
+        .and_then(|v| v.as_deref())
+        .expect("env-nix-devshell must export a PATH (issue #915)");
+    assert!(
+        path.contains("/nix/store"),
+        "exported PATH must contain devshell store bins; got {path:?}"
+    );
+    assert!(
+        !path.split(':').any(|seg| seg == "/path-not-set"),
+        "exported PATH must not carry the /path-not-set placeholder; got {path:?}"
     );
 }

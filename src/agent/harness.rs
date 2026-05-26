@@ -236,6 +236,33 @@ impl AgentSession {
         }
     }
 
+    /// Trigger native context compaction on the active session. Returns a
+    /// [`TurnHandle`] shaped exactly like `send_turn_with_uuid()`'s so the
+    /// caller (`send_chat_message`) can plug it into the same per-turn
+    /// event pump without branching. Each harness has a different protocol:
+    /// - Claude CLI: the literal `"/compact"` user-input string is handled
+    ///   by the CLI itself, so callers route it through `send_turn_with_uuid`
+    ///   instead of this method.
+    /// - Codex app-server: issues `thread/compact/start` and broadcasts a
+    ///   synthetic `compacting` status event; the `ContextCompaction` item
+    ///   later flows through the stream as a `compact_boundary` + `Result`
+    ///   pair.
+    /// - Pi SDK: issues the sidecar `compact` request, which calls Pi's
+    ///   native `AgentSession.compact()`; the `compaction_end` event flows
+    ///   back through the stream as a `compact_boundary` + `Result` pair.
+    pub async fn start_compact(&self) -> Result<TurnHandle, String> {
+        match self {
+            Self::ClaudeCode(_) => Err(
+                "Claude Code compaction is handled by the CLI via the `/compact` user input — \
+                 do not call start_compact() on this harness."
+                    .to_string(),
+            ),
+            Self::CodexAppServer(session) => session.start_compact().await,
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(session) => session.start_compact().await,
+        }
+    }
+
     pub async fn set_remote_control(
         &self,
         enabled: bool,

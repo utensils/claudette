@@ -1,8 +1,17 @@
-import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { isAgentBusy } from "../../utils/agentStatus";
 import {
   DIFF_AGENT_RUNNING_INTERVAL_MS,
   IDLE_REFRESH_INTERVAL_MS,
+  workspaceRefreshPollingAllowed,
 } from "../../utils/pollingIntervals";
 import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine } from "lucide-react";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
@@ -33,6 +42,47 @@ import {
 } from "./DiscardChangesConfirm";
 import styles from "./RightSidebar.module.css";
 
+interface CachedDiffResult {
+  refreshNonce: number;
+  result: DiffFilesResult;
+}
+
+const MAX_CACHED_WORKSPACES = 20;
+const diffResultCache = new Map<string, CachedDiffResult>();
+
+function getCachedDiffResult(
+  workspaceId: string,
+  refreshNonce: number,
+): DiffFilesResult | null {
+  const cached = diffResultCache.get(workspaceId);
+  if (cached?.refreshNonce !== refreshNonce) return null;
+  // Refresh LRU position.
+  diffResultCache.delete(workspaceId);
+  diffResultCache.set(workspaceId, cached);
+  return cached.result;
+}
+
+function setCachedDiffResult(
+  workspaceId: string,
+  refreshNonce: number,
+  result: DiffFilesResult,
+): void {
+  diffResultCache.set(workspaceId, { refreshNonce, result });
+  while (diffResultCache.size > MAX_CACHED_WORKSPACES) {
+    const oldestKey = diffResultCache.keys().next().value;
+    if (!oldestKey) return;
+    diffResultCache.delete(oldestKey);
+  }
+}
+
+function pruneDiffResultCache(activeWorkspaceIds: Set<string>): void {
+  for (const workspaceId of diffResultCache.keys()) {
+    if (!activeWorkspaceIds.has(workspaceId)) {
+      diffResultCache.delete(workspaceId);
+    }
+  }
+}
+
 function isDiscardableLayer(layer: DiffLayer | undefined): layer is DiscardableLayer {
   return layer === "unstaged" || layer === "untracked";
 }
@@ -46,16 +96,29 @@ export const RightSidebar = memo(function RightSidebar() {
   const diffSelectedLayer = useAppStore((s) => s.diffSelectedLayer);
   const diffLoading = useAppStore((s) => s.diffLoading);
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
-  const clearDiff = useAppStore((s) => s.clearDiff);
+  const clearDiffFiles = useAppStore((s) => s.clearDiffFiles);
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const openFileTab = useAppStore((s) => s.openFileTab);
   const setDiffLoading = useAppStore((s) => s.setDiffLoading);
   const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
+  const refreshNonce = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.fileTreeRefreshNonceByWorkspace[selectedWorkspaceId] ?? 0)
+      : 0,
+  );
   const commitHistory = useAppStore((s) => s.commitHistory);
   const diffSelectedCommitHash = useAppStore((s) => s.diffSelectedCommitHash);
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
-  const activeTab = useAppStore((s) => s.rightSidebarTab);
-  const setActiveTab = useAppStore((s) => s.setRightSidebarTab);
+  const activeTab = useAppStore(
+    (s) => s.rightSidebarTabByWorkspace[s.selectedWorkspaceId ?? ""] ?? "files",
+  );
+  const setRightSidebarTabForWorkspace = useAppStore((s) => s.setRightSidebarTabForWorkspace);
+  const setActiveTab = useCallback(
+    (tab: "files" | "changes" | "tasks") => {
+      if (selectedWorkspaceId) setRightSidebarTabForWorkspace(selectedWorkspaceId, tab);
+    },
+    [selectedWorkspaceId, setRightSidebarTabForWorkspace],
+  );
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = isAgentBusy(ws?.agent_status);
@@ -108,6 +171,7 @@ export const RightSidebar = memo(function RightSidebar() {
     activeTab === "tasks",
   );
   const taskCount = taskHistory.totalBadgeCount;
+  const changesTabVisible = activeTab === "changes";
 
   // `useWorkspaceTaskHistory` already derives the active session's
   // `current` + `subagents` snapshot (it's the lightweight IO-free
@@ -119,21 +183,16 @@ export const RightSidebar = memo(function RightSidebar() {
   const hasLiveTasks =
     taskHistory.current.tasks.length > 0 ||
     taskHistory.subagents.length > 0;
-  // One auto-switch per workspace selection. Tracks the workspace ids
-  // we've already auto-switched for and reset on workspace change so
-  // each workspace gets at most one nudge before it learns the user's
-  // tab preference for the remainder of the session.
-  const autoSwitchedForWorkspaceRef = useRef<Set<string>>(new Set());
+  // Auto-switch to Tasks the first time a workspace has live tasks, but
+  // only when the user hasn't yet made an explicit tab choice for it.
+  // Writing to the per-workspace map via setActiveTab also records the
+  // choice, so subsequent visits to the same workspace skip the nudge.
   useEffect(() => {
     if (!selectedWorkspaceId || !hasLiveTasks) return;
-    if (autoSwitchedForWorkspaceRef.current.has(selectedWorkspaceId)) return;
-    if (activeTab === "tasks") {
-      autoSwitchedForWorkspaceRef.current.add(selectedWorkspaceId);
-      return;
-    }
-    autoSwitchedForWorkspaceRef.current.add(selectedWorkspaceId);
+    const { rightSidebarTabByWorkspace } = useAppStore.getState();
+    if (rightSidebarTabByWorkspace[selectedWorkspaceId] !== undefined) return;
     setActiveTab("tasks");
-  }, [selectedWorkspaceId, hasLiveTasks, activeTab, setActiveTab]);
+  }, [selectedWorkspaceId, hasLiveTasks, setActiveTab]);
 
   // Local-only stage/unstage/discard UI state. None of these git index
   // operations are bridged through the remote server (matches revert_file),
@@ -222,26 +281,49 @@ export const RightSidebar = memo(function RightSidebar() {
   );
 
   useEffect(() => {
-    if (!selectedWorkspaceId) return;
-    // Clear before fetching so the file list, badge, and selection from the
-    // previous workspace don't leak into the new one while the fetch is in
-    // flight. The empty-list fallback `diffFiles.length === 0 && diffLoading`
-    // then renders "Loading..." instead of stale rows.
-    clearDiff();
+    pruneDiffResultCache(new Set(workspaces.map((workspace) => workspace.id)));
+  }, [workspaces]);
+
+  useLayoutEffect(() => {
+    if (!selectedWorkspaceId || !changesTabVisible) return;
     if (isPendingPlaceholder) {
       // Placeholder workspace — the backend doesn't have this id yet.
       // Skip the fetch entirely; the effect re-runs when commit swaps
       // selection to the real workspace.
+      diffLoadVersion.current += 1;
+      clearDiffFiles();
       setDiffLoading(false);
       return;
     }
-    setDiffLoading(true);
+    const cached = getCachedDiffResult(selectedWorkspaceId, refreshNonce);
+    if (cached) {
+      applyDiffResult(cached);
+      setDiffLoading(false);
+    } else {
+      clearDiffFiles();
+      setDiffLoading(true);
+    }
+  }, [
+    selectedWorkspaceId,
+    refreshNonce,
+    applyDiffResult,
+    clearDiffFiles,
+    setDiffLoading,
+    isPendingPlaceholder,
+    changesTabVisible,
+  ]);
+
+  useEffect(() => {
+    if (!selectedWorkspaceId || isPendingPlaceholder || !changesTabVisible) return;
+    const cached = getCachedDiffResult(selectedWorkspaceId, refreshNonce);
+    setDiffLoading(cached === null);
     const version = ++diffLoadVersion.current;
     const workspaceId = selectedWorkspaceId;
     loadDiffInFlightCount.current += 1;
     loadDiff(workspaceId)
       .then((result) => {
         if (!isDiffResultStillValid(workspaceId, version)) return;
+        if (result) setCachedDiffResult(workspaceId, refreshNonce, result);
         applyDiffResult(result);
         setDiffLoading(false);
       })
@@ -252,23 +334,34 @@ export const RightSidebar = memo(function RightSidebar() {
       .finally(() => {
         loadDiffInFlightCount.current -= 1;
       });
-  }, [selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, clearDiff, isDiffResultStillValid, isPendingPlaceholder]);
+  }, [
+    selectedWorkspaceId,
+    refreshNonce,
+    loadDiff,
+    applyDiffResult,
+    setDiffLoading,
+    isDiffResultStillValid,
+    isPendingPlaceholder,
+    changesTabVisible,
+  ]);
 
   // Live-refresh diff files while agent is running.
   useEffect(() => {
-    if (!selectedWorkspaceId || isPendingPlaceholder || !isRunning) return;
+    if (!selectedWorkspaceId || isPendingPlaceholder || !isRunning || !changesTabVisible) return;
     const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
       // Skip this tick if the previous fetch hasn't resolved. Without this,
       // on a slow repo each `git merge-base` outlives the 3s polling
       // cadence and the swarm grows linearly until the machine melts.
+      if (!workspaceRefreshPollingAllowed()) return;
       if (loadDiffInFlightCount.current > 0) return;
       const version = ++diffLoadVersion.current;
       loadDiffInFlightCount.current += 1;
       loadDiff(workspaceId)
         .then((result) => {
           if (!isDiffResultStillValid(workspaceId, version)) return;
+          if (result) setCachedDiffResult(workspaceId, refreshNonce, result);
           applyDiffResult(result);
         })
         .catch(() => {})
@@ -278,23 +371,39 @@ export const RightSidebar = memo(function RightSidebar() {
     }, DIFF_AGENT_RUNNING_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, isDiffResultStillValid, isPendingPlaceholder]);
+  }, [
+    isRunning,
+    selectedWorkspaceId,
+    refreshNonce,
+    loadDiff,
+    applyDiffResult,
+    isDiffResultStillValid,
+    isPendingPlaceholder,
+    changesTabVisible,
+  ]);
 
   // Final refresh when agent stops running (after making changes).
   useEffect(() => {
     const wasRunning = prevIsRunning.current;
     prevIsRunning.current = isRunning;
 
-    if (!selectedWorkspaceId || isPendingPlaceholder || wasRunning !== true || isRunning) return;
+    if (
+      !selectedWorkspaceId ||
+      isPendingPlaceholder ||
+      !changesTabVisible ||
+      wasRunning !== true ||
+      isRunning
+    ) return;
     const workspaceId = selectedWorkspaceId;
 
     const timer = setTimeout(() => {
-      setDiffLoading(true);
+      setDiffLoading(getCachedDiffResult(workspaceId, refreshNonce) === null);
       const version = ++diffLoadVersion.current;
       loadDiffInFlightCount.current += 1;
       loadDiff(workspaceId)
         .then((result) => {
           if (!isDiffResultStillValid(workspaceId, version)) return;
+          if (result) setCachedDiffResult(workspaceId, refreshNonce, result);
           applyDiffResult(result);
           setDiffLoading(false);
         })
@@ -309,26 +418,38 @@ export const RightSidebar = memo(function RightSidebar() {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, isDiffResultStillValid, isPendingPlaceholder]);
+  }, [
+    isRunning,
+    selectedWorkspaceId,
+    refreshNonce,
+    loadDiff,
+    applyDiffResult,
+    setDiffLoading,
+    isDiffResultStillValid,
+    isPendingPlaceholder,
+    changesTabVisible,
+  ]);
 
   // Idle polling: refresh diff while agent is not running so manually-edited
   // files and external git ops surface without navigating away. The cadence
   // is shared with the Files panel via `utils/pollingIntervals` so the two
   // stay in lockstep.
   useEffect(() => {
-    if (!selectedWorkspaceId || isPendingPlaceholder || isRunning) return;
+    if (!selectedWorkspaceId || isPendingPlaceholder || isRunning || !changesTabVisible) return;
     const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
       // See active-polling effect above: skip tick when previous fetch is
       // still in flight. The 10s idle cadence rarely overlaps in practice,
       // but a concurrent `git fetch` can push merge-base latency past it.
+      if (!workspaceRefreshPollingAllowed()) return;
       if (loadDiffInFlightCount.current > 0) return;
       const version = ++diffLoadVersion.current;
       loadDiffInFlightCount.current += 1;
       loadDiff(workspaceId)
         .then((result) => {
           if (!isDiffResultStillValid(workspaceId, version)) return;
+          if (result) setCachedDiffResult(workspaceId, refreshNonce, result);
           applyDiffResult(result);
         })
         .catch(() => {})
@@ -338,7 +459,16 @@ export const RightSidebar = memo(function RightSidebar() {
     }, IDLE_REFRESH_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, isDiffResultStillValid, isPendingPlaceholder]);
+  }, [
+    isRunning,
+    selectedWorkspaceId,
+    refreshNonce,
+    loadDiff,
+    applyDiffResult,
+    isDiffResultStillValid,
+    isPendingPlaceholder,
+    changesTabVisible,
+  ]);
 
   const statusLabel = (status: string | { Renamed: { from: string } }) => {
     if (typeof status === "string") {
@@ -507,6 +637,13 @@ export const RightSidebar = memo(function RightSidebar() {
         await op();
         const result = await loadDiff(selectedWorkspaceId);
         if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
+          const nextRefreshNonce =
+            (useAppStore.getState().fileTreeRefreshNonceByWorkspace[
+              selectedWorkspaceId
+            ] ?? 0) + 1;
+          if (result) {
+            setCachedDiffResult(selectedWorkspaceId, nextRefreshNonce, result);
+          }
           applyDiffResult(result);
           requestFileTreeRefresh(selectedWorkspaceId);
         }

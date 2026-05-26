@@ -12,6 +12,11 @@
 //     `utils/theme.ts` for the rare case a token is missing from the
 //     computed style (e.g. before the stylesheet loads). The fallback
 //     must match a token that already exists in theme.css.
+//   * `ensureHexColor(value, "#fallback")` — validation helper in
+//     `utils/theme.ts` that rejects non-hex CSS values resolved from
+//     custom properties (user JSON themes can override accent tokens
+//     with `rgb()`/`hsl()`/`color-mix()`, formats the xterm search
+//     addon silently rejects). Fallback must mirror a token in theme.css.
 //   * `accentPreview: "#..."` — mirror of a theme's `--accent-primary`
 //     hex in `styles/themes/index.ts`, consumed by CommandPalette to
 //     render theme swatches without a runtime style lookup. Each entry
@@ -23,6 +28,9 @@
 //     to resolve, especially in the foreign-bundle case it's catching).
 //     Theme tokens cannot be the source of truth for an error overlay
 //     designed to render even when the surrounding app's CSS hasn't loaded.
+//   * `src/utils/theme.test.ts` — vitest cases that assert Base16 → Claudette
+//     token conversion produces specific hex values. The hex literals are
+//     fixtures and expected outputs, not styling.
 //
 // Runs from src/ui. Exits non-zero with a report when violations are found.
 //
@@ -59,15 +67,43 @@ const HEX_EXCLUSIONS = [
   /getPropertyValue\(.*\)\.trim\(\) \|\| "#/,
   // `getPropertyValue("...").trim() || (... ? "#..." : ...)` ternary fallback.
   /getPropertyValue\(.*\)\.trim\(\)\s*\|\| \(.*\?.*"#/,
+  // `resolve("--prop", "#fallback")` and the ternary form
+  // `resolve("--prop", isDark ? "#fallback" : "#fallback")` — the
+  // canonical safety-fallback pattern in monacoTheme.ts, which routes
+  // CSS custom properties to Monaco's hex-requiring API and needs
+  // literal fallbacks that mirror `:root`.
+  /\bresolve\("--[a-z-]+",\s*[^)]*"#/,
+  // `ensureHexColor(value, "#fallback")` — validation helper in theme.ts
+  // that rejects non-hex CSS values (user JSON themes can override accent
+  // tokens with rgb/hsl/color-mix; the xterm search addon silently fails
+  // on non-hex). The literal fallback must mirror a token already in
+  // theme.css.
+  /\bensureHexColor\([^,]+,\s*"#/,
   // `accentPreview: "#..."` / `accent_preview: "#..."`
   /(accentPreview|accent_preview):\s*"#/,
+  // GitHub issue / PR number reference: `issue #896`, `PR #905`,
+  // `fix #123`, etc. Decimal digits only — issue / PR numbers are never
+  // hex, and a `[0-9a-fA-F]+` class would wrongly exempt genuine hex
+  // colors written after one of these keywords (e.g. `fix #fff`).
+  /(issue|pull request|PR|fix|fixes|close|closes|ref|refs|see)\s+#[0-9]+\b/i,
 ];
 
 // Hex file-level exclusions (entire file is exempt from Rule 1).
 const HEX_EXCLUDED_FILES = new Set([
   // Path is relative to uiRoot, with forward slashes.
   "src/utils/bootIdentityGuard.ts",
+  // Base16 conversion tests need hex fixtures and expected output values.
+  "src/utils/theme.test.ts",
 ]);
+
+// Rgba file-level exclusions (entire file is exempt from Rule 2).
+// Currently empty — every prior file-level exemption (theme.ts, theme.test.ts)
+// became unnecessary after PR #799's color-mix refactor and converter
+// simplification removed all rgba() emission and abstract-pattern references.
+// New entries should only be added with a concrete justification and a clear
+// "do not extend" comment, the way bootIdentityGuard's HEX exemption is
+// documented above.
+const RGBA_EXCLUDED_FILES = new Set([]);
 
 // --- Walker ---
 
@@ -120,6 +156,7 @@ for (const absPath of walk(SCAN_ROOT)) {
   const lines = source.split(/\r?\n/);
 
   const hexFileExcluded = HEX_EXCLUDED_FILES.has(rel);
+  const rgbaFileExcluded = RGBA_EXCLUDED_FILES.has(rel);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -134,7 +171,7 @@ for (const absPath of walk(SCAN_ROOT)) {
     }
 
     // --- Rule 2: rgb/rgba literals ---
-    if (RGBA_OPEN_RE.test(line) && !RGBA_TOKEN_RE.test(line)) {
+    if (!rgbaFileExcluded && RGBA_OPEN_RE.test(line) && !RGBA_TOKEN_RE.test(line)) {
       rgbaHits.push(formatHit(rel, lineno, line));
     }
   }

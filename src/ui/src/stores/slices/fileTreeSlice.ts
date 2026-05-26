@@ -1,4 +1,5 @@
 import type { StateCreator } from "zustand";
+import type { editor as MonacoEditorNs } from "monaco-editor";
 import type { AppState } from "../useAppStore";
 import type { UnifiedTabEntry } from "../../components/chat/sessionTabsLogic";
 
@@ -12,6 +13,8 @@ export interface FileRevealTarget {
   endColumn?: number;
   nonce: number;
 }
+
+export type FileEditorViewState = MonacoEditorNs.ICodeEditorViewState;
 
 /** Per-tab buffer + UI state. Lives in the store keyed by `${wsId}:${path}`
  *  so that switching tabs preserves unsaved edits across the FileViewer's
@@ -39,6 +42,9 @@ export interface FileBufferState {
   loaded: boolean;
   loadError: string | null;
   preview: FileViewerPreviewMode;
+  /** Monaco cursor + scroll snapshot. Captured before the editor unmounts
+   *  so switching to chat/diff and back restores the user's place. */
+  editorViewState: FileEditorViewState | null;
   /** Set by `applyExternalFileChange` when an external write (agent edit,
    *  manual save in another editor, `git checkout`, …) lands on disk while
    *  the buffer was dirty. Drives the tab strip's "external change" badge:
@@ -100,6 +106,7 @@ export function makeUnloadedBuffer(): FileBufferState {
     loaded: false,
     loadError: null,
     preview: "source",
+    editorViewState: null,
     externallyChanged: false,
   };
 }
@@ -139,6 +146,53 @@ export function pathMatchesTarget(
   const cleanTarget = stripTrailingSlash(targetPath);
   if (!isDirectory) return cleanPath === cleanTarget;
   return cleanPath === cleanTarget || cleanPath.startsWith(`${cleanTarget}/`);
+}
+
+export function getRevealAncestorDirs(path: string): string[] {
+  if (
+    path === "" ||
+    path.startsWith("/") ||
+    path.startsWith("~") ||
+    path.includes("\\")
+  ) {
+    return [];
+  }
+
+  const segments = path.split("/");
+  if (
+    segments.length < 2 ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    return [];
+  }
+
+  segments.pop();
+  const dirs: string[] = [];
+  let current = "";
+  for (const segment of segments) {
+    current = `${current}${segment}/`;
+    dirs.push(current);
+  }
+  return dirs;
+}
+
+function revealExpandedDirs(
+  expandedByWorkspace: Record<string, Record<string, boolean>>,
+  workspaceId: string,
+  path: string,
+): Record<string, Record<string, boolean>> {
+  const dirs = getRevealAncestorDirs(path);
+  if (dirs.length === 0) return expandedByWorkspace;
+
+  const current = expandedByWorkspace[workspaceId] ?? {};
+  if (dirs.every((dir) => current[dir])) return expandedByWorkspace;
+
+  const next = { ...current };
+  for (const dir of dirs) next[dir] = true;
+  return {
+    ...expandedByWorkspace,
+    [workspaceId]: next,
+  };
 }
 
 export interface FileTreeSlice {
@@ -192,6 +246,7 @@ export interface FileTreeSlice {
     workspaceId: string,
     path: string | null,
   ) => void;
+  revealFileInTree: (workspaceId: string, path: string) => void;
   requestFileTreeRefresh: (workspaceId: string) => void;
   /** Ask the FilesPanel for `workspaceId` to enter "create file at root"
    *  mode. The hotkey handler also flips the right sidebar to the Files
@@ -308,6 +363,11 @@ export interface FileTreeSlice {
     path: string,
     preview: FileViewerPreviewMode,
   ) => void;
+  setFileEditorViewState: (
+    workspaceId: string,
+    path: string,
+    editorViewState: FileEditorViewState | null,
+  ) => void;
   renameFilePathInWorkspace: (
     workspaceId: string,
     oldPath: string,
@@ -380,6 +440,17 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
         [workspaceId]: path,
       },
     })),
+  revealFileInTree: (workspaceId, path) =>
+    set((s) => {
+      if (!s.revealActiveFileInTree) return s;
+      const nextExpanded = revealExpandedDirs(
+        s.allFilesExpandedDirsByWorkspace,
+        workspaceId,
+        path,
+      );
+      if (nextExpanded === s.allFilesExpandedDirsByWorkspace) return s;
+      return { allFilesExpandedDirsByWorkspace: nextExpanded };
+    }),
   requestFileTreeRefresh: (workspaceId) =>
     set((s) => ({
       fileTreeRefreshNonceByWorkspace: {
@@ -428,6 +499,9 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       const nextBuffers = s.fileBuffers[key]
         ? s.fileBuffers
         : { ...s.fileBuffers, [key]: makeUnloadedBuffer() };
+      const nextExpanded = s.revealActiveFileInTree
+        ? revealExpandedDirs(s.allFilesExpandedDirsByWorkspace, workspaceId, path)
+        : s.allFilesExpandedDirsByWorkspace;
       return {
         fileTabsByWorkspace: nextTabs,
         activeFileTabByWorkspace: {
@@ -446,6 +520,7 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
             }
           : s.fileRevealTargetByWorkspace,
         fileBuffers: nextBuffers,
+        allFilesExpandedDirsByWorkspace: nextExpanded,
       };
     }),
 
@@ -466,11 +541,15 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       const tabs = s.fileTabsByWorkspace[workspaceId] ?? [];
       if (!tabs.includes(path)) return s;
       if (s.activeFileTabByWorkspace[workspaceId] === path) return s;
+      const nextExpanded = s.revealActiveFileInTree
+        ? revealExpandedDirs(s.allFilesExpandedDirsByWorkspace, workspaceId, path)
+        : s.allFilesExpandedDirsByWorkspace;
       return {
         activeFileTabByWorkspace: {
           ...s.activeFileTabByWorkspace,
           [workspaceId]: path,
         },
+        allFilesExpandedDirsByWorkspace: nextExpanded,
       };
     }),
 
@@ -676,6 +755,20 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
         fileBuffers: {
           ...s.fileBuffers,
           [key]: { ...prev, preview },
+        },
+      };
+    }),
+
+  setFileEditorViewState: (workspaceId, path, editorViewState) =>
+    set((s) => {
+      const key = fileBufferKey(workspaceId, path);
+      const prev = s.fileBuffers[key];
+      if (!prev) return s;
+      if (prev.editorViewState === editorViewState) return s;
+      return {
+        fileBuffers: {
+          ...s.fileBuffers,
+          [key]: { ...prev, editorViewState },
         },
       };
     }),

@@ -61,6 +61,7 @@ export interface DiffSlice {
   setDiffPreviewContent: (content: FileContent | null) => void;
   setDiffPreviewLoading: (loading: boolean) => void;
   setDiffPreviewError: (error: string | null) => void;
+  clearDiffFiles: () => void;
   clearDiff: () => void;
   // Replace the entire ordered list of diff tabs for a workspace. Used by
   // drag-reorder (volatile — not persisted across restarts; see SessionTabs
@@ -125,6 +126,14 @@ export const createDiffSlice: StateCreator<AppState, [], [], DiffSlice> = (
   setDiffPreviewContent: (content) => set({ diffPreviewContent: content }),
   setDiffPreviewLoading: (loading) => set({ diffPreviewLoading: loading }),
   setDiffPreviewError: (error) => set({ diffPreviewError: error }),
+  clearDiffFiles: () =>
+    set({
+      diffFiles: [],
+      diffMergeBase: null,
+      diffStagedFiles: null,
+      commitHistory: null,
+      diffSelectedCommitHash: null,
+    }),
   clearDiff: () =>
     set({
       diffFiles: [],

@@ -57,7 +57,7 @@ async fn probe() -> bool {
     // unresponsive (cold-boot races). On timeout we report "no
     // picker" — Browse hides, app stays alive, no crash.
     let probe_fut = async {
-        tokio::process::Command::new("gdbus")
+        claudette::process::command("gdbus")
             .args([
                 "introspect",
                 "--session",

@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod handler;
 pub mod mdns;
+pub mod snapshot;
 pub mod tls;
 pub mod ws;
 

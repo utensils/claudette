@@ -133,11 +133,26 @@ export const createChatSessionsSlice: StateCreator<
       delete nextDrafts[sessionId];
       const nextAttachments = { ...s.pendingAttachmentsBySession };
       delete nextAttachments[sessionId];
+      const nextQueuedMessages = { ...s.queuedMessages };
+      delete nextQueuedMessages[sessionId];
+      const nextQueuedPaused = { ...s.queuedMessageAutoDispatchPaused };
+      delete nextQueuedPaused[sessionId];
+      const nextQueuedEditing = { ...s.queuedMessageEditing };
+      delete nextQueuedEditing[sessionId];
+      const nextQueuedSteering = { ...s.queuedMessageSteering };
+      delete nextQueuedSteering[sessionId];
+      const nextQueuedSteeringContent = { ...s.queuedMessageSteeringContent };
+      delete nextQueuedSteeringContent[sessionId];
       return {
         sessionsByWorkspace: next,
         selectedSessionIdByWorkspaceId: nextSelected,
         chatDrafts: nextDrafts,
         pendingAttachmentsBySession: nextAttachments,
+        queuedMessages: nextQueuedMessages,
+        queuedMessageAutoDispatchPaused: nextQueuedPaused,
+        queuedMessageEditing: nextQueuedEditing,
+        queuedMessageSteering: nextQueuedSteering,
+        queuedMessageSteeringContent: nextQueuedSteeringContent,
       };
     }),
   selectSession: (workspaceId, sessionId) =>

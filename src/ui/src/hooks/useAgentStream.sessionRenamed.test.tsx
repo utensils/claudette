@@ -88,6 +88,11 @@ beforeEach(() => {
   // mutate. The test only cares about `name` flipping; other fields
   // are placeholder values matching the `ChatSession` shape.
   useAppStore.setState({
+    agentQuestions: {},
+    toolActivities: {},
+    streamingContent: {},
+    streamingThinking: {},
+    promptStartTime: {},
     sessionsByWorkspace: {
       "ws-1": [
         {
@@ -112,6 +117,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   for (const root of mountedRoots.splice(0).reverse()) {
     await act(async () => {
       root.unmount();
@@ -166,5 +172,217 @@ describe("useAgentStream — session-renamed listener", () => {
     // workspace's session list and updates only when it finds an id
     // match).
     expect(sessions.find((s) => s.id === "session-1")?.name).toBe("New chat");
+  });
+
+  it("seeds live tool activity input from Claude content_block_start", async () => {
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+    expect(handlers.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "stream_event",
+                event: {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: {
+                    type: "tool_use",
+                    id: "toolu-read-1",
+                    name: "Read",
+                    input: { file_path: "/repo/src/app.ts" },
+                  },
+                },
+              },
+            },
+          },
+        });
+      }
+    });
+
+    const [activity] = useAppStore.getState().toolActivities["session-1"] ?? [];
+    expect(activity).toMatchObject({
+      toolUseId: "toolu-read-1",
+      toolName: "Read",
+      inputJson: JSON.stringify({ file_path: "/repo/src/app.ts" }),
+      summary: "/repo/src/app.ts",
+    });
+  });
+
+  it("seeds the live elapsed timer from the first stream event when dispatch missed it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+    expect(handlers.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "system",
+                subtype: "init",
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(useAppStore.getState().promptStartTime["ws-1"]).toBe(
+      1_700_000_000_000,
+    );
+  });
+
+  it("keeps an existing live elapsed timer anchor when stream events arrive", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    useAppStore.getState().setPromptStartTime("ws-1", 1_699_999_990_000);
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "system",
+                subtype: "init",
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(useAppStore.getState().promptStartTime["ws-1"]).toBe(
+      1_699_999_990_000,
+    );
+  });
+
+  it("keeps the workspace timer while a sibling active session is still running", async () => {
+    const session = useAppStore.getState().sessionsByWorkspace["ws-1"]![0]!;
+    useAppStore.setState({
+      promptStartTime: { "ws-1": 1_699_999_990_000 },
+      sessionsByWorkspace: {
+        "ws-1": [
+          { ...session, id: "session-1", agent_status: "Running" },
+          { ...session, id: "session-2", agent_status: "Running" },
+        ],
+      },
+    });
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: { ProcessExited: { exit_code: 0 } },
+          },
+        });
+      }
+    });
+    expect(useAppStore.getState().promptStartTime["ws-1"]).toBe(
+      1_699_999_990_000,
+    );
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-2",
+            event: { ProcessExited: { exit_code: 0 } },
+          },
+        });
+      }
+    });
+    expect(useAppStore.getState().promptStartTime["ws-1"]).toBeUndefined();
+  });
+
+  it("does NOT re-show an AskUserQuestion card from the streamed tool block", async () => {
+    // Regression guard for the PR-939 fallback. The prior implementation
+    // re-created the question card from `content_block_stop` if the user
+    // had already answered the original (control_request-driven) card.
+    // The Rust side had cleared the matching pending_permissions entry,
+    // so the second answer failed with "No pending permission request for
+    // tool_use_id ...". The card must only ever come from the Rust-side
+    // `agent-permission-prompt` event.
+    vi.useFakeTimers();
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+    expect(handlers.length).toBeGreaterThan(0);
+
+    const input = {
+      questions: [
+        {
+          header: "Next step",
+          question: "How should I proceed?",
+          options: [
+            { label: "Implement the fix", description: "Patch and test it." },
+            { label: "Stop here" },
+          ],
+        },
+      ],
+    };
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "stream_event",
+                event: {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: {
+                    type: "tool_use",
+                    id: "toolu-question-1",
+                    name: "AskUserQuestion",
+                    input,
+                  },
+                },
+              },
+            },
+          },
+        });
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "stream_event",
+                event: {
+                  type: "content_block_stop",
+                  index: 0,
+                },
+              },
+            },
+          },
+        });
+      }
+      vi.advanceTimersByTime(5_000);
+    });
+
+    expect(useAppStore.getState().agentQuestions["session-1"]).toBeUndefined();
   });
 });

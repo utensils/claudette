@@ -19,7 +19,7 @@ mod pty_tracker;
 mod remote;
 mod state;
 mod subprocess_cleanup;
-mod transport;
+mod tail_backoff;
 mod tray;
 mod usage;
 #[cfg(feature = "voice")]
@@ -68,7 +68,8 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
         return;
     };
     let our_pid = std::process::id();
-    let mut peers: Vec<(u32, String)> = Vec::new();
+    let our_data_dir = db_path.parent().map(normalize_dev_data_dir);
+    let mut peers: Vec<(u32, String, Option<PathBuf>)> = Vec::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -96,31 +97,52 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
             .and_then(|v| v.as_str())
             .unwrap_or("(unknown)")
             .to_string();
-        peers.push((pid, cwd));
+        let peer_data_dir = parsed
+            .get("claudette_data_dir")
+            .and_then(|v| v.as_str())
+            .map(Path::new)
+            .map(normalize_dev_data_dir);
+        if peer_data_dir.is_some() && peer_data_dir != our_data_dir {
+            continue;
+        }
+        peers.push((pid, cwd, peer_data_dir));
     }
 
-    for (pid, cwd) in &peers {
-        // We can only confirm the peer is a live Claudette dev process
-        // (matched by discovery file + alive PID) — the discovery JSON
-        // doesn't currently include a DB path, so whether it's the
-        // *same* DB as ours is inferred, not verified. By default both
-        // launches resolve `dirs::data_dir()/claudette/claudette.db`,
-        // so the inference is right in the common case; the wording
-        // hedges so the warning stays accurate if a future dev launch
-        // ever isolates `CLAUDETTE_DATA_DIR` per-instance.
+    for (pid, cwd, peer_data_dir) in &peers {
+        // Modern `scripts/dev.sh` discovery files include the effective
+        // `CLAUDETTE_DATA_DIR`, so we skip peers that are clearly isolated.
+        // Older discovery files do not have it; keep warning for those because
+        // legacy dev launches shared the default DB by construction.
         tracing::warn!(
             target: "claudette::startup",
             our_pid,
             peer_pid = pid,
             peer_cwd = %cwd,
+            peer_data_dir = peer_data_dir.as_ref().map(|p| p.display().to_string()),
             our_db_path = %db_path.display(),
             "another Claudette dev instance is alive — if it's running \
-             against the same DB (the default unless CLAUDETTE_DATA_DIR \
-             is overridden), concurrent SQLite writers can cross-pollute \
-             chat_messages rows and corrupt resumed Claude CLI transcripts; \
-             consider setting a per-instance data dir before continuing"
+             against the same DB, concurrent SQLite writers can cross-pollute \
+             chat_messages rows and corrupt resumed Claude CLI transcripts"
         );
     }
+}
+
+fn normalize_dev_data_dir(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path_lexically(path))
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 #[cfg(unix)]
@@ -380,6 +402,11 @@ fn main() {
     // above for the persisted-log-level read so the two never drift.
     let data_dir = early_data_dir;
     let db_path = early_db_path;
+    let _ = boot_probation::record_boot_stage(
+        &data_dir,
+        boot_probation::BootStage::ProcessStarted,
+        None,
+    );
 
     // Stamp the resolved primary paths so a multi-instance dev session
     // can be reconstructed from the log file alone — knowing which DB
@@ -832,6 +859,11 @@ fn main() {
             // Start background SCM polling for PR status and CI checks.
             commands::scm::start_scm_polling(app.handle().clone());
 
+            // Start the native agent scheduler. It rehydrates persisted
+            // wakeups/routines on boot and dispatches overdue rows through
+            // the same chat-send path as user-entered prompts.
+            commands::scheduling::start_scheduler(app.handle().clone());
+
             // Build the env-provider fs watcher now that the AppHandle
             // exists. On a change: invalidate the matching cache entry
             // and emit a Tauri event so the EnvPanel (and other
@@ -845,7 +877,45 @@ fn main() {
             // here only disables realtime buffer refresh — file viewer
             // continues to work via the initial-load path. Same
             // fallback shape as the env watcher above.
-            commands::files::setup_file_watcher(app.handle().clone());
+            commands::files::watcher::setup_file_watcher(app.handle().clone());
+
+            // One-time backfill of legacy `checkpoint_files.content` rows
+            // into the content-addressed `checkpoint_blobs` store, followed
+            // by post-backfill SQLite space reclaim. Closes GitHub issue
+            // #940 / #942 for users whose DB filled up before dedupe shipped.
+            //
+            // Wait for `boot_ok` before doing this maintenance. The updater's
+            // boot-probation rollback window is 20s; draining a multi-GB #940
+            // freelist can take far longer and can make foreground DB reads
+            // wait on SQLite locks. Starting only after boot acknowledgement
+            // keeps a healthy upgrade from being rolled back.
+            let maintenance_db_path = app.state::<state::AppState>().db_path.clone();
+            let maintenance_boot =
+                std::sync::Arc::clone(&app.state::<state::AppState>().boot_probation);
+            tauri::async_runtime::spawn(async move {
+                maintenance_boot.wait_until_acknowledged().await;
+                if let Err(e) =
+                    claudette::checkpoint_backfill::run_backfill(&maintenance_db_path).await
+                {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        error = %e,
+                        "checkpoint blob backfill failed; will retry on next launch"
+                    );
+                    return;
+                }
+                if let Err(e) = claudette::checkpoint_backfill::run_post_backfill_space_reclaim(
+                    &maintenance_db_path,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        error = %e,
+                        "checkpoint post-backfill space reclaim failed; will retry on next launch"
+                    );
+                }
+            });
 
             // Start the local IPC server the `claudette` CLI talks to.
             // Spawned async on the Tauri runtime; the resulting
@@ -929,6 +999,7 @@ fn main() {
             // Data
             commands::data::load_initial_data,
             // Boot-health probation
+            commands::boot::boot_stage,
             commands::boot::boot_ok,
             // Repository
             commands::repository::add_repository,
@@ -943,6 +1014,7 @@ fn main() {
             commands::repository::reorder_repositories,
             commands::repository::set_setup_script_auto_run,
             commands::repository::set_archive_script_auto_run,
+            commands::repository::update_repository_required_inputs,
             // Workspace
             commands::workspace::create_workspace,
             commands::workspace::fork_workspace_at_checkpoint,
@@ -952,11 +1024,18 @@ fn main() {
             commands::workspace::rename_workspace,
             commands::workspace::reorder_workspaces,
             commands::workspace::delete_workspace,
+            commands::workspace::delete_workspaces_bulk,
+            commands::workspace::cancel_workspaces_bulk,
             commands::workspace::generate_workspace_name,
             commands::workspace::refresh_branches,
             commands::workspace::refresh_workspace_branch,
             commands::workspace::discover_worktrees,
             commands::workspace::import_worktrees,
+            commands::workspace::purge_stray_worktree,
+            commands::storage::compute_storage_stats,
+            commands::storage::compute_reclaimable_bytes_for_workspaces,
+            commands::storage::scan_orphaned_worktrees,
+            commands::storage::purge_orphaned_worktree,
             commands::workspace::open_workspace_in_terminal,
             commands::workspace::notify_workspace_selected,
             // Slash commands
@@ -970,26 +1049,26 @@ fn main() {
             commands::pinned_prompts::delete_pinned_prompt,
             commands::pinned_prompts::reorder_pinned_prompts,
             // Files
-            commands::files::list_workspace_files,
-            commands::files::read_workspace_file,
-            commands::files::read_workspace_file_for_viewer,
-            commands::files::read_workspace_file_bytes,
-            commands::files::read_workspace_file_at_revision,
-            commands::files::write_workspace_file,
-            commands::files::resolve_workspace_path,
-            commands::files::open_workspace_path,
-            commands::files::reveal_workspace_path,
-            commands::files::create_workspace_file,
-            commands::files::rename_workspace_path,
-            commands::files::trash_workspace_path,
-            commands::files::restore_workspace_path_from_trash,
-            commands::files::save_attachment_bytes,
-            commands::files::open_attachment_in_browser,
-            commands::files::open_attachment_with_default_app,
-            commands::files::copy_attachment_file_to_clipboard,
-            commands::files::copy_image_to_clipboard,
-            commands::files::watch_workspace_files,
-            commands::files::unwatch_workspace_files,
+            commands::files::listing::list_workspace_files,
+            commands::files::workspace_ops::read_workspace_file,
+            commands::files::workspace_ops::read_workspace_file_for_viewer,
+            commands::files::workspace_ops::read_workspace_file_bytes,
+            commands::files::workspace_ops::read_workspace_file_at_revision,
+            commands::files::workspace_ops::write_workspace_file,
+            commands::files::workspace_ops::resolve_workspace_path,
+            commands::files::workspace_ops::open_workspace_path,
+            commands::files::workspace_ops::reveal_workspace_path,
+            commands::files::workspace_ops::create_workspace_file,
+            commands::files::workspace_ops::rename_workspace_path,
+            commands::files::workspace_ops::trash_workspace_path,
+            commands::files::workspace_ops::restore_workspace_path_from_trash,
+            commands::files::attachments::save_attachment_bytes,
+            commands::files::attachments::open_attachment_in_browser,
+            commands::files::attachments::open_attachment_with_default_app,
+            commands::files::attachments::copy_attachment_file_to_clipboard,
+            commands::files::attachments::copy_image_to_clipboard,
+            commands::files::watcher::watch_workspace_files,
+            commands::files::watcher::unwatch_workspace_files,
             // Chat
             commands::chat::send::load_chat_history,
             commands::chat::send::load_chat_history_page,
@@ -1000,6 +1079,7 @@ fn main() {
             commands::chat::attachments::read_file_as_base64,
             commands::chat::lifecycle::stop_agent,
             commands::chat::lifecycle::reset_agent_session,
+            commands::chat::lifecycle::prepare_cross_harness_migration,
             commands::chat::interaction::clear_attention,
             commands::chat::interaction::submit_agent_answer,
             commands::chat::interaction::submit_agent_approval,
@@ -1021,6 +1101,8 @@ fn main() {
             commands::chat::session::restore_chat_session,
             // Plan
             commands::plan::read_plan_file,
+            // Agent-managed files (plans, memory, …)
+            commands::agent_files::read_agent_managed_file,
             // Metrics
             commands::metrics::get_dashboard_metrics,
             commands::metrics::get_workspace_metrics_batch,
@@ -1046,6 +1128,12 @@ fn main() {
             commands::terminal::start_agent_task_tail,
             commands::terminal::stop_agent_task_tail,
             commands::terminal::stop_agent_background_task,
+            // Native agent scheduling
+            commands::scheduling::schedule_wakeup,
+            commands::scheduling::create_cron_routine,
+            commands::scheduling::list_scheduled_routines,
+            commands::scheduling::delete_scheduled_routine,
+            commands::scheduling::run_scheduled_routine,
             // PTY
             pty::spawn_pty,
             pty::write_pty,
@@ -1086,6 +1174,20 @@ fn main() {
             commands::agent_backends::refresh_agent_backend_models,
             commands::agent_backends::test_agent_backend,
             commands::agent_backends::launch_codex_login,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_list_providers,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_set_provider_api_key,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_clear_provider_api_key,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_oauth_start,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_oauth_submit_input,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_oauth_cancel,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_openrouter_credits,
             // Claude flags
             commands::claude_flags::list_claude_flags,
             commands::claude_flags::refresh_claude_flags,
@@ -1146,6 +1248,8 @@ fn main() {
             commands::remote::send_remote_command,
             // Usage
             commands::usage::get_claude_code_usage,
+            commands::usage::get_session_usage,
+            commands::usage::prefetch_codex_rate_limits,
             commands::usage::open_usage_settings,
             commands::usage::open_release_notes,
             // Auth
@@ -1161,6 +1265,10 @@ fn main() {
             commands::scm::scm_create_pr,
             commands::scm::scm_merge_pr,
             commands::scm::scm_refresh,
+            commands::scm::list_repo_open_issues,
+            commands::scm::list_repo_open_pull_requests,
+            commands::scm::refresh_repo_scm_lists,
+            commands::scm::create_workspace_scm_link,
             // Env-provider diagnostic UI
             commands::env::get_env_sources,
             commands::env::get_env_target_worktree,
@@ -1374,6 +1482,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::MACOS_CLOSE_WINDOW_ACCELERATOR;
     use super::migrate_legacy_env_provider_trust;
+    use super::normalize_dev_data_dir;
     #[cfg(target_os = "macos")]
     use super::release_tag_for;
     use claudette::db::Database;
@@ -1409,6 +1518,7 @@ mod tests {
                 archive_script_auto_run: false,
                 base_branch: None,
                 default_remote: None,
+                required_inputs: None,
                 path_valid: true,
             };
             db.insert_repository(&repo).expect("insert repo");
@@ -1512,6 +1622,20 @@ mod tests {
         // the gated-out platform's CI. Taking a function pointer is
         // sufficient — we don't need to call it.
         let _: fn(&Database) = migrate_legacy_env_provider_trust;
+    }
+
+    #[test]
+    fn normalize_dev_data_dir_handles_spelling_variants() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("sandbox").join("data");
+        std::fs::create_dir_all(&data).unwrap();
+
+        let spelled = data.join("..").join("data").join(".");
+
+        assert_eq!(
+            normalize_dev_data_dir(&spelled),
+            normalize_dev_data_dir(&data)
+        );
     }
 
     /// Migration is idempotent: a second run after a successful first

@@ -43,16 +43,27 @@ import { ComposerToolbar } from "./composer/ComposerToolbar";
 import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
 import { UsageIndicator } from "./composer/UsageIndicator";
+import { ResizeHandle } from "../layout/ResizeHandle";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import { PinnedPromptsBar } from "./PinnedPromptsBar";
 import { extractMentionPaths } from "./queuedMessageEditing";
 import { SlashCommandPicker } from "./SlashCommandPicker";
 import { useSlashPicker } from "../../hooks/useSlashPicker";
+import { formatEnvProviderName } from "../../utils/workspaceEnvironment";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
+import { setPlanModeAndPersist } from "./planModePersistence";
 import styles from "./ChatPanel.module.css";
 
 type ComposerMode = "prompt" | "shell";
+
+const COMPOSER_MIN_HEIGHT = 52;
+const COMPOSER_DEFAULT_AUTOGROW_MAX = 160;
+const COMPOSER_MAX_HEIGHT = 1200;
+
+function clampComposerHeight(value: number, max: number): number {
+  return Math.max(COMPOSER_MIN_HEIGHT, Math.min(max, value));
+}
 
 function parseComposerDraft(value: string): { mode: ComposerMode; text: string } {
   return value.startsWith("!")
@@ -240,16 +251,7 @@ export function ChatInputArea({
     ? envPlugin && envSeconds !== null
       ? t("composer_placeholder_preparing_env_with_plugin", {
           defaultValue: "Preparing {{plugin}} ({{seconds}}s)…",
-          plugin:
-            envPlugin === "env-direnv"
-              ? "direnv"
-              : envPlugin === "env-mise"
-                ? "mise"
-                : envPlugin === "env-dotenv"
-                  ? "dotenv"
-                  : envPlugin === "env-nix-devshell"
-                    ? "nix"
-                    : envPlugin,
+          plugin: formatEnvProviderName(envPlugin),
           seconds: envSeconds,
         })
       : t("composer_placeholder_preparing_env")
@@ -276,22 +278,23 @@ export function ChatInputArea({
       sessionForUpdate: string,
       updater: (prev: PendingAttachment[]) => PendingAttachment[],
     ) => {
-      setPendingAttachments((prev) => {
-        const next = updater(prev);
-        // Mirror to slice (without `preview_url` since it's transient).
-        const stored: StoredAttachment[] = next.map((a) => ({
-          id: a.id,
-          filename: a.filename,
-          media_type: a.media_type,
-          data_base64: a.data_base64,
-          size_bytes: a.size_bytes,
-          text_content: a.text_content,
-        }));
-        useAppStore
-          .getState()
-          .setPendingAttachmentsForSession(sessionForUpdate, stored);
-        return next;
-      });
+      const next = updater(pendingAttachmentsRef.current);
+      pendingAttachmentsRef.current = next;
+      setPendingAttachments(next);
+      // Mirror to slice (without `preview_url` since it's transient). Keep
+      // this outside the React state updater; calling a Zustand setter from
+      // inside the updater trips React's render-time update warning.
+      const stored: StoredAttachment[] = next.map((a) => ({
+        id: a.id,
+        filename: a.filename,
+        media_type: a.media_type,
+        data_base64: a.data_base64,
+        size_bytes: a.size_bytes,
+        text_content: a.text_content,
+      }));
+      useAppStore
+        .getState()
+        .setPendingAttachmentsForSession(sessionForUpdate, stored);
     },
     [],
   );
@@ -299,6 +302,52 @@ export function ChatInputArea({
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const meterRef = useRef<HTMLButtonElement>(null);
+  const inputAreaRef = useRef<HTMLDivElement>(null);
+  // The user-set composer height (persisted globally). CSS var
+  // `--composer-h` on the inputArea div drives the textarea's visible
+  // height; CSS keeps the historical 160px auto-grow ceiling until
+  // the user resizes beyond it.
+  const composerHeight = useAppStore((s) => s.composerHeight);
+  const setComposerHeight = useAppStore((s) => s.setComposerHeight);
+  // Dynamic upper bound for the resize drag — half the chat pane's
+  // height, so the user can't drag the composer past the visible
+  // message area. Measured via ResizeObserver on the inputArea's
+  // offsetParent (the chat session container).
+  const [composerMaxBound, setComposerMaxBound] = useState(COMPOSER_DEFAULT_AUTOGROW_MAX);
+  const appliedComposerHeight = Math.min(composerHeight, composerMaxBound);
+  useEffect(() => {
+    const el = inputAreaRef.current;
+    if (!el) return;
+    const target = el.offsetParent as HTMLElement | null;
+    if (!target) return;
+    const update = () => {
+      const half = Math.floor(target.clientHeight / 2);
+      setComposerMaxBound(
+        Math.max(
+          COMPOSER_MIN_HEIGHT,
+          Math.min(COMPOSER_MAX_HEIGHT, half),
+        ),
+      );
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(target);
+    return () => ro.disconnect();
+  }, []);
+  // Mirror Zustand value → CSS var on the inputArea. ResizeHandle
+  // writes the var directly during drag (no React state churn); this
+  // effect handles every other update (mount, persistence rehydrate,
+  // external setComposerHeight calls).
+  useEffect(() => {
+    const el = inputAreaRef.current;
+    if (!el) return;
+    if (el.dataset.resizing === "true") return;
+    el.style.setProperty("--composer-h", `${appliedComposerHeight}px`);
+  }, [appliedComposerHeight]);
+  const handleComposerResizeEnd = useCallback(
+    (final: number) => setComposerHeight(clampComposerHeight(final, composerMaxBound)),
+    [composerMaxBound, setComposerHeight],
+  );
   const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
   const openSettings = useAppStore((s) => s.openSettings);
 
@@ -369,7 +418,9 @@ export function ChatInputArea({
       : t("send_message");
   const sendButtonTooltip = isRunning
     ? tooltipWithHotkey(sendButtonLabel, "global.dismiss-or-stop", keybindings, isMac)
-    : sendButtonLabel;
+    : workspaceEnvironmentPreparing
+      ? t("send_disabled_preparing_env")
+      : sendButtonLabel;
 
   // VU meter dynamic-vs-static decision lives in the parent because it
   // depends on the OS reduced-motion preference and the active provider's
@@ -423,7 +474,7 @@ export function ChatInputArea({
       // We use getState() rather than subscribing — this component should
       // not re-render every time a toolbar toggle changes.
       const store = useAppStore.getState();
-      if (pin.plan_mode !== null) store.setPlanMode(sessionId, pin.plan_mode);
+      if (pin.plan_mode !== null) void setPlanModeAndPersist(sessionId, pin.plan_mode);
       if (pin.fast_mode !== null) store.setFastMode(sessionId, pin.fast_mode);
       if (pin.thinking_enabled !== null)
         store.setThinkingEnabled(sessionId, pin.thinking_enabled);
@@ -503,12 +554,12 @@ export function ChatInputArea({
       // previous mount's blob URLs first so we don't leak them — but
       // leave the *slice* entry for the previous session intact, so
       // its attachments come back when the user navigates back to it.
-      setPendingAttachments((prevList) => {
-        for (const a of prevList) {
-          if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
-        }
-        return hydratePendingFromSlice(sessionId);
-      });
+      for (const a of pendingAttachmentsRef.current) {
+        if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
+      }
+      const nextAttachments = hydratePendingFromSlice(sessionId);
+      pendingAttachmentsRef.current = nextAttachments;
+      setPendingAttachments(nextAttachments);
       voice.cancel();
     }
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1021,7 +1072,6 @@ export function ChatInputArea({
   const planMode = useAppStore(
     (s) => s.planMode[sessionId] ?? false,
   );
-  const setPlanMode = useAppStore((s) => s.setPlanMode);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape" && voice.state === "recording") {
@@ -1045,7 +1095,7 @@ export function ChatInputArea({
     // Shift+Tab: toggle plan mode
     if (e.key === "Tab" && e.shiftKey) {
       e.preventDefault();
-      setPlanMode(sessionId, !planMode);
+      void setPlanModeAndPersist(sessionId, !planMode);
       return;
     }
 
@@ -1145,13 +1195,27 @@ export function ChatInputArea({
   };
 
   const showUltrathinkOverlay = composerMode === "prompt" && hasUltrathink(chatInput);
+  const sendDisabled = workspaceEnvironmentPreparing;
+  // Env warmup only blocks dispatch; composer configuration remains editable.
+  const configDisabled = false;
 
   return (
     <div
+      ref={inputAreaRef}
       className={`${styles.inputArea}${dragActive ? ` ${styles.inputDragActive}` : ""}${
         composerMode === "shell" ? ` ${styles.inputAreaShell}` : ""
       }`}
+      style={{ "--composer-h": `${appliedComposerHeight}px` } as React.CSSProperties}
     >
+      <ResizeHandle
+        direction="vertical"
+        targetRef={inputAreaRef}
+        cssVar="--composer-h"
+        min={COMPOSER_MIN_HEIGHT}
+        max={composerMaxBound}
+        invert
+        onResizeEnd={handleComposerResizeEnd}
+      />
       {showFilePicker && (
         <FileMentionPicker
           results={mentionResults}
@@ -1302,7 +1366,7 @@ export function ChatInputArea({
               className={`${styles.attachBtn} ${attachMenuOpen ? styles.attachBtnActive : ""}`}
               onClick={() => setAttachMenuOpen((v) => !v)}
               title={t("add_files_connectors")}
-              disabled={workspaceEnvironmentPreparing}
+              disabled={configDisabled}
             >
               <Plus size={16} />
             </button>
@@ -1322,12 +1386,17 @@ export function ChatInputArea({
             sessionId={sessionId}
             workspaceId={selectedWorkspaceId}
             repoId={repoId ?? null}
-            disabled={isRunning || workspaceEnvironmentPreparing}
+            configDisabled={configDisabled}
+            sendDisabled={sendDisabled}
+            isRunning={isRunning}
             isRemote={isRemote}
           />
         </div>
         <div className={styles.inputControlsRight}>
-          <UsageIndicator />
+          <UsageIndicator
+            workspaceId={selectedWorkspaceId}
+            sessionId={sessionId}
+          />
           <SegmentedMeter
             ref={meterRef}
             sessionId={sessionId}

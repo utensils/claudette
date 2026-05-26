@@ -121,7 +121,7 @@ impl Database {
 
     pub fn list_workspaces(&self) -> Result<Vec<Workspace>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repository_id, name, branch_name, worktree_path, status, status_line, created_at, sort_order
+            "SELECT id, repository_id, name, branch_name, worktree_path, status, status_line, created_at, sort_order, input_values
              FROM workspaces ORDER BY repository_id, sort_order, created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -138,6 +138,21 @@ impl Database {
             } else {
                 crate::model::AgentStatus::Idle
             };
+            let input_values_raw: Option<String> = row.get(9)?;
+            let input_values = input_values_raw.and_then(|s| {
+                match serde_json::from_str::<std::collections::HashMap<String, String>>(&s) {
+                    Ok(m) if !m.is_empty() => Some(m),
+                    Ok(_) => None,
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "claudette::db",
+                            error = %e,
+                            "failed to parse workspaces.input_values JSON; treating as empty"
+                        );
+                        None
+                    }
+                }
+            });
             Ok(Workspace {
                 id: row.get(0)?,
                 repository_id: row.get(1)?,
@@ -149,9 +164,67 @@ impl Database {
                 status_line: row.get(6)?,
                 created_at: row.get(7)?,
                 sort_order: row.get(8)?,
+                input_values,
             })
         })?;
         rows.collect()
+    }
+
+    /// Persist the values a workspace was created with for its repo's
+    /// declared `required_inputs`. Pass an empty map (or `None`) to clear.
+    pub fn set_workspace_input_values(
+        &self,
+        workspace_id: &str,
+        values: Option<&std::collections::HashMap<String, String>>,
+    ) -> Result<(), rusqlite::Error> {
+        let serialized = match values {
+            Some(map) if !map.is_empty() => Some(
+                serde_json::to_string(map)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            ),
+            _ => None,
+        };
+        self.conn.execute(
+            "UPDATE workspaces SET input_values = ?1 WHERE id = ?2",
+            params![serialized, workspace_id],
+        )?;
+        Ok(())
+    }
+
+    /// Read just the input values for a workspace without loading the full
+    /// row. Used by env-injection helpers that only need the map.
+    pub fn get_workspace_input_values(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<std::collections::HashMap<String, String>>, rusqlite::Error> {
+        let raw: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT input_values FROM workspaces WHERE id = ?1",
+                params![workspace_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        // Match `list_workspaces`'s warn-and-degrade behavior: a corrupt
+        // JSON blob is logged at warn level and treated as empty, so the
+        // env merge silently dropping input values can be diagnosed from
+        // logs rather than guessed at. Empty maps round-trip to `None` so
+        // callers can early-return without a contains-key check.
+        Ok(raw.flatten().and_then(|s| {
+            match serde_json::from_str::<std::collections::HashMap<String, String>>(&s) {
+                Ok(m) if !m.is_empty() => Some(m),
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        workspace_id,
+                        error = %e,
+                        "failed to parse workspaces.input_values JSON; treating as empty"
+                    );
+                    None
+                }
+            }
+        }))
     }
 
     /// Reassign per-repository `sort_order` of workspaces in the supplied
@@ -461,17 +534,113 @@ impl Database {
                 total_output_tokens,
             ],
         )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO deleted_agent_sessions (
+                id, workspace_id, repository_id, started_at, last_message_at,
+                ended_at, turn_count, completed_ok
+             )
+             SELECT id, workspace_id, repository_id, started_at, last_message_at,
+                    ended_at, turn_count, completed_ok
+             FROM agent_sessions
+             WHERE workspace_id = ?1",
+            params![workspace_id],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO deleted_agent_commits (
+                commit_hash, workspace_id, repository_id, session_id,
+                additions, deletions, files_changed, committed_at
+             )
+             SELECT commit_hash, workspace_id, repository_id, session_id,
+                    additions, deletions, files_changed, committed_at
+             FROM agent_commits
+             WHERE workspace_id = ?1",
+            params![workspace_id],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO deleted_slash_command_usage (
+                workspace_id, repository_id, command_name, use_count, last_used_at
+             )
+             SELECT s.workspace_id, ?2, s.command_name, s.use_count, s.last_used_at
+             FROM slash_command_usage s
+             WHERE s.workspace_id = ?1",
+            params![workspace_id, repo_id],
+        )?;
         Ok(())
     }
 
     /// Hard-delete a workspace, materializing a frozen summary row first so
     /// lifetime dashboard stats survive the cascade.
+    ///
+    /// The FK chain cascades to `checkpoint_files`, but blob bytes in
+    /// `checkpoint_blobs` are only reclaimed by an explicit orphan-GC
+    /// pass. Without that pass the delete would leave bytes behind that
+    /// `compute_storage_stats` already advertised as reclaimable — so we
+    /// snapshot the cascade-row count inside the transaction and run GC
+    /// once the rows are gone.
     pub fn delete_workspace_with_summary(&self, id: &str) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         Self::materialize_workspace_summary_tx(&tx, id)?;
-        tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        let file_rows = self.count_workspace_checkpoint_files(id)?;
+        let deleted = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         tx.commit()?;
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(())
+    }
+
+    /// Atomically transition a workspace from `Archived` to `Active`.
+    /// Returns `Ok(true)` if the status flip happened (the row existed
+    /// and was Archived); `Ok(false)` if the row was missing or already
+    /// Active. `Err` only on a real DB error.
+    ///
+    /// Used by `restore_workspace` to claim a row out of Archived
+    /// *before* the async git restore, so that a concurrent bulk-delete
+    /// can't see the row as Archived during the git operation and
+    /// hard-delete it out from under the restore. The
+    /// `try_delete_archived_workspace_with_summary` guard then refuses
+    /// the delete because the SQL precondition (`status =
+    /// 'archived'`) is no longer satisfied.
+    pub fn try_claim_archived_for_restore(&self, id: &str) -> Result<bool, rusqlite::Error> {
+        let updated = self.conn.execute(
+            "UPDATE workspaces SET status = 'active' WHERE id = ?1 AND status = 'archived'",
+            params![id],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Atomic variant of [`delete_workspace_with_summary`] that runs the
+    /// "is this row still Archived?" check inside the same transaction
+    /// as the delete. Use this from bulk paths where the gap between
+    /// pre-validation and the actual delete spans several `await`
+    /// points — a concurrent `restore_workspace` could otherwise flip
+    /// status to `Active` after the snapshot check and the row would
+    /// still get hard-deleted.
+    ///
+    /// Returns `Ok(true)` if the row existed and was Archived (and so
+    /// was deleted); `Ok(false)` if the row was missing or no longer
+    /// Archived (no rows touched). `Err` only on a real DB error.
+    pub fn try_delete_archived_workspace_with_summary(
+        &self,
+        id: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        let status: Option<String> = tx
+            .query_row(
+                "SELECT status FROM workspaces WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if status.as_deref() != Some("archived") {
+            return Ok(false);
+        }
+        Self::materialize_workspace_summary_tx(&tx, id)?;
+        let file_rows = self.count_workspace_checkpoint_files(id)?;
+        let deleted = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        tx.commit()?;
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
+        Ok(true)
     }
 
     /// Hard-delete a repository, materializing summaries for all its
@@ -487,8 +656,9 @@ impl Database {
         for ws_id in &ws_ids {
             Self::materialize_workspace_summary_tx(&tx, ws_id)?;
         }
-        tx.execute("DELETE FROM repositories WHERE id = ?1", params![id])?;
+        let deleted = tx.execute("DELETE FROM repositories WHERE id = ?1", params![id])?;
         tx.commit()?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(())
     }
 
@@ -574,8 +744,12 @@ impl Database {
     }
 
     pub fn delete_workspace(&self, id: &str) -> Result<(), rusqlite::Error> {
-        self.conn
+        let file_rows = self.count_workspace_checkpoint_files(id)?;
+        let deleted = self
+            .conn
             .execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(())
     }
 }
@@ -1075,6 +1249,18 @@ mod tests {
             count_rows(&db, "SELECT COUNT(*) FROM deleted_workspace_summaries"),
             1
         );
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM deleted_agent_sessions"),
+            1
+        );
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM deleted_agent_commits"),
+            1
+        );
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM deleted_slash_command_usage"),
+            1
+        );
 
         let (sessions, turns, commits, adds, dels, msgs_u, msgs_a, msgs_s, slash_used): (
             i64,
@@ -1130,6 +1316,39 @@ mod tests {
             .unwrap();
         assert_eq!(total_in, 12000);
         assert_eq!(total_out, 3000);
+
+        let (turns, completed_ok): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT turn_count, completed_ok
+                 FROM deleted_agent_sessions WHERE workspace_id = 'w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((turns, completed_ok), (5, 1));
+
+        let (adds, dels): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT additions, deletions
+                 FROM deleted_agent_commits WHERE workspace_id = 'w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((adds, dels), (50, 10));
+
+        let (command_name, use_count): (String, i64) = db
+            .conn
+            .query_row(
+                "SELECT command_name, use_count
+                 FROM deleted_slash_command_usage WHERE workspace_id = 'w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((command_name, use_count), ("/foo".to_string(), 7));
     }
 
     #[test]
@@ -1144,6 +1363,13 @@ mod tests {
                 "SELECT COUNT(*) FROM deleted_workspace_summaries WHERE workspace_id = 'w1'"
             ),
             1
+        );
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM deleted_agent_sessions WHERE workspace_id = 'w1'"
+            ),
+            0
         );
     }
 
@@ -1264,5 +1490,35 @@ mod tests {
                 panic!("expected FromSqlConversionFailure for unknown status, got: {other:?}",)
             }
         }
+    }
+
+    #[test]
+    fn input_values_roundtrip() {
+        let db = setup_db_with_workspace();
+        // Default is None.
+        let workspaces = db.list_workspaces().unwrap();
+        let ws = workspaces.iter().find(|w| w.id == "w1").unwrap();
+        assert!(ws.input_values.is_none());
+
+        // Persist and read back.
+        let mut values = std::collections::HashMap::new();
+        values.insert("TICKET_ID".to_string(), "PROJ-42".to_string());
+        values.insert("RETRIES".to_string(), "5".to_string());
+        db.set_workspace_input_values("w1", Some(&values)).unwrap();
+
+        let loaded = db.get_workspace_input_values("w1").unwrap();
+        assert_eq!(
+            loaded.as_ref().unwrap().get("TICKET_ID"),
+            Some(&"PROJ-42".to_string())
+        );
+        assert_eq!(
+            loaded.as_ref().unwrap().get("RETRIES"),
+            Some(&"5".to_string())
+        );
+
+        // Empty map clears.
+        db.set_workspace_input_values("w1", Some(&std::collections::HashMap::new()))
+            .unwrap();
+        assert!(db.get_workspace_input_values("w1").unwrap().is_none());
     }
 }

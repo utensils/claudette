@@ -24,4 +24,6 @@ Never edit, rename, or delete released SQL migrations under `src/migrations/*.sq
 
 Use `bun`, not npm. Keep TypeScript strict and avoid `any`. Keep Rust cross-platform with explicit `#[cfg(...)]` gates for OS-specific code.
 
+When spawning subprocesses, never use a raw `std::process::Command::new` / `tokio::process::Command::new`. On Windows a GUI process spawns a child with no `CREATE_NO_WINDOW` flag and a blank `cmd.exe` window flashes on screen — a bug invisible in dev builds and only seen in release. Use the `claudette::process` command helper, or `CommandWindowExt::no_console_window()`. Flag any raw `Command::new` in review as a Windows console-flash regression unless it is a deliberate user-facing terminal launch using `.new_console_window()`.
+
 Always update user-facing docs in the same PR as the feature change. New or changed user-visible behavior — settings, commands, CLI flags, keyboard shortcuts, environment variables, file locations, plugin manifests, notification triggers — needs a matching update under `site/src/content/docs/`. Per-feature deep-dives go in `site/src/content/docs/features/<topic>.mdx` (register new pages in `site/astro.config.mjs`); every Settings panel control belongs in the matching `## <Section>` table in `site/src/content/docs/features/settings.mdx`. If a change is intentionally undocumented, say so in the PR description.

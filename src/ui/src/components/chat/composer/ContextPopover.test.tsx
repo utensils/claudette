@@ -4,13 +4,22 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// useAppStore is called once per selector — match what each selector
+// extracts so the new resolveSessionHarness path has real arrays / maps
+// to inspect. Previously the mock returned a single token-stats object
+// regardless of selector, which broke once the popover started reading
+// `agentBackends.find(...)` from the store.
+const fakeStoreState = {
+  latestTurnUsage: {} as Record<string, unknown>,
+  agentBackends: [] as Array<{ id: string; kind: string }>,
+  selectedModelProvider: {} as Record<string, string>,
+  defaultAgentBackendId: "anthropic",
+};
+
 vi.mock("../../../stores/useAppStore", () => ({
-  useAppStore: vi.fn(() => ({
-    totalTokens: 5000,
-    inputTokens: 4000,
-    cacheReadTokens: 500,
-    cacheWriteTokens: 500,
-  })),
+  useAppStore: vi.fn((selector: (s: typeof fakeStoreState) => unknown) =>
+    typeof selector === "function" ? selector(fakeStoreState) : fakeStoreState,
+  ),
 }));
 
 vi.mock("../contextMeterLogic", () => ({

@@ -4,6 +4,7 @@ import {
   cancelClaudeAuthLogin,
   claudeAuthLogin,
   getClaudeAuthStatus,
+  launchCodexLogin,
   submitClaudeAuthCode,
   type ClaudeAuthStatus,
 } from "../../services/tauri";
@@ -43,10 +44,49 @@ const AUTH_ERROR_PATTERNS = [
   "failed to authenticate",
 ];
 
-export function isClaudeAuthError(error: string): boolean {
-  if (error.includes("ENV_AUTH:")) return false;
+/**
+ * Sentinel emitted by the Codex App-Server harness when its OAuth
+ * refresh token has been rotated out from under the running session.
+ * Mirrors `CODEX_AUTH_EXPIRED_MESSAGE` in `src/agent/codex_app_server.rs` —
+ * keep the substring match in lockstep with the backend constant so any
+ * phrasing tweak there gets picked up here without a separate code path.
+ */
+const CODEX_AUTH_EXPIRED_SENTINEL = "codex authentication expired";
+
+/**
+ * Provider whose sign-in flow should drive the in-chat auth callout for
+ * a given failure. `null` = not an auth error we know how to recover.
+ *
+ * Determined entirely from the error string so this works regardless of
+ * which harness produced it (Codex App-Server, Claude CLI subprocess,
+ * etc.). When the backend evolves to emit other harness-specific auth
+ * sentinels, extend this classifier rather than scattering per-call-site
+ * substring checks across the FE.
+ */
+export type AuthErrorProvider = "claude" | "codex";
+
+export function classifyAuthError(error: string): AuthErrorProvider | null {
+  if (error.includes("ENV_AUTH:")) return null;
   const normalized = error.toLowerCase();
-  return AUTH_ERROR_PATTERNS.some((pattern) => normalized.includes(pattern));
+  if (normalized.includes(CODEX_AUTH_EXPIRED_SENTINEL)) return "codex";
+  if (AUTH_ERROR_PATTERNS.some((pattern) => normalized.includes(pattern))) {
+    return "claude";
+  }
+  return null;
+}
+
+export function isCodexAuthError(error: string): boolean {
+  return classifyAuthError(error) === "codex";
+}
+
+/**
+ * Backwards-compatible boolean — matches any auth flavour we recognise
+ * so existing call-sites (chat message filters, settings panels) keep
+ * working. The "Claude" name is historical; new code should prefer
+ * `classifyAuthError` when it needs to distinguish providers.
+ */
+export function isClaudeAuthError(error: string): boolean {
+  return classifyAuthError(error) !== null;
 }
 
 export function cleanClaudeAuthError(error: string): string {
@@ -245,4 +285,118 @@ export function useClaudeAuthLogin({
     cancelAuthLogin,
     submitAuthCode,
   } satisfies ClaudeAuthLoginController;
+}
+
+/**
+ * Codex sign-in controller. Satisfies the same shape as
+ * `useClaudeAuthLogin` so the shared `ClaudeCodeAuthPanelView` can
+ * render either flavour without branching on provider beyond the title
+ * and description strings.
+ *
+ * Unlike Claude Code, the Codex CLI's `codex login` flow is a one-shot
+ * browser handoff — it does not emit progress events or accept a paste-
+ * back auth code, so `manualUrl` is always null and `submitAuthCode` is
+ * a no-op. Completion lands through a Codex-specific event after
+ * `launch_codex_login`'s post-exit sweep has torn down stale persistent
+ * Codex sessions, so a fresh app-server picks up the new tokens.
+ */
+export function useCodexAuthLogin({
+  onSuccess,
+}: {
+  onSuccess?: () => void | Promise<void>;
+} = {}) {
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const onSuccessRef = useRef(onSuccess);
+  const loginInFlightRef = useRef(false);
+  const [authState, setAuthState] = useState<ClaudeAuthLoginState>({
+    status: "idle",
+  });
+
+  useEffect(() => {
+    onSuccessRef.current = onSuccess;
+  }, [onSuccess]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+    listen<AuthLoginComplete>("codex://login-complete", (event) => {
+      if (!loginInFlightRef.current) return;
+      loginInFlightRef.current = false;
+      const { success, error } = event.payload;
+      if (!success) {
+        setAuthState({
+          status: "error",
+          error: error ?? "Codex sign-in failed.",
+        });
+        return;
+      }
+
+      void Promise.resolve(onSuccessRef.current?.())
+        .then(() => {
+          setAuthState({ status: "success" });
+        })
+        .catch((err) => {
+          setAuthState({
+            status: "error",
+            error:
+              err instanceof Error
+                ? err.message
+                : String(err || "Codex sign-in could not be verified."),
+          });
+        });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => {
+        console.error("Failed to subscribe to codex://login-complete", err);
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const startAuthLogin = useCallback(async () => {
+    loginInFlightRef.current = true;
+    setAuthState({ status: "running", manualUrl: null });
+    try {
+      await launchCodexLogin(selectedWorkspaceId);
+    } catch (e) {
+      loginInFlightRef.current = false;
+      setAuthState({ status: "error", error: String(e) });
+    }
+  }, [selectedWorkspaceId]);
+
+  const cancelAuthLogin = useCallback(async () => {
+    // No backend cancel — `codex login` runs detached. Just reset the
+    // UI so the user can dismiss the spinner if they completed the
+    // browser flow and want to retry their message.
+    loginInFlightRef.current = false;
+    setAuthState({ status: "idle" });
+  }, []);
+
+  const submitAuthCode = useCallback(async (_code: string) => {
+    // Codex's browser flow doesn't require a paste-back code. Treat as
+    // a no-op so the shared controller interface compiles cleanly.
+  }, []);
+
+  return {
+    authState,
+    startAuthLogin,
+    cancelAuthLogin,
+    submitAuthCode,
+  } satisfies ClaudeAuthLoginController;
+}
+
+/** Strip the "(or `codex login`...)" hint from the user-facing sentinel
+ *  so the inline banner stays short. The hint stays in the full callout
+ *  body so users still see the recovery options when the card is open. */
+export function cleanCodexAuthError(error: string): string {
+  return error
+    .replace(/\s*\(or `codex login` in a terminal\)/, "")
+    .replace(/, then send the message again\.?$/, "")
+    .trim();
 }

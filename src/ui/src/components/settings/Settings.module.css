@@ -30,32 +30,68 @@
   width: 220px;
   flex-shrink: 0;
   border-right: 1px solid var(--divider);
-  padding: 16px 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 [data-platform="mac"] .sidebar {
-  padding-top: 38px;
   background: color-mix(in srgb, var(--sidebar-bg) 88%, transparent);
 }
 
-.backLink {
+/* Non-scrolling header — lives outside the scrollable nav so macOS
+   elastic-bounce scroll never moves it. On macOS the top padding
+   clears the 38px overlay title bar zone. */
+.sidebarHeader {
+  flex-shrink: 0;
   display: flex;
+  flex-direction: column;
+  padding: 10px 0 10px;
+  border-bottom: 1px solid var(--divider);
+}
+
+[data-platform="mac"] .sidebarHeader {
+  padding-top: 42px;
+}
+
+.sidebarTitle {
+  margin: 0;
+  padding: 6px 16px 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+}
+
+/* Scrollable nav list below the fixed header. The JS hook on
+   BoundedScrollPane handles WebKit's elastic gesture; this CSS rule
+   catches the trackpad-flick edge before the wheel listener fires. */
+.sidebarNav {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior-y: none;
+  padding: 8px 0 16px;
+}
+
+.backLink {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 16px 16px;
+  margin: 0 8px 2px;
+  padding: 4px 8px;
+  border-radius: 6px;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   border: none;
   background: none;
   text-align: left;
+  align-self: flex-start;
 }
 
 .backLink:hover {
   color: var(--text-primary);
+  background: var(--hover-bg);
 }
 
 .groupLabel {
@@ -119,6 +155,7 @@
 .content {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior-y: none;
   padding: 32px 48px;
   background: var(--app-bg);
 }
@@ -147,14 +184,14 @@
   font-size: 22px;
   font-weight: 500;
   color: var(--text-primary);
-  margin: 0 0 32px;
+  margin: 0 0 12px;
 }
 
 .sectionDescription {
   color: var(--text-dim);
   font-size: 13px;
   line-height: 1.55;
-  margin: -20px 0 24px;
+  margin: 0 0 24px;
   max-width: 640px;
 }
 
@@ -169,6 +206,370 @@
 .sectionHeader .sectionTitle {
   margin: 0;
 }
+
+/* Storage section header: title + description block on the left,
+   cleanup-all action button aligned to the right. Title and
+   description keep their default margins so the rest of the page
+   matches the existing visual rhythm; the button shrinks to its
+   content width. */
+.storageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.storageHeaderText {
+  min-width: 0;
+  flex: 1;
+}
+
+.storageHeaderActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.storageEmptyHint {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 12px 0;
+  font-style: italic;
+}
+
+/* Unified repo card. Each card shows one repo (or one "unknown repo"
+   slug) with all its workspaces + orphans rolled together so the page
+   doesn't duplicate the same repo across multiple sections. */
+.storageRepoCard {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.storageUnknownCard {
+  composes: storageRepoCard;
+  background: color-mix(in srgb, var(--status-stopped) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-stopped) 35%, transparent);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.storageCardHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.storageCardChevron {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.storageCardChevron:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.storageCardChevronSpacer {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+}
+
+.storageCardMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.storageCardTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex-wrap: wrap;
+}
+
+.storageUnknownIcon {
+  color: var(--status-stopped);
+  flex-shrink: 0;
+}
+
+.storageCardName {
+  /* let the rest of the title shrink before the name does */
+  flex-shrink: 0;
+}
+
+.storageCardSlugBadge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  background: var(--selected-bg);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.storageCardTotal {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  border: 1px solid var(--divider);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.storageCardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  align-items: center;
+}
+
+.storageMetaPill {
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: var(--text-dim);
+}
+
+.storageMetaPillOrphaned {
+  composes: storageMetaPill;
+  border-color: color-mix(in srgb, var(--status-stopped) 50%, transparent);
+  color: var(--status-stopped);
+}
+
+.storageCardActions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.storageCardBreakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 0 30px;
+  padding: 8px 10px;
+  background: var(--selected-bg);
+  border-radius: 4px;
+}
+
+/* Workspace row inside a card's breakdown — name | status | size. */
+.storageWorkspaceRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.storageWorkspaceName {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storageWorkspaceSize {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  min-width: 60px;
+  text-align: right;
+}
+
+/* Orphan row inside a card's breakdown — path | status | size | trash. */
+.storageOrphanRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.storageOrphanPath {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storageOrphanDeleteBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+}
+
+.storageOrphanDeleteBtn:hover:not(:disabled) {
+  color: var(--status-stopped);
+  background: var(--hover-bg);
+}
+
+.storageOrphanDeleteBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Status pills shared across workspace + orphan rows. */
+.storageStatusPillActive {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  border: 1px solid var(--divider);
+  border-radius: 9px;
+  padding: 0 6px;
+}
+
+.storageStatusPillArchived {
+  composes: storageStatusPillActive;
+}
+
+.storageStatusPillOrphaned {
+  composes: storageStatusPillActive;
+  color: var(--status-stopped);
+  border-color: color-mix(in srgb, var(--status-stopped) 50%, transparent);
+}
+
+/* Orphan-purge confirm: floats below the card list, scoped to the
+   selected path. */
+.storageOrphanConfirmOverlay {
+  position: sticky;
+  bottom: 0;
+  margin-top: 16px;
+  padding: 12px 0;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--app-bg) 16px
+  );
+}
+
+.storageOrphanConfirmCard {
+  border: 1px solid var(--status-stopped);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--bg-primary);
+}
+
+.storageOrphanConfirmText {
+  font-size: 12px;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.storageOrphanConfirmError {
+  font-size: 11px;
+  color: var(--status-stopped);
+  margin: 0 0 8px;
+  word-break: break-word;
+  /* `handleBulkOrphanPurge` joins per-failure lines with "\n" and the
+     "failures / skipped" sections with "\n\n". Without pre-wrap those
+     literal newlines collapse to single spaces and the user sees one
+     unbroken run of "path: error path: error" instead of a per-failure
+     list. Matches the sibling .storageOrphanConfirmText rule. */
+  white-space: pre-wrap;
+}
+
+.storageOrphanConfirmActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.storageOrphanConfirmDelete {
+  color: var(--status-stopped);
+  border-color: var(--status-stopped);
+}
+
+.storageOrphanConfirmList {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  max-height: 160px;
+  overflow-y: auto;
+  list-style: disc;
+}
+
+.storageOrphanConfirmList li {
+  word-break: break-all;
+  margin-bottom: 2px;
+}
+
+.storageOrphanConfirmProgress {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "Delete N orphans" button variants — uses the destructive accent
+   so it reads as different from the (safe) archived cleanup button
+   sitting next to it. */
+.storageCardOrphanBtn {
+  color: var(--status-stopped);
+  border-color: color-mix(in srgb, var(--status-stopped) 45%, transparent);
+}
+
+.storageCardOrphanBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-stopped) 8%, transparent);
+}
+
+.storageDeleteAllOrphansBtn {
+  color: var(--status-stopped);
+  border-color: color-mix(in srgb, var(--status-stopped) 45%, transparent);
+}
+
+.storageDeleteAllOrphansBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-stopped) 8%, transparent);
+}
+
+.storageError {
+  font-size: 12px;
+  color: var(--status-stopped);
+  margin: 8px 0;
+}
+
+.subsectionTitle {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 32px 0 8px;
+}
+
 
 /* ── Setting rows ── */
 
@@ -972,11 +1373,11 @@
 }
 
 .btnDanger:hover {
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
 }
 
 .error {
-  color: var(--status-stopped);
+  color: var(--accent-error);
   font-size: 12px;
   margin-top: 4px;
 }
@@ -1289,10 +1690,10 @@
 }
 
 .authPanelError {
-  border: 1px solid var(--error-border);
+  border: 1px solid var(--accent-error-border);
   border-radius: var(--radius-md);
-  background: var(--error-bg);
-  color: var(--status-stopped);
+  background: var(--accent-error-bg);
+  color: var(--accent-error);
   font-size: 13px;
   line-height: 1.5;
   padding: 10px 12px;
@@ -1421,8 +1822,8 @@
 }
 
 .mcpRemoveBtn:hover {
-  background: var(--error-hover);
-  color: var(--status-stopped);
+  background: var(--accent-error-hover);
+  color: var(--accent-error);
 }
 
 .mcpStatusDot {
@@ -1485,8 +1886,8 @@
 .envErrorCard {
   margin: 4px 8px 8px 22px;
   padding: 10px 12px;
-  border-left: 2px solid var(--status-stopped);
-  background: var(--error-hover);
+  border-left: 2px solid var(--accent-error);
+  background: var(--accent-error-hover);
   border-radius: 0 4px 4px 0;
   display: flex;
   flex-direction: column;
@@ -1966,9 +2367,9 @@
   margin-top: var(--space-2);
   max-width: 760px;
   padding: var(--space-2) var(--space-3);
-  border-left: 2px solid var(--status-stopped);
+  border-left: 2px solid var(--accent-error);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.4;
@@ -2322,8 +2723,8 @@
   display: inline-block;
   padding: 1px 6px;
   border-radius: 3px;
-  background: var(--error-hover);
-  color: var(--status-stopped);
+  background: var(--accent-error-hover);
+  color: var(--accent-error);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -2399,9 +2800,9 @@
 .flagErrorBanner {
   margin: 12px 0 16px;
   padding: 12px 14px;
-  border: 1px solid var(--error-border);
+  border: 1px solid var(--accent-error-border);
   border-radius: 8px;
-  background: var(--error-bg);
+  background: var(--accent-error-bg);
   color: var(--text-primary);
   display: flex;
   align-items: flex-start;
@@ -2413,4 +2814,103 @@
   flex: 1;
   font-size: 13px;
   line-height: 1.4;
+}
+
+/* Required inputs editor (per-repo declared workspace-create prompts).
+ *
+ * These selectors are local to RequiredInputsEditor — we intentionally do NOT
+ * reuse `.textInput` / `.numberInput` for the inline inputs because both have
+ * fixed widths (`100%` and `80px` respectively) that fight a flex row with
+ * multiple children. The dedicated classes below set their own widths and
+ * skip the `margin-top` that `.textInput` adds for vertical stacks.
+ */
+.requiredInputsList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.requiredInputRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  background: var(--inset-bg, transparent);
+}
+
+.requiredInputHeaderRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* Base style for every inline input/select inside a required-input row.
+ * Matches `.textInput` visually but without `width: 100%` so flex children
+ * can size themselves correctly. */
+.requiredInputField {
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--sidebar-border);
+  background: var(--input-bg, var(--selected-bg));
+  color: var(--text-primary);
+  font-family: inherit;
+  min-width: 0; /* lets flex children shrink below their content width */
+}
+
+.requiredInputField:focus {
+  outline: none;
+  border-color: var(--accent-color, var(--text-primary));
+}
+
+.requiredInputKeyInput {
+  flex: 1 1 0;
+  font-family: var(--font-mono);
+}
+
+.requiredInputTypeSelect {
+  flex: 0 0 auto;
+  width: 110px;
+}
+
+/* Single-row inputs (label, description, placeholder) stretch to the row
+ * width. Defined explicitly here instead of reusing `.textInput` so the
+ * margin-top stack-spacing doesn't fight the `gap` on the parent row. */
+.requiredInputFullWidth {
+  width: 100%;
+}
+
+.requiredInputNumberRow {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Wider than the shared `.numberInput` (80px) because each one carries a
+ * descriptive placeholder ("Min (optional)") that needs room to read. */
+.requiredInputNumberField {
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 200px;
+}
+
+.addPromptButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px dashed var(--divider);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.addPromptButton:hover {
+  border-color: var(--text-dim);
+  color: var(--text-primary);
 }

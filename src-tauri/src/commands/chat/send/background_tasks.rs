@@ -1,10 +1,15 @@
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::Duration,
+};
 
 use tauri::{AppHandle, Emitter, Manager};
 
 use claudette::agent::background::{
-    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, parse_bash_start,
-    parse_task_notification, workspace_terminal_output_path,
+    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, append_terminal_output_sync,
+    parse_bash_start, parse_task_notification, workspace_terminal_output_path,
 };
 use claudette::agent::{AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent};
 use claudette::chat::{
@@ -49,39 +54,90 @@ pub(super) fn terminal_text(text: &str) -> String {
     rendered
 }
 
-pub(super) async fn append_agent_bash_output(
-    path: &std::path::Path,
-    text: &str,
-) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+/// Async wrapper around the lib crate's [`append_terminal_output_sync`].
+/// Takes ownership of `bytes` and `path` so the call site hands a single
+/// allocation across the `spawn_blocking` boundary — no extra `to_vec()`
+/// copy of the (potentially multi-MB) tool-result text.
+pub(super) async fn append_agent_bash_output(path: PathBuf, bytes: Vec<u8>) -> std::io::Result<()> {
+    tokio::task::spawn_blocking(move || append_terminal_output_sync(&path, &bytes))
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!("terminal output writer task join failed: {err}"))
+        })?
+}
+
+/// Set of (source, destination) pairs that already have a live mirror task
+/// running. Background-bash bindings can re-fire (e.g. on `--resume` replay
+/// of the session transcript), and each spawn would restart reading the
+/// source file from offset 0 — re-appending gigabytes of historical bash
+/// output to the workspace terminal. This dedupes spawn requests so only
+/// one mirror per (source, destination) pair runs at a time.
+fn active_mirrors() -> &'static Mutex<HashSet<(PathBuf, PathBuf)>> {
+    static ACTIVE: OnceLock<Mutex<HashSet<(PathBuf, PathBuf)>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// RAII token that removes a mirror registration on drop. The spawned
+/// mirror task owns one of these and lets it drop when the task finishes
+/// — normally, via panic, or because the JoinHandle was aborted. Without
+/// this, a panicking or aborted task would leave the entry behind and
+/// permanently dedupe all future spawns for that `(source, destination)`.
+struct MirrorRegistration {
+    key: Option<(PathBuf, PathBuf)>,
+}
+
+impl Drop for MirrorRegistration {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            let mut active = active_mirrors().lock().unwrap_or_else(|p| p.into_inner());
+            active.remove(&key);
+        }
     }
-    use tokio::io::AsyncWriteExt;
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await?;
-    file.write_all(text.as_bytes()).await
 }
 
 pub(super) fn mirror_background_task_output(
     source: std::path::PathBuf,
     destination: std::path::PathBuf,
 ) {
+    let key = (source.clone(), destination.clone());
+    let registration = {
+        let mut active = active_mirrors().lock().unwrap_or_else(|p| p.into_inner());
+        if !active.insert(key.clone()) {
+            tracing::debug!(
+                target: "claudette::chat",
+                source = %source.display(),
+                destination = %destination.display(),
+                "skipping duplicate background output mirror spawn"
+            );
+            return;
+        }
+        MirrorRegistration { key: Some(key) }
+    };
     tokio::spawn(async move {
+        // Held in scope for the entire mirror loop. Dropped on normal
+        // completion, panic, or JoinHandle::abort — whichever happens
+        // first — so the (source, destination) registration is released.
+        let _registration = registration;
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
         let mut offset = 0_u64;
-        let mut idle_ticks = 0_u32;
-        const MAX_INITIAL_IDLE_TICKS: u32 = 6_000; // 10 minutes at 100ms/tick.
+        let mut empty_reads = 0_u32;
+        let started_at = tokio::time::Instant::now();
+        let mut idle_since_output: Option<tokio::time::Instant> = None;
+        const ACTIVE_MIRROR_POLL: Duration = Duration::from_millis(100);
+        const MAX_INITIAL_IDLE: Duration = Duration::from_secs(10 * 60);
+        const MAX_IDLE_AFTER_OUTPUT: Duration = Duration::from_secs(10);
         const MAX_IDLE_TICKS_AFTER_OUTPUT: u32 = 20;
         let mut buf = vec![0_u8; 8192];
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(crate::tail_backoff::adaptive_tail_delay(
+                ACTIVE_MIRROR_POLL,
+                empty_reads,
+            ))
+            .await;
             let Ok(mut file) = tokio::fs::File::open(&source).await else {
-                idle_ticks = idle_ticks.saturating_add(1);
-                if idle_ticks >= MAX_INITIAL_IDLE_TICKS {
+                empty_reads = empty_reads.saturating_add(1);
+                if offset == 0 && started_at.elapsed() >= MAX_INITIAL_IDLE {
                     tracing::debug!(target: "claudette::chat", source = %source.display(), "stopping idle background output mirror before source file appeared");
                     break;
                 }
@@ -101,11 +157,10 @@ pub(super) fn mirror_background_task_output(
                     Ok(n) => {
                         offset += n as u64;
                         wrote = true;
-                        if let Err(err) = append_agent_bash_output(
-                            &destination,
-                            &terminal_text(&String::from_utf8_lossy(&buf[..n])),
-                        )
-                        .await
+                        let rendered = terminal_text(&String::from_utf8_lossy(&buf[..n]));
+                        if let Err(err) =
+                            append_agent_bash_output(destination.clone(), rendered.into_bytes())
+                                .await
                         {
                             tracing::warn!(target: "claudette::chat", error = %err, "failed to mirror background output");
                         }
@@ -114,19 +169,28 @@ pub(super) fn mirror_background_task_output(
                 }
             }
             if wrote {
-                idle_ticks = 0;
+                empty_reads = 0;
+                idle_since_output = None;
             } else {
-                idle_ticks = idle_ticks.saturating_add(1);
-                let max_idle_ticks = if offset > 0 {
-                    MAX_IDLE_TICKS_AFTER_OUTPUT
-                } else {
-                    MAX_INITIAL_IDLE_TICKS
-                };
-                if idle_ticks >= max_idle_ticks {
+                empty_reads = empty_reads.saturating_add(1);
+                let idle_for = idle_since_output
+                    .get_or_insert_with(tokio::time::Instant::now)
+                    .elapsed();
+                if offset == 0 && started_at.elapsed() >= MAX_INITIAL_IDLE {
+                    tracing::debug!(target: "claudette::chat", source = %source.display(), "stopping idle background output mirror with no output");
+                    break;
+                }
+                if offset > 0
+                    && (empty_reads >= MAX_IDLE_TICKS_AFTER_OUTPUT
+                        || idle_for >= MAX_IDLE_AFTER_OUTPUT)
+                {
                     break;
                 }
             }
         }
+        // `_registration` drops here, releasing the (source, destination)
+        // entry from `active_mirrors` so a fresh mirror can be spawned
+        // later if the same background bash binding re-fires.
     });
 }
 
@@ -182,6 +246,10 @@ fn is_terminal_task_status(status: &str) -> bool {
     )
 }
 
+pub(super) fn is_final_terminal_task_status(status: &str) -> bool {
+    is_terminal_task_status(status)
+}
+
 pub(super) fn should_defer_persistent_restart(session: &AgentSessionState) -> bool {
     should_defer_persistent_restart_for_state(
         session.persistent_session.is_some(),
@@ -198,7 +266,14 @@ fn should_defer_persistent_restart_for_state(
 
 #[derive(Default)]
 pub(super) struct BackgroundTaskInputTracker {
-    bash_inputs: HashMap<usize, (String, String)>,
+    bash_inputs: HashMap<usize, BashInput>,
+    bash_tool_use_ids: HashSet<String>,
+}
+
+struct BashInput {
+    tool_use_id: String,
+    input_json: String,
+    start_observed: bool,
 }
 
 impl BackgroundTaskInputTracker {
@@ -207,18 +282,26 @@ impl BackgroundTaskInputTracker {
             event:
                 InnerStreamEvent::ContentBlockStart {
                     index,
-                    content_block: Some(StartContentBlock::ToolUse { id, name }),
+                    content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
                 },
         }) = event
             && name == "Bash"
         {
-            self.bash_inputs.insert(*index, (id.clone(), String::new()));
+            self.bash_tool_use_ids.insert(id.clone());
+            self.bash_inputs.insert(
+                *index,
+                BashInput {
+                    tool_use_id: id.clone(),
+                    input_json: String::new(),
+                    start_observed: false,
+                },
+            );
         }
 
         if let AgentEvent::Stream(StreamEvent::Stream {
             event: InnerStreamEvent::ContentBlockDelta { index, delta },
         }) = event
-            && let Some((_tool_use_id, input)) = self.bash_inputs.get_mut(index)
+            && let Some(input) = self.bash_inputs.get_mut(index)
         {
             match delta {
                 claudette::agent::Delta::ToolUse {
@@ -226,8 +309,30 @@ impl BackgroundTaskInputTracker {
                 }
                 | claudette::agent::Delta::InputJson {
                     partial_json: Some(part),
-                } => input.push_str(part),
+                } => input.input_json.push_str(part),
                 _ => {}
+            }
+        }
+    }
+
+    pub(super) fn is_bash_tool_result(&self, tool_use_id: &str) -> bool {
+        self.bash_tool_use_ids.contains(tool_use_id)
+    }
+
+    pub(super) fn is_bash_tool_active(&self, tool_use_id: &str) -> bool {
+        self.bash_inputs
+            .values()
+            .any(|input| input.tool_use_id == tool_use_id)
+    }
+
+    pub(super) fn finish_bash_tool_result(&mut self, tool_use_id: &str) {
+        self.bash_tool_use_ids.remove(tool_use_id);
+    }
+
+    pub(super) fn mark_bash_tool_started(&mut self, tool_use_id: &str) {
+        for input in self.bash_inputs.values_mut() {
+            if input.tool_use_id == tool_use_id {
+                input.start_observed = true;
             }
         }
     }
@@ -246,10 +351,10 @@ impl BackgroundTaskInputTracker {
         else {
             return;
         };
-        let Some((tool_use_id, input_json)) = self.bash_inputs.remove(index) else {
+        let Some(input) = self.bash_inputs.remove(index) else {
             return;
         };
-        let Some(start) = parse_bash_start(&input_json) else {
+        let Some(start) = parse_bash_start(&input.input_json) else {
             return;
         };
 
@@ -258,8 +363,13 @@ impl BackgroundTaskInputTracker {
             let app_state = app.state::<AppState>();
             let mut agents = app_state.agents.write().await;
             if let Some(session) = agents.get_mut(chat_session_id) {
-                session.running_background_tasks.insert(tool_use_id.clone());
+                session
+                    .running_background_tasks
+                    .insert(input.tool_use_id.clone());
             }
+        }
+        if input.start_observed {
+            return;
         }
         // Workspace-scoped path: every agent shell command across every
         // chat session appends to the same workspace transcript. The
@@ -272,7 +382,7 @@ impl BackgroundTaskInputTracker {
         let echo = command
             .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
             .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());
-        if let Err(err) = append_agent_bash_output(&path, &echo).await {
+        if let Err(err) = append_agent_bash_output(path, echo.into_bytes()).await {
             tracing::warn!(target: "claudette::chat", error = %err, "failed to write agent bash output");
         }
         if get_or_create_agent_shell_terminal_tab(db_path, workspace_id, chat_session_id).is_some()
@@ -313,6 +423,7 @@ pub(super) async fn apply_task_notification_status(
     summary: Option<&str>,
     output_file: Option<&str>,
 ) {
+    let _ = get_or_create_agent_shell_terminal_tab(db_path, workspace_id, chat_session_id);
     let Ok(db) = Database::open(db_path) else {
         return;
     };
@@ -748,6 +859,8 @@ pub(super) fn schedule_background_task_wake(
                 }
             }
 
+            super::route_turn_control_request(&app, &workspace_id, &chat_session_id, &event).await;
+
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event: InnerStreamEvent::MessageDelta { usage: Some(u) },
             }) = &event
@@ -849,9 +962,15 @@ pub(super) fn schedule_background_task_wake(
 #[cfg(test)]
 mod tests {
     use super::{
-        BackgroundTaskCompletion, build_background_task_completion_prompt, markdown_code_fence_for,
+        BackgroundTaskCompletion, BackgroundTaskInputTracker,
+        build_background_task_completion_prompt, markdown_code_fence_for,
         should_defer_persistent_restart_for_state, terminal_text,
     };
+    use claudette::agent::{
+        AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent, UserContentBlock,
+        UserEventMessage, UserMessageContent,
+    };
+    use serde_json::json;
     #[test]
     fn terminal_text_converts_newlines_to_terminal_newlines() {
         assert_eq!(terminal_text("one\ntwo\r\nthree"), "one\r\ntwo\r\nthree");
@@ -884,6 +1003,65 @@ mod tests {
         assert!(!should_defer_persistent_restart_for_state(true, false));
         assert!(!should_defer_persistent_restart_for_state(false, true));
         assert!(!should_defer_persistent_restart_for_state(false, false));
+    }
+
+    #[test]
+    fn tool_results_are_shell_owned_only_after_bash_tool_start() {
+        let mut tracker = BackgroundTaskInputTracker::default();
+        let non_bash_result = AgentEvent::Stream(StreamEvent::User {
+            message: UserEventMessage {
+                content: UserMessageContent::Blocks(vec![UserContentBlock::ToolResult {
+                    tool_use_id: "file-1".to_string(),
+                    content: json!({"status": "completed"}),
+                }]),
+            },
+            uuid: None,
+            is_replay: false,
+            is_synthetic: true,
+        });
+
+        tracker.observe_bash_input_delta(&non_bash_result);
+        assert!(!tracker.is_bash_tool_result("file-1"));
+
+        tracker.observe_bash_input_delta(&AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index: 7,
+                content_block: Some(StartContentBlock::ToolUse {
+                    id: "cmd-1".to_string(),
+                    name: "Bash".to_string(),
+                    input: None,
+                }),
+            },
+        }));
+
+        assert!(tracker.is_bash_tool_result("cmd-1"));
+        assert!(tracker.is_bash_tool_active("cmd-1"));
+        tracker.finish_bash_tool_result("cmd-1");
+        assert!(!tracker.is_bash_tool_result("cmd-1"));
+    }
+
+    #[test]
+    fn completed_structured_status_can_claim_bash_tool_result_before_fallback() {
+        let mut tracker = BackgroundTaskInputTracker::default();
+
+        tracker.observe_bash_input_delta(&AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index: 3,
+                content_block: Some(StartContentBlock::ToolUse {
+                    id: "cmd-1".to_string(),
+                    name: "Bash".to_string(),
+                    input: None,
+                }),
+            },
+        }));
+        tracker.mark_bash_tool_started("cmd-1");
+
+        assert!(tracker.is_bash_tool_result("cmd-1"));
+        tracker.finish_bash_tool_result("cmd-1");
+        assert!(
+            !tracker.is_bash_tool_result("cmd-1"),
+            "a structured Codex terminal completion must prevent the legacy ToolResult fallback"
+        );
     }
 
     #[test]
@@ -944,5 +1122,48 @@ mod tests {
         assert!(text.contains("tail output"));
 
         let _ = std::fs::remove_file(trusted_path);
+    }
+
+    #[tokio::test]
+    async fn mirror_background_task_output_dedupes_duplicate_spawns() {
+        // Issue #937: on session resume the binding `ToolResult` can re-fire,
+        // and each spawn restarts the mirror at offset 0 and re-appends the
+        // entire source file. Duplicate (source, destination) pairs must be
+        // deduped so a single mirror exists per pair.
+        use super::mirror_background_task_output;
+
+        let source =
+            std::env::temp_dir().join(format!("claudette-mirror-src-{}.log", uuid::Uuid::new_v4()));
+        let destination =
+            std::env::temp_dir().join(format!("claudette-mirror-dst-{}.log", uuid::Uuid::new_v4()));
+        // Seed a tiny source so the mirror has bytes to copy on its first
+        // tick (~100 ms). We assert on the destination size, which a single
+        // mirror would write once and a second concurrent mirror would
+        // append again.
+        let payload = b"once\n";
+        std::fs::write(&source, payload).unwrap();
+
+        mirror_background_task_output(source.clone(), destination.clone());
+        // Second spawn for the same pair must be a no-op (deduped) rather
+        // than re-reading the source file from offset 0.
+        mirror_background_task_output(source.clone(), destination.clone());
+
+        // Give the (single) live mirror a tick or two to flush.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+        let after = std::fs::read(&destination).unwrap();
+        // The mirror runs `terminal_text` which converts `\n` → `\r\n`.
+        // One mirror copies the source once: 5 bytes in → 6 bytes out.
+        // Two mirrors would copy it twice: 12 bytes out.
+        assert_eq!(
+            after.len(),
+            6,
+            "expected exactly one mirror to have written, got {} bytes ({:?})",
+            after.len(),
+            String::from_utf8_lossy(&after)
+        );
+
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(destination);
     }
 }

@@ -1,0 +1,166 @@
+/* Stacked, full-width layout for the Pi card body — replaces the
+ * 3-column `.backendForm` grid so provider rows have room to breathe.
+ * Used only when `draft.kind === "pi_sdk"`. */
+
+.stack {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 760px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.sectionLabel {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sectionMeta {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.disclosure {
+  background: transparent;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  padding: 0;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  overflow: hidden;
+}
+
+.disclosure:hover {
+  background: var(--hover-bg);
+}
+
+.disclosureHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.disclosureChevron {
+  color: var(--text-dim);
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.disclosureChevronOpen {
+  transform: rotate(90deg);
+}
+
+.disclosureLabel {
+  flex: 1;
+}
+
+.disclosureCount {
+  color: var(--text-dim);
+}
+
+.disclosureBody {
+  border-top: 1px solid var(--divider);
+  padding: 10px 12px;
+  background: var(--chat-input-bg);
+}
+
+.manualModelsInput {
+  width: 100%;
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+}
+
+.manualModelsInput:focus {
+  border-color: var(--accent-primary);
+}
+
+.manualModelsHint {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+/* Available-models sub-disclosure: one row per Pi sub-provider with
+ * a chevron + chip grid of concrete model labels on expand. Restores
+ * the per-model visibility the old `PiDiscoveredModelsList`
+ * provided; without it, users couldn't verify which models Pi
+ * actually returned for a configured provider. */
+.modelGroupList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.modelGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  width: 100%;
+  transition: background var(--transition-fast);
+}
+
+.modelGroupHeader:hover {
+  background: var(--hover-bg);
+}
+
+.modelGroupLabel {
+  flex: 1;
+}
+
+.modelGroupCount {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.modelChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px 8px 24px;
+}
+
+.modelChip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--divider);
+  white-space: nowrap;
+}

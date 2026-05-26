@@ -30,9 +30,11 @@ If you don't have any repositories yet, the welcome card collapses to a single *
 
 ### Project-scoped view
 
-Click any project header in the sidebar (or press `⌘/Ctrl + N` for the Nth project) to open a **project-scoped view**: a card pre-targeted at that project, with the project's existing workspaces listed beneath it. Selecting a workspace from there leaves the project view; the **Dashboard** button in the toolbar (top-left) returns to the global view.
+Click any project header in the sidebar (or, with the sidebar in **group-by-repo** mode, press `⌘/Ctrl + 1` – `⌘/Ctrl + 9` to jump to the Nth project) to open a **project-scoped view**: a card pre-targeted at that project, with the project's existing workspaces listed beneath it. Selecting a workspace from there leaves the project view; the **Dashboard** button in the toolbar (top-left) returns to the global view.
 
-The project-scoped view replaces the previous behavior where `⌘/Ctrl + N` was a no-op for projects with no workspaces — first-run users now have a discoverable landing pad for any project they jump to.
+The project-scoped view replaces the previous behavior where the project-jump shortcut was a no-op for projects with no workspaces — first-run users now have a discoverable landing pad for any project they jump to.
+
+In **group-by-status** mode the same `⌘/Ctrl + 1` – `⌘/Ctrl + 9` shortcut jumps directly to the Nth **visible workspace** instead — counting top-to-bottom through the status buckets and skipping any rows inside a collapsed group. Hold `⌘/Ctrl` to see the position badges (1–9) overlaid on the rows they target.
 
 ### Empty-tabs view inside a workspace
 
@@ -57,7 +59,7 @@ Click the **+** button next to any repository in the sidebar to create a new wor
 
 - **Click** a workspace in the sidebar to switch to it
 - **Fuzzy finder**: `⌘/Ctrl + K` to quickly search and jump to any workspace
-- **Project jump**: `⌘/Ctrl + 1` – `⌘/Ctrl + 9` to jump straight to the Nth project (repository) in the sidebar
+- **Project / workspace jump**: `⌘/Ctrl + 1` – `⌘/Ctrl + 9` jumps straight to the Nth project (repository) when the sidebar is grouped by repo, or to the Nth visible workspace when it's grouped by status
 - **Cycle the tab strip**: `⌘/Ctrl + Shift + [` and `⌘/Ctrl + Shift + ]` move one slot left/right through the unified tab strip (workspace tabs, chat sessions, diffs, file tabs) — useful when you want to flip between *open tabs* rather than projects
 
 ## Agent Lifecycle

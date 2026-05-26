@@ -14,13 +14,14 @@ export interface TrackedTask {
   description: string;
   status: TaskStatus;
   priority?: "high" | "medium" | "low";
-  source: "task" | "todo";
+  source: "task" | "todo" | "plan";
 }
 
 export interface TaskTrackerResult {
   tasks: TrackedTask[];
   completedCount: number;
   totalCount: number;
+  explanation?: string;
 }
 
 export interface TaskRun extends TaskTrackerResult {
@@ -95,9 +96,13 @@ const EMPTY_WITH_HISTORY: TaskTrackerWithHistory = {
 /** Normalise status strings from Claude's TaskCreate/TaskUpdate/TodoWrite inputs. */
 function normalizeStatus(raw: string | undefined): TaskStatus {
   if (!raw) return "pending";
-  const s = raw.toLowerCase().replace(/[\s_-]+/g, "_");
+  const s = raw
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "_");
   if (s === "completed" || s === "done") return "completed";
-  if (s === "in_progress" || s === "started" || s === "running") return "in_progress";
+  if (s === "in_progress" || s === "started" || s === "running")
+    return "in_progress";
   if (s === "blocked") return "blocked";
   if (
     s === "cancelled" ||
@@ -152,14 +157,17 @@ export function processActivities(
   activities: ToolActivity[],
   taskMap: Map<string, TrackedTask>,
   todoMap: Map<string, TrackedTask>,
-  nextSyntheticId: { value: number }
+  nextSyntheticId: { value: number },
+  planMap?: Map<string, TrackedTask>,
+  planMeta?: { explanation?: string },
 ) {
   for (const act of activities) {
     if (
       act.toolName !== "TaskCreate" &&
       act.toolName !== "TaskUpdate" &&
       act.toolName !== "TaskStop" &&
-      act.toolName !== "TodoWrite"
+      act.toolName !== "TodoWrite" &&
+      act.toolName !== "update_plan"
     ) {
       continue;
     }
@@ -236,6 +244,22 @@ export function processActivities(
         }
         break;
       }
+      case "update_plan": {
+        if (!planMap) break;
+        const plan = input.plan;
+        if (!Array.isArray(plan)) break;
+        planMap.clear();
+        for (const task of parsePlanTasks(plan, nextSyntheticId)) {
+          planMap.set(task.id, task);
+        }
+        if (planMeta) {
+          planMeta.explanation =
+            typeof input.explanation === "string" && input.explanation.trim()
+              ? input.explanation.trim()
+              : undefined;
+        }
+        break;
+      }
     }
   }
 }
@@ -260,8 +284,34 @@ function parseTodoTasks(
   return tasks;
 }
 
+function parsePlanTasks(
+  plan: unknown[],
+  nextSyntheticId: { value: number },
+): TrackedTask[] {
+  const tasks: TrackedTask[] = [];
+  let hasInProgress = false;
+  for (const item of plan) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const description = String(raw.step ?? "");
+    const id = `_p${nextSyntheticId.value++}`;
+    let status = normalizeStatus(raw.status as string | undefined);
+    if (status === "in_progress") {
+      if (hasInProgress) status = "pending";
+      else hasInProgress = true;
+    }
+    tasks.push({
+      id,
+      description,
+      status,
+      source: "plan",
+    });
+  }
+  return tasks;
+}
+
 function normalizePriority(
-  raw: string | undefined
+  raw: string | undefined,
 ): "high" | "medium" | "low" | undefined {
   if (!raw) return undefined;
   const s = raw.toLowerCase();
@@ -271,19 +321,24 @@ function normalizePriority(
   return undefined;
 }
 
-function taskResult(tasks: TrackedTask[]): TaskTrackerResult {
+function taskResult(
+  tasks: TrackedTask[],
+  explanation?: string,
+): TaskTrackerResult {
   if (tasks.length === 0) return EMPTY_RESULT;
   return {
     tasks,
     completedCount: tasks.filter((t) => t.status === "completed").length,
     totalCount: tasks.length,
+    explanation,
   };
 }
 
-interface TodoRunDraft {
+interface SnapshotRunDraft {
   id: string;
   sequence: number;
   tasks: TrackedTask[];
+  explanation?: string;
   startedAt?: string;
   updatedAt?: string;
   turnId?: string;
@@ -295,13 +350,14 @@ function normalizeTaskContent(value: string): string {
 
 function taskContentSet(tasks: TrackedTask[]): Set<string> {
   return new Set(
-    tasks
-      .map((task) => normalizeTaskContent(task.description))
-      .filter(Boolean),
+    tasks.map((task) => normalizeTaskContent(task.description)).filter(Boolean),
   );
 }
 
-function isReplacedTodoRun(previous: TrackedTask[], next: TrackedTask[]): boolean {
+function isReplacedTodoRun(
+  previous: TrackedTask[],
+  next: TrackedTask[],
+): boolean {
   if (previous.length === 0 || next.length === 0) return false;
 
   const previousSet = taskContentSet(previous);
@@ -321,8 +377,8 @@ function isReplacedTodoRun(previous: TrackedTask[], next: TrackedTask[]): boolea
   return union > 0 && intersection / union < 0.25;
 }
 
-function finalizeTodoRun(run: TodoRunDraft): TaskRun {
-  const result = taskResult(run.tasks);
+function finalizeSnapshotRun(run: SnapshotRunDraft): TaskRun {
+  const result = taskResult(run.tasks, run.explanation);
   return {
     ...result,
     id: run.id,
@@ -358,6 +414,8 @@ function deriveSubagentRunFromActivity(
 
   const taskMap = new Map<string, TrackedTask>();
   const todoMap = new Map<string, TrackedTask>();
+  const planMap = new Map<string, TrackedTask>();
+  const planMeta: { explanation?: string } = {};
 
   for (const call of calls) {
     if (!TASK_TOOL_NAMES.has(call.toolName)) continue;
@@ -433,15 +491,28 @@ function deriveSubagentRunFromActivity(
         }
         break;
       }
+      case "update_plan": {
+        const plan = input.plan;
+        if (!Array.isArray(plan)) break;
+        planMap.clear();
+        for (const task of parsePlanTasks(plan, syntheticIdSeed)) {
+          planMap.set(task.id, task);
+        }
+        planMeta.explanation =
+          typeof input.explanation === "string" && input.explanation.trim()
+            ? input.explanation.trim()
+            : undefined;
+        break;
+      }
     }
   }
 
-  const tasks = [...taskMap.values(), ...todoMap.values()];
+  const tasks = [...taskMap.values(), ...todoMap.values(), ...planMap.values()];
   if (tasks.length === 0) return null;
 
   const { label, tooltip } = formatSubagentLabel(activity);
   return {
-    ...taskResult(tasks),
+    ...taskResult(tasks, planMeta.explanation),
     id: activity.toolUseId,
     // Never render blank: fall back through the activity's own metadata
     // so subagents that arrived without a description still get a chip.
@@ -499,9 +570,11 @@ function deriveTaskStateFromEntries(
 ): TaskTrackerWithHistory {
   const taskMap = new Map<string, TrackedTask>();
   const todoMap = new Map<string, TrackedTask>();
+  const planMap = new Map<string, TrackedTask>();
   const nextSyntheticId = { value: 1 };
   const history: TaskRun[] = [];
-  let todoRun: TodoRunDraft | null = null;
+  let todoRun: SnapshotRunDraft | null = null;
+  let planRun: SnapshotRunDraft | null = null;
   let runSequence = 1;
 
   // Buffer of tasks deleted via `TaskUpdate({ status: "deleted" })` since
@@ -573,6 +646,66 @@ function deriveTaskStateFromEntries(
 
   for (const entry of entries) {
     for (const act of entry.activities) {
+      if (act.toolName === "update_plan") {
+        let input: Record<string, unknown>;
+        try {
+          input = JSON.parse(act.inputJson);
+        } catch {
+          continue;
+        }
+        const plan = input.plan;
+        if (!Array.isArray(plan)) continue;
+
+        const tasks = parsePlanTasks(plan, nextSyntheticId);
+        planMap.clear();
+        for (const task of tasks) {
+          planMap.set(task.id, task);
+        }
+        const explanation =
+          typeof input.explanation === "string" && input.explanation.trim()
+            ? input.explanation.trim()
+            : undefined;
+
+        if (tasks.length === 0) {
+          if (planRun) {
+            history.push(finalizeSnapshotRun(planRun));
+            planRun = null;
+          }
+        } else if (!planRun) {
+          planRun = {
+            id: `plan-run-${runSequence}`,
+            sequence: runSequence++,
+            tasks,
+            explanation,
+            startedAt: act.startedAt,
+            updatedAt: act.startedAt,
+            turnId: entry.turnId,
+          };
+        } else if (isReplacedTodoRun(planRun.tasks, tasks)) {
+          history.push(finalizeSnapshotRun(planRun));
+          planRun = {
+            id: `plan-run-${runSequence}`,
+            sequence: runSequence++,
+            tasks,
+            explanation,
+            startedAt: act.startedAt,
+            updatedAt: act.startedAt,
+            turnId: entry.turnId,
+          };
+        } else {
+          planRun = {
+            id: planRun.id,
+            sequence: planRun.sequence,
+            tasks,
+            explanation,
+            startedAt: planRun.startedAt,
+            updatedAt: act.startedAt ?? planRun.updatedAt,
+            turnId: entry.turnId,
+          };
+        }
+        continue;
+      }
+
       if (act.toolName === "TodoWrite") {
         let input: Record<string, unknown>;
         try {
@@ -591,7 +724,7 @@ function deriveTaskStateFromEntries(
 
         if (tasks.length === 0) {
           if (todoRun) {
-            history.push(finalizeTodoRun(todoRun));
+            history.push(finalizeSnapshotRun(todoRun));
             todoRun = null;
           }
           continue;
@@ -610,7 +743,7 @@ function deriveTaskStateFromEntries(
         }
 
         if (isReplacedTodoRun(todoRun.tasks, tasks)) {
-          history.push(finalizeTodoRun(todoRun));
+          history.push(finalizeSnapshotRun(todoRun));
           todoRun = {
             id: `todo-run-${runSequence}`,
             sequence: runSequence++,
@@ -772,9 +905,11 @@ function deriveTaskStateFromEntries(
     }
   }
 
-  const tasks = [...taskMap.values(), ...todoMap.values()];
   return {
-    current: taskResult(tasks),
+    current: taskResult(
+      [...taskMap.values(), ...todoMap.values(), ...planMap.values()],
+      planRun?.explanation,
+    ),
     history,
     subagents,
   };
@@ -786,19 +921,35 @@ function deriveTaskStateFromEntries(
  */
 export function deriveTasks(
   completedTurns: CompletedTurn[],
-  toolActivities: ToolActivity[]
+  toolActivities: ToolActivity[],
 ): TaskTrackerResult {
   const taskMap = new Map<string, TrackedTask>();
   const todoMap = new Map<string, TrackedTask>();
+  const planMap = new Map<string, TrackedTask>();
   const nextSyntheticId = { value: 1 };
+  const planMeta: { explanation?: string } = {};
 
   for (const turn of completedTurns) {
-    processActivities(turn.activities, taskMap, todoMap, nextSyntheticId);
+    processActivities(
+      turn.activities,
+      taskMap,
+      todoMap,
+      nextSyntheticId,
+      planMap,
+      planMeta,
+    );
   }
-  processActivities(toolActivities, taskMap, todoMap, nextSyntheticId);
+  processActivities(
+    toolActivities,
+    taskMap,
+    todoMap,
+    nextSyntheticId,
+    planMap,
+    planMeta,
+  );
 
-  const tasks = [...taskMap.values(), ...todoMap.values()];
-  return taskResult(tasks);
+  const tasks = [...taskMap.values(), ...todoMap.values(), ...planMap.values()];
+  return taskResult(tasks, planMeta.explanation);
 }
 
 /**
@@ -873,6 +1024,7 @@ const TASK_TOOL_NAMES = new Set([
   "TaskUpdate",
   "TaskStop",
   "TodoWrite",
+  "update_plan",
 ]);
 
 /** Check whether a completed turn contains any task-related tool calls. */
@@ -898,14 +1050,17 @@ export function useTaskTrackerWithHistory(
   sessionId: string | null,
 ): TaskTrackerWithHistory {
   const completedTurns = useAppStore(
-    (s) => (sessionId ? s.completedTurns[sessionId] : null) ?? EMPTY_TURNS
+    (s) => (sessionId ? s.completedTurns[sessionId] : null) ?? EMPTY_TURNS,
   );
   const toolActivities = useAppStore(
-    (s) => (sessionId ? s.toolActivities[sessionId] : null) ?? EMPTY_ACTIVITIES
+    (s) => (sessionId ? s.toolActivities[sessionId] : null) ?? EMPTY_ACTIVITIES,
   );
 
   return useMemo(
-    () => (sessionId ? deriveTaskState(completedTurns, toolActivities) : EMPTY_WITH_HISTORY),
-    [sessionId, completedTurns, toolActivities]
+    () =>
+      sessionId
+        ? deriveTaskState(completedTurns, toolActivities)
+        : EMPTY_WITH_HISTORY,
+    [sessionId, completedTurns, toolActivities],
   );
 }

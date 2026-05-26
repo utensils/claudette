@@ -467,8 +467,7 @@ mod tests {
         let loaded = load_repo_overrides(&db, "r1").unwrap();
         assert!(
             loaded.is_empty(),
-            "entries without :override sentinel should be skipped, got {:?}",
-            loaded,
+            "entries without :override sentinel should be skipped, got {loaded:?}",
         );
     }
 

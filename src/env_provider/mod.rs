@@ -18,6 +18,7 @@
 
 pub mod backend;
 pub mod cache;
+pub mod devshell;
 #[cfg(test)]
 mod plugin_tests;
 pub mod types;
@@ -33,6 +34,7 @@ use crate::plugin_runtime::host_api::WorkspaceInfo;
 use backend::EnvProviderBackend;
 pub use backend::PluginRegistryBackend;
 pub use cache::EnvCache;
+pub use devshell::{nix_develop_command_wrap, nix_develop_wrap};
 use types::EnvMap;
 pub use watcher::EnvWatcher;
 
@@ -952,7 +954,7 @@ mod tests {
                 sources: vec![],
             };
 
-            let mut cmd = std::process::Command::new("sh");
+            let mut cmd = crate::process::std_command("sh");
             cmd.arg("-c")
                 .arg("echo set=$CLAUDETTE_TEST_SET; echo unset=${CLAUDETTE_TEST_UNSET:-MISSING}");
             // Pre-set the unset var in the parent env so we can observe

@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { findPendingPlaceholderForCreatedWorkspace } from "./stores/slices/workspacesSlice";
-import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, refreshAgentBackendModels, bootOk, getClaudeAuthStatus } from "./services/tauri";
+import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, refreshAgentBackendModels, bootOk, reportBootStage, getClaudeAuthStatus } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -16,6 +16,7 @@ import {
 import { deriveScmCiState } from "./utils/scmChecks";
 import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
 import type { WorkspaceOrderModeByRepo } from "./utils/workspaceOrdering";
+import { useCiAutoFixSession } from "./hooks/useCiAutoFixSession";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { useChatSessionCreatedEvent } from "./hooks/useChatSessionCreatedEvent";
 import { useUsageInsightsPoller } from "./hooks/useUsageInsightsPoller";
@@ -55,6 +56,9 @@ function App() {
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
   const setLastMessages = useAppStore((s) => s.setLastMessages);
+  const hydrateWorkspaceScmLinks = useAppStore(
+    (s) => s.hydrateWorkspaceScmLinks,
+  );
   const setRemoteConnections = useAppStore((s) => s.setRemoteConnections);
   const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
@@ -69,19 +73,18 @@ function App() {
   const setSystemFonts = useAppStore((s) => s.setSystemFonts);
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
+  const setProjectViewIssuesPrsEnabled = useAppStore(
+    (s) => s.setProjectViewIssuesPrsEnabled,
+  );
   const setClaudetteTerminalEnabled = useAppStore((s) => s.setClaudetteTerminalEnabled);
   const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
   const setToolDisplayMode = useAppStore((s) => s.setToolDisplayMode);
   const setExtendedToolCallOutput = useAppStore((s) => s.setExtendedToolCallOutput);
-  const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
-  const setClaudeRemoteControlEnabled = useAppStore(
-    (s) => s.setClaudeRemoteControlEnabled,
-  );
-  const setCommunityRegistryEnabled = useAppStore(
-    (s) => s.setCommunityRegistryEnabled,
-  );
   const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
   const setEditorMinimapEnabled = useAppStore((s) => s.setEditorMinimapEnabled);
+  const setRevealActiveFileInTree = useAppStore(
+    (s) => s.setRevealActiveFileInTree,
+  );
   const setEditorWordWrap = useAppStore((s) => s.setEditorWordWrap);
   const setEditorLineNumbersEnabled = useAppStore(
     (s) => s.setEditorLineNumbersEnabled,
@@ -129,6 +132,13 @@ function App() {
   useMcpStatus();
   useChatSessionCreatedEvent();
   useUsageInsightsPoller();
+  useCiAutoFixSession();
+
+  useEffect(() => {
+    reportBootStage("react_mounted").catch((err) =>
+      console.error("Failed to record boot stage:", err),
+    );
+  }, []);
 
   // Boot-health heartbeat for the post-update probation window.
   //
@@ -156,6 +166,9 @@ function App() {
   useViewTogglePersistence(viewStateHydrated);
 
   useEffect(() => {
+    reportBootStage("initial_data_loading").catch((err) =>
+      console.error("Failed to record boot stage:", err),
+    );
     loadInitialData()
       .then(async (data) => {
         // Tag local data with null remote_connection_id (backend omits this field).
@@ -178,6 +191,12 @@ function App() {
           msgMap[msg.workspace_id] = msg;
         }
         setLastMessages(msgMap);
+        // Issue/PR -> workspace associations for the project-view "in
+        // progress" badge and the workspace breadcrumb. Tolerate a
+        // payload without the field — a headless server reached over
+        // WSS may predate it — so an absent list just means "no links
+        // yet" instead of crashing the initial-data load.
+        hydrateWorkspaceScmLinks(data.workspace_scm_links ?? []);
         await hydratePersistedViewState(localWorkspaces);
         setViewStateHydrated(true);
         // Boot-health gate: only ack on the success path. The
@@ -230,6 +249,10 @@ function App() {
       })
       .catch(async (err) => {
         console.error("Failed to load initial data:", err);
+        const detail = err instanceof Error ? err.message : String(err);
+        await reportBootStage("initial_data_failed", detail).catch((stageErr) =>
+          console.error("Failed to record boot stage:", stageErr),
+        );
         await hydratePersistedViewState([]);
         setViewStateHydrated(true);
       });
@@ -360,6 +383,9 @@ function App() {
     getAppSetting("usage_insights_enabled")
       .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
       .catch(() => {});
+    getAppSetting("project_view_issues_prs_enabled")
+      .then((val) => { if (val === "true") setProjectViewIssuesPrsEnabled(true); })
+      .catch(() => {});
     getAppSetting("claudette_terminal_enabled")
       .then((val) => {
         // Default ON: only an explicit "false" disables. Absent / any other
@@ -377,18 +403,6 @@ function App() {
       .catch(() => {});
     getAppSetting("extended_tool_call_output")
       .then((val) => { if (val === "true") setExtendedToolCallOutput(true); })
-      .catch(() => {});
-    getAppSetting("plugin_management_enabled")
-      .then((val) => { if (val === "true") setPluginManagementEnabled(true); })
-      .catch(() => {});
-    getAppSetting("claude_remote_control_enabled")
-      .then((val) => {
-        if (val === "false") setClaudeRemoteControlEnabled(false);
-        else setClaudeRemoteControlEnabled(true);
-      })
-      .catch(() => {});
-    getAppSetting("community_registry_enabled")
-      .then((val) => { if (val === "true") setCommunityRegistryEnabled(true); })
       .catch(() => {});
     Promise.allSettled([
       getAppSetting("alternative_backends_enabled"),
@@ -484,6 +498,9 @@ function App() {
       .catch(() => {});
     getAppSetting("editor_minimap_enabled")
       .then((val) => { if (val === "true") setEditorMinimapEnabled(true); })
+      .catch(() => {});
+    getAppSetting("editor_reveal_active_file_in_tree")
+      .then((val) => { if (val === "false") setRevealActiveFileInTree(false); })
       .catch(() => {});
     // Editor view-state mirrors the minimap pattern: stored as strings
     // in app_settings, hydrated once at boot. Word wrap and line numbers
@@ -941,7 +958,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //

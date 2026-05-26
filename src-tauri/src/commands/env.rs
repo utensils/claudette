@@ -14,14 +14,17 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use uuid::Uuid;
+
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use claudette::agent::background::workspace_terminal_output_path;
+use claudette::agent::background::{append_terminal_output_sync, workspace_terminal_output_path};
 use claudette::db::Database;
 use claudette::env_provider::EnvWatcher;
 use claudette::plugin_runtime::host_api::{OutputStream, StreamingSink, WorkspaceInfo};
 use claudette::plugin_runtime::manifest::PluginKind;
+use claudette::process::command;
 
 use crate::state::AppState;
 
@@ -59,6 +62,10 @@ pub enum EnvProgressPhase {
 #[derive(Clone, Serialize)]
 pub struct WorkspaceEnvProgressPayload {
     pub workspace_id: String,
+    /// Unique id for one env resolve stream. Lets the frontend ignore stale
+    /// `finished` / `complete` events from a timed-out attempt after the user
+    /// has started a retry for the same workspace.
+    pub resolve_id: String,
     pub plugin: String,
     pub phase: EnvProgressPhase,
     /// Milliseconds since `started`. Zero on the `started` event so
@@ -82,11 +89,16 @@ pub struct WorkspaceEnvProgressPayload {
 pub struct TauriEnvProgressSink {
     app: AppHandle,
     workspace_id: String,
+    resolve_id: String,
 }
 
 impl TauriEnvProgressSink {
     pub fn new(app: AppHandle, workspace_id: String) -> Self {
-        Self { app, workspace_id }
+        Self {
+            app,
+            workspace_id,
+            resolve_id: Uuid::new_v4().to_string(),
+        }
     }
 }
 
@@ -96,6 +108,7 @@ impl claudette::env_provider::EnvProgressSink for TauriEnvProgressSink {
             "workspace_env_progress",
             WorkspaceEnvProgressPayload {
                 workspace_id: self.workspace_id.clone(),
+                resolve_id: self.resolve_id.clone(),
                 plugin: plugin.to_string(),
                 phase: EnvProgressPhase::Started,
                 elapsed_ms: 0,
@@ -108,6 +121,7 @@ impl claudette::env_provider::EnvProgressSink for TauriEnvProgressSink {
             "workspace_env_progress",
             WorkspaceEnvProgressPayload {
                 workspace_id: self.workspace_id.clone(),
+                resolve_id: self.resolve_id.clone(),
                 plugin: plugin.to_string(),
                 phase: EnvProgressPhase::Finished,
                 elapsed_ms: elapsed.as_millis() as u64,
@@ -140,15 +154,6 @@ pub struct WorkspaceTerminalFileSink {
     /// Last plugin name we emitted a header for. We don't lock for
     /// reads — the worst case on a torn read is a duplicate header.
     last_plugin: std::sync::Mutex<Option<String>>,
-    /// Cached append-mode file handle so the hot streaming path
-    /// (potentially 100k+ lines from `nix print-dev-env -L`) doesn't
-    /// pay an `OpenOptions::open` + `create_dir_all` syscall per line.
-    /// Lazily initialized on first append; subsequent appends only
-    /// pay one `write_all` per line. No `BufWriter` here on purpose:
-    /// xterm.js tails the file, so we want every line to land on
-    /// disk immediately rather than coalesce in a userspace buffer
-    /// the reader can't see.
-    file: std::sync::Mutex<Option<std::fs::File>>,
 }
 
 impl WorkspaceTerminalFileSink {
@@ -156,7 +161,6 @@ impl WorkspaceTerminalFileSink {
         Self {
             output_path: workspace_terminal_output_path(workspace_id),
             last_plugin: std::sync::Mutex::new(None),
-            file: std::sync::Mutex::new(None),
         }
     }
 
@@ -164,25 +168,14 @@ impl WorkspaceTerminalFileSink {
     /// lives in `temp_dir()` — if a write fails (permissions, disk
     /// full), dropping a line is preferable to spamming logs from the
     /// hot streaming path.
+    ///
+    /// Every workspace `terminal.output` writer routes through
+    /// [`append_terminal_output_sync`] so the shared per-path mutex
+    /// serializes us against the agent stream's truncate-to-tail
+    /// rotation (issue #937). Otherwise an env-provider line written
+    /// between the rotator's tail read and its `set_len` would be lost.
     fn append(&self, bytes: &[u8]) {
-        let mut guard = match self.file.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
-        if guard.is_none() {
-            if let Some(parent) = self.output_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            *guard = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&self.output_path)
-                .ok();
-        }
-        if let Some(file) = guard.as_mut() {
-            use std::io::Write;
-            let _ = file.write_all(bytes);
-        }
+        let _ = append_terminal_output_sync(&self.output_path, bytes);
     }
 
     /// Emit a `── <plugin> ──` header when the plugin name changes
@@ -276,6 +269,7 @@ impl Drop for TauriEnvProgressSink {
             "workspace_env_progress",
             WorkspaceEnvProgressPayload {
                 workspace_id: self.workspace_id.clone(),
+                resolve_id: self.resolve_id.clone(),
                 plugin: String::new(),
                 phase: EnvProgressPhase::Complete,
                 elapsed_ms: 0,
@@ -312,6 +306,36 @@ pub(crate) fn load_disabled_providers(db: &Database, repo_id: &str) -> HashSet<S
             }
         })
         .collect()
+}
+
+/// Layer a workspace's stored input values onto an already-resolved env.
+///
+/// Sits at "after env-provider plugins, before workspace-context vars" in the
+/// precedence stack — users typed these values explicitly, so they win over
+/// whatever direnv/mise/dotenv contributed for the same key, but the
+/// `CLAUDETTE_*` markers applied later still override them. No-op when the
+/// workspace has no stored values.
+pub(crate) fn merge_workspace_input_env(
+    db: &Database,
+    workspace_id: &str,
+    resolved: &mut claudette::env_provider::ResolvedEnv,
+) {
+    match db.get_workspace_input_values(workspace_id) {
+        Ok(Some(values)) => {
+            for (k, v) in values {
+                resolved.vars.insert(k, Some(v));
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::env",
+                workspace_id,
+                error = %e,
+                "failed to load workspace input values for env merge"
+            );
+        }
+    }
 }
 
 /// Strip sources whose plugin is globally disabled in the Plugins
@@ -1018,17 +1042,17 @@ pub async fn run_env_trust(
     let mut errors: Vec<String> = Vec::new();
     let mut approved_envrc_sha256s: Vec<String> = Vec::new();
     for path in &scope.paths {
-        let mut command = tokio::process::Command::new(cmd[0]);
-        command.args(&cmd[1..]);
-        command.current_dir(path);
-        command.env("PATH", claudette::env::enriched_path());
+        let mut process = command(cmd[0]);
+        process.args(&cmd[1..]);
+        process.current_dir(path);
+        process.env("PATH", claudette::env::enriched_path());
         for key in ENV_PROVIDER_PASSTHROUGH_KEYS {
             if let Ok(val) = std::env::var(key) {
-                command.env(key, val);
+                process.env(key, val);
             }
         }
 
-        let output = command
+        let output = process
             .output()
             .await
             .map_err(|e| format!("failed to spawn {}: {e}", cmd[0]))?;
@@ -1568,6 +1592,16 @@ pub fn setup_env_watcher(app: AppHandle) {
             return;
         }
         cache.invalidate(worktree, Some(plugin));
+        // A watcher event means *some* watched path was touched, but
+        // `touch`, `git checkout`, save-on-noop editors, and
+        // nix-direnv re-evaluation all fire events without changing
+        // bytes. `invalidate_if_stale` re-checks content and evicts
+        // only on a real change (issue #888) — when it keeps the
+        // entry there is nothing for the UI to refetch and no trust
+        // state to re-probe, so skip both the event and the probe.
+        if !cache.invalidate_if_stale(worktree, plugin) {
+            return;
+        }
         let worktree_path = worktree.to_string_lossy().into_owned();
         let plugin_name = plugin.to_string();
         let _ = app_for_cb.emit(

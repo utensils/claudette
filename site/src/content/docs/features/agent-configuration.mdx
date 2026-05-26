@@ -14,14 +14,30 @@ Select a model from the dropdown in the chat header. Available models:
 
 | Model | ID | Description |
 |-------|-----|-------------|
-| **Opus 4.6 1M** | `opus` | Opus 4.6 with 1M context window |
-| **Opus 4.6** | `claude-opus-4-6` | Standard Opus 4.6 |
+| **Opus 4.7 1M** | `opus` | Opus 4.7 with a 1M context window |
+| **Opus 4.7** | `claude-opus-4-7` | Standard Opus 4.7 (200K context) |
 | **Sonnet 4.6** | `sonnet` | Fast and capable |
+| **Sonnet 4.6 1M** | `claude-sonnet-4-6[1m]` | Sonnet 4.6 with a 1M context window (extra usage) |
 | **Haiku 4.5** | `haiku` | Fastest, most affordable |
+
+Earlier-generation models (Opus 4.6, Opus 4.6 1M, Opus 4.5, Sonnet 4.5, Haiku 3.5) remain selectable in the picker as legacy entries.
 
 The model selection is per-workspace — you can use different models for different tasks.
 
 Set the default model for new sessions in `Settings > Models > Default model`.
+
+### Switching models mid-conversation
+
+You can change the model on an active chat at any time — from the toolbar dropdown or with the `/model` slash command. Whether the conversation continues depends on whether the swap stays inside the same runtime:
+
+- **Same runtime (no context loss)** — Switching between models that resolve to the same harness keeps the full transcript. The very next turn streams from the new model with every prior message available. This covers the common cases: Sonnet 4.6 ↔ Opus 4.7 on the Anthropic Claude Code path, two Pi-routed Ollama models on the same Pi card, and so on. Claudette tears down the persistent agent subprocess and respawns it with the new `--model` flag while reusing the existing session id, so the new turn resumes the prior transcript.
+- **Different runtime (context migrated as a prelude)** — Switching to a model whose backend uses a different runtime — e.g., Anthropic Claude Code to Codex Native, or anything to a Pi SDK target — preserves the conversation by injecting the prior history into the new harness's very first turn. Claudette reads every persisted message on the session, wraps it in a `<conversation-history>` block, and prepends that block to the user's next message before sending it to the new harness. The persisted chat history in the UI is unchanged; the prelude is only visible to the model on the next turn. Tool calls in the history are rendered as text — the new harness reads them for context but does not re-execute them. The first turn after a cross-runtime switch will be slower and use more input tokens than usual because the whole prior conversation is part of its input.
+
+You can see which runtime a model uses from the "via …" badge next to its row in the model picker. Models on a runtime that matches the picker section's default carry no badge (e.g., Pi-card models on the Pi runtime, Anthropic Claude Code models on the Claude CLI runtime).
+
+### When the model's context window is too small
+
+If you switch to a model whose context window can't hold the current conversation, the agent's send fails with a "context length" / "input is too long" error. Claudette detects that error class and inlines a **"Choose a larger-context model →"** link directly into the chat error banner. Clicking it opens the toolbar's model picker so you can pick one of the 1M-context variants (Opus 4.7 1M, Sonnet 4.6 1M) or another model the registry shows with a larger window. The conversation is not lost — it stays in the chat panel, and your next send under the new model will resume it via the same in-place or cross-runtime path described above.
 
 ## Reasoning Effort
 
@@ -33,7 +49,8 @@ Control how much reasoning the agent applies to each response:
 | **Low** | Fast, minimal reasoning | Opus, Sonnet |
 | **Medium** | Balanced | Opus, Sonnet |
 | **High** | Deep reasoning | Opus, Sonnet |
-| **Max** | Maximum reasoning budget | Opus 4.6 only |
+| **XHigh** | Extended reasoning budget | Opus 4.7 only |
+| **Max** | Maximum reasoning budget | Opus and Sonnet (effort-capable models) |
 
 Select the effort level from the dropdown in the chat header, next to the model selector.
 
@@ -71,6 +88,8 @@ In plan mode, the agent runs read-only until it produces a plan you explicitly a
 - **Toggle**: Click the plan mode button in the chat header, or press `Shift + Tab`
 - **Default**: Set in `Settings > Models > Default plan mode`
 - **Slash command**: `/plan` enables plan mode for the next turn
+
+Plan mode follows the active runtime: Claude-compatible sessions use Claude Code's plan approval flow, while Codex Native sessions use Codex's `collaborationMode: plan` workflow. Codex plan mode allows non-mutating repo inspection while planning; Claudette shows the completed Codex plan in the normal approval card before sending the implementation turn.
 
 ## Chrome Browser Mode
 
@@ -141,7 +160,7 @@ If you switch between build channels (e.g. nightly → stable, or run two builds
 
 ## File References (@-mentions)
 
-Type `@` in the chat input to reference specific files in your workspace. A file picker appears showing matching files — select one to include it as context for the agent.
+Type `@` in the chat input to reference specific files in your workspace. A file picker appears showing matching files — select one to include it as context for the agent. Exact filename and path substrings rank first, and abbreviations or skipped-character queries can still match as ordered subsequences (for example, `cpanel` can find `ChatPanel.tsx`).
 
 This is useful for directing the agent's attention to specific files:
 
@@ -157,5 +176,5 @@ Configure defaults for all new sessions in `Settings > Models`:
 | Default effort | Reasoning effort level | Auto |
 | Default thinking | Enable thinking blocks | Off |
 | Show thinking blocks | Display thinking in UI | Off |
-| Default plan mode | Start in plan mode | Off |
+| Default plan mode | Start new sessions in plan mode | Off |
 | Default fast mode | Use fast mode | Off |

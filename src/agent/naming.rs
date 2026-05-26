@@ -1,10 +1,8 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use tokio::process::Command;
-
 use crate::env::WorkspaceEnv;
-use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
+use crate::process::sanitize_claude_subprocess_env;
 
 use super::binary::resolve_claude_path;
 

@@ -150,15 +150,66 @@
   font-family: var(--font-mono);
 }
 
+.emptyPreparing::before {
+  content: none;
+}
+
+.emptySpinner {
+  animation: preparingForkSpin 1s linear infinite;
+  color: var(--accent-primary);
+  opacity: 0.7;
+}
+
+.emptyTitle {
+  color: var(--text-muted);
+}
+
+.emptySub {
+  max-width: 360px;
+  text-align: center;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
 .errorBanner {
-  background: var(--error-bg);
-  border: 1px solid var(--error-border);
+  background: var(--accent-error-bg);
+  border: 1px solid var(--accent-error-border);
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 13px;
-  color: var(--status-stopped);
+  color: var(--accent-error);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.envErrorBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--accent-error-bg);
+  border: 1px solid var(--accent-error-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--accent-error);
+  word-break: break-word;
+}
+
+.envErrorRetry {
+  flex-shrink: 0;
+  border: 1px solid var(--accent-error-border);
+  border-radius: 6px;
+  background: var(--chat-input-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.envErrorRetry:hover {
+  background: var(--hover-bg);
 }
 
 /* --- Block-based message layout ---
@@ -544,6 +595,14 @@
   color: var(--text-dim);
   font-weight: 500;
   font-size: 12px;
+}
+
+/* Plug2 marker on an MCP tool group header — sits between the chevron and
+   the server-name label. Accent-colored to read as a first-class transcript
+   element alongside the skill-activation marker. */
+.mcpGroupIcon {
+  flex-shrink: 0;
+  color: var(--accent-primary);
 }
 
 .turnActivities {
@@ -1562,9 +1621,9 @@
 }
 
 .queuedCancel:hover {
-  color: var(--status-stopped);
-  background: var(--error-bg);
-  border-color: var(--error-border);
+  color: var(--accent-error);
+  background: var(--accent-error-bg);
+  border-color: var(--accent-error-border);
 }
 
 /* Input area — Composer wrapper */
@@ -1653,7 +1712,8 @@
 .inputHighlight {
   position: absolute;
   inset: 0;
-  max-height: 160px;
+  min-height: var(--composer-h, 52px);
+  max-height: max(160px, var(--composer-h, 52px));
   overflow: hidden;
   padding: 14px 18px 8px;
   color: var(--text-primary);
@@ -1676,8 +1736,8 @@
   line-height: var(--lh-body);
   outline: none;
   resize: none;
-  min-height: 52px;
-  max-height: 160px;
+  min-height: var(--composer-h, 52px);
+  max-height: max(160px, var(--composer-h, 52px));
   overflow-x: hidden;
   width: 100%;
   position: relative;

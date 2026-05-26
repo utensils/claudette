@@ -3,6 +3,7 @@ pub mod agent_backends;
 #[cfg(not(feature = "alternative-backends"))]
 #[path = "agent_backends_disabled.rs"]
 pub mod agent_backends;
+pub mod agent_files;
 pub mod apps;
 pub mod auth;
 pub mod boot;
@@ -23,16 +24,19 @@ pub mod files;
 pub mod grammars;
 pub mod mcp;
 pub mod metrics;
+pub mod path_util;
 pub mod pinned_prompts;
 pub mod plan;
 pub mod plugin;
 pub mod plugins_runtime;
 pub mod remote;
 pub mod repository;
+pub mod scheduling;
 pub mod scm;
 pub mod settings;
 pub mod shell;
 pub mod slash_commands;
+pub mod storage;
 pub mod terminal;
 pub mod updater;
 pub mod usage;

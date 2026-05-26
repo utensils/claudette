@@ -49,7 +49,7 @@ function resetStore() {
     diffSelectedFile: null,
     diffSelectedLayer: null,
     rightSidebarVisible: false,
-    rightSidebarTab: "files",
+    rightSidebarTabByWorkspace: {},
     requestNewFileNonceByWorkspace: {},
     requestCloseFileTabNonceByWorkspace: {},
   });
@@ -204,7 +204,7 @@ describe("executeNewTab", () => {
     useAppStore.setState({
       activeFileTabByWorkspace: { [WS]: "src/main.rs" },
       rightSidebarVisible: false,
-      rightSidebarTab: "tasks",
+      rightSidebarTabByWorkspace: { [WS]: "tasks" as const },
     });
     const createChatSession = vi.fn();
 
@@ -213,7 +213,7 @@ describe("executeNewTab", () => {
     const post = useAppStore.getState();
     expect(post.requestNewFileNonceByWorkspace[WS]).toBe(1);
     expect(post.rightSidebarVisible).toBe(true);
-    expect(post.rightSidebarTab).toBe("files");
+    expect(post.rightSidebarTabByWorkspace[WS]).toBe("files");
     expect(createChatSession).not.toHaveBeenCalled();
   });
 
@@ -221,15 +221,18 @@ describe("executeNewTab", () => {
     useAppStore.setState({
       activeFileTabByWorkspace: { [WS]: "README.md" },
       rightSidebarVisible: true,
-      rightSidebarTab: "files",
+      rightSidebarTabByWorkspace: {},
     });
     const toggleRightSidebar = vi.spyOn(useAppStore.getState(), "toggleRightSidebar");
-    const setRightSidebarTab = vi.spyOn(useAppStore.getState(), "setRightSidebarTab");
+    const setRightSidebarTabForWorkspace = vi.spyOn(
+      useAppStore.getState(),
+      "setRightSidebarTabForWorkspace",
+    );
 
     executeNewTab();
 
     expect(toggleRightSidebar).not.toHaveBeenCalled();
-    expect(setRightSidebarTab).not.toHaveBeenCalled();
+    expect(setRightSidebarTabForWorkspace).not.toHaveBeenCalled();
     expect(useAppStore.getState().requestNewFileNonceByWorkspace[WS]).toBe(1);
   });
 

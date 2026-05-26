@@ -294,8 +294,11 @@
   opacity: 1;
 }
 
-/* Hide action buttons when shortcut badges are visible to prevent overlap */
-.repoHeader:has(.shortcutBadgeVisible) .iconBtn {
+/* Hide action buttons when shortcut badges are visible to prevent overlap.
+   Applies to both project headers (repo-mode badge) and workspace rows
+   (status-mode badge — the badge anchors to .wsItem:right via .wsActions). */
+.repoHeader:has(.shortcutBadgeVisible) .iconBtn,
+.wsItem:has(.shortcutBadgeVisible) .iconBtn {
   opacity: 0;
   pointer-events: none;
 }
@@ -310,8 +313,8 @@
 }
 
 .iconBtnDanger:hover {
-  color: var(--status-stopped);
-  background: var(--error-hover);
+  color: var(--accent-error);
+  background: var(--accent-error-hover);
 }
 
 .invalidBadge {
@@ -480,6 +483,18 @@
   align-items: center;
   margin-left: auto;
   gap: 2px;
+}
+
+/* Issue/PR -> workspace link indicator (issue #898). Sits between the
+   workspace info column and the hover action buttons; accent-tinted so
+   it reads as "this workspace has an upstream item" at a glance. */
+.wsScmLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--accent-primary);
 }
 
 .wsInfo {

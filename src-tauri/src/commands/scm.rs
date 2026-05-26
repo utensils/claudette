@@ -6,13 +6,17 @@ use futures::stream::{self, StreamExt};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use claudette::db::Database;
+use claudette::db::{Database, RepoScmListCacheRow, WorkspaceScmLinkRow};
 use claudette::mcp_supervisor::McpSupervisor;
+use claudette::plugin_runtime::PluginError;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use claudette::scm::detect;
-use claudette::scm::types::{CiCheck, PullRequest};
+use claudette::scm::types::{
+    CiCheck, CiCheckStatus, CiFailureLog, CiOverallStatus, Issue, IssueScope, PullRequest,
+    PullRequestScope,
+};
 
-use crate::state::{AppState, ScmCacheEntry};
+use crate::state::{AppState, AsyncGateEntry, RepoListEntry, ScmCacheEntry};
 
 #[derive(Serialize)]
 pub struct PluginInfo {
@@ -32,6 +36,27 @@ pub struct ScmDetail {
     pub ci_checks: Vec<CiCheck>,
     pub provider: Option<String>,
     pub error: Option<String>,
+}
+
+const CI_AUTO_FIX_COOLDOWN_DEFAULT_SECONDS: u64 = 300;
+const CI_AUTO_FIX_COOLDOWN_MIN_SECONDS: u64 = 60;
+const CI_AUTO_FIX_COOLDOWN_MAX_SECONDS: u64 = 3600;
+const SCM_DETAIL_CACHE_TTL: Duration = Duration::from_secs(10);
+const SCM_POLL_CACHE_TTL: Duration = Duration::from_secs(30);
+const SCM_NO_PR_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const SCM_FETCH_LOCK_TTL: Duration = Duration::from_secs(10 * 60);
+
+struct ScmPollSettingsSnapshot {
+    workspace_ids: Vec<(String, String)>,
+    global_archive: bool,
+    per_repo_archive: HashMap<String, bool>,
+    global_ci_auto_fix: bool,
+    per_repo_ci_auto_fix: HashMap<String, bool>,
+    per_repo_ci_auto_fix_prompts: HashMap<String, String>,
+    ci_auto_fix_prompt: String,
+    ci_auto_fix_cooldown: u64,
+    ci_auto_fix_model: Option<String>,
+    ci_auto_fix_model_provider: Option<String>,
 }
 
 /// DB lookup result for workspace + repo + manual provider override.
@@ -206,12 +231,15 @@ pub async fn load_scm_detail(
     };
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+    let head_sha = workspace_head_sha(&ctx.workspace).await;
+    let fetch_lock = scm_fetch_lock_for_key(state.inner(), &cache_key).await;
+    let _fetch_guard = fetch_lock.lock().await;
 
     // Check cache first
     {
         let cache = state.scm_cache.entries.read().await;
         if let Some(entry) = cache.get(&cache_key)
-            && entry.last_fetched.elapsed().as_secs() < 10
+            && scm_cache_entry_fresh(entry, SCM_DETAIL_CACHE_TTL, None)
         {
             return Ok(ScmDetail {
                 workspace_id,
@@ -223,28 +251,16 @@ pub async fn load_scm_detail(
         }
     }
 
-    // Fetch fresh data — run both operations concurrently. Acquire 2
-    // permits so the semaphore reflects the true number of in-flight
-    // CLI invocations (one for list_pull_requests, one for ci_status).
-    let _permit = state
-        .scm_semaphore
-        .acquire_many(2)
-        .await
-        .map_err(|e| e.to_string())?;
-    let registry = state.plugins.read().await;
-
     let branch = ctx.workspace.branch_name.clone();
-    let args = serde_json::json!({"branch": &branch});
-
-    let (prs_result, ci_result) = tokio::join!(
-        registry.call_operation(
-            &provider_name,
-            "list_pull_requests",
-            args.clone(),
-            ws_info.clone(),
-        ),
-        registry.call_operation(&provider_name, "ci_status", args, ws_info),
-    );
+    let registry = state.inner().plugins_snapshot().await;
+    let (prs_result, ci_result) = fetch_branch_scm_results(
+        &registry,
+        &state.scm_semaphore,
+        &provider_name,
+        &branch,
+        ws_info,
+    )
+    .await?;
 
     let outcome = {
         let cache = state.scm_cache.entries.read().await;
@@ -282,6 +298,7 @@ pub async fn load_scm_detail(
             &pull_request,
             &ci_checks,
             error.clone(),
+            head_sha,
         )
         .await;
     }
@@ -416,6 +433,617 @@ pub async fn scm_refresh(
     load_scm_detail(workspace_id, state).await
 }
 
+// --- Repo-wide SCM lists (project view) ---
+
+/// Feature-flag key for the project-view issues/PRs panel. Backend reads
+/// this every entry to short-circuit when the flag is off, even if the
+/// frontend mistakenly invokes the command.
+const PROJECT_VIEW_ISSUES_PRS_ENABLED_KEY: &str = "project_view_issues_prs_enabled";
+
+/// TTL for the repo-wide SCM list cache. Project-view sections poll on a
+/// 60s cadence; the cache TTL is shorter so a manual refresh that lands
+/// inside the poll window still gets fresh data instead of replaying the
+/// last poll result. Mirrors `load_scm_detail`'s 10s cache TTL.
+const REPO_LIST_CACHE_TTL_SECS: u64 = 10;
+
+/// Default number of items requested from the plugin per list operation.
+/// Sized to cover the "Show all" expander (`ALL_VISIBLE_LIMIT = 50` on the
+/// frontend) so the user never sees fewer rows than what would fit. Beyond
+/// 50 the UI links out to the provider's web list — Claudette is not an
+/// issue tracker.
+const REPO_LIST_DEFAULT_LIMIT: u32 = 50;
+
+#[derive(Serialize)]
+pub struct RepoIssuesPayload {
+    pub issues: Vec<Issue>,
+    pub scope: IssueScope,
+    pub fetched_at: String,
+    pub error: Option<String>,
+    pub unsupported: bool,
+    pub provider: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RepoPullRequestsPayload {
+    pub pull_requests: Vec<PullRequest>,
+    pub scope: PullRequestScope,
+    pub fetched_at: String,
+    pub error: Option<String>,
+    pub unsupported: bool,
+    pub provider: Option<String>,
+}
+
+fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+fn list_kind_for_pr_scope(scope: PullRequestScope) -> String {
+    format!("pull_requests:{}", scope.as_cache_segment())
+}
+
+fn list_kind_for_issue_scope(scope: IssueScope) -> String {
+    format!("issues:{}", scope.as_cache_segment())
+}
+
+/// True when the project-view issues/PRs feature flag is enabled.
+fn read_project_view_flag(db: &Database) -> bool {
+    db.get_app_setting(PROJECT_VIEW_ISSUES_PRS_ENABLED_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true")
+}
+
+/// Resolve the SCM provider for a repo without a workspace context.
+/// Used by the project-view commands which only have a `repo_id`.
+///
+/// Returns:
+/// - `Ok(Some(name))` — provider resolved (manual override or remote-URL match).
+/// - `Ok(None)` — no plugin matches (or the repo has no usable remote). The
+///   project-view section is hidden when this happens.
+/// - `Err(e)` — transient git failure (e.g. unreadable remote). Callers
+///   surface the error and preserve any cached data.
+async fn resolve_repo_provider(
+    state: &State<'_, AppState>,
+    repo_id: &str,
+) -> Result<(Option<String>, claudette::model::Repository), String> {
+    let (manual_override, repo) = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        let key = format!("repo:{repo_id}:scm_provider");
+        let manual = db.get_app_setting(&key).map_err(|e| e.to_string())?;
+        let repo = db
+            .get_repository(repo_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Repository not found")?;
+        (manual, repo)
+    };
+
+    if let Some(ref name) = manual_override
+        && !name.is_empty()
+    {
+        return Ok((Some(name.clone()), repo));
+    }
+
+    // Best-effort remote-URL detection; a missing/unreadable remote isn't
+    // an error here — the project view simply doesn't render the panel
+    // when there's no provider.
+    let provider_name =
+        match claudette::git::get_remote_url(&repo.path, repo.default_remote.as_deref()).await {
+            Ok(url) => {
+                let registry = state.plugins.read().await;
+                detect::detect_provider(&url, &registry.plugins)
+            }
+            Err(_) => None,
+        };
+    Ok((provider_name, repo))
+}
+
+fn make_workspace_info_for_repo(repo: &claudette::model::Repository) -> WorkspaceInfo {
+    // Project-view aggregation has no associated workspace — synthesize a
+    // WorkspaceInfo that points the plugin's host.exec at the repo's main
+    // checkout. The Lua plugins only read worktree_path / repo_path /
+    // repo_id from this struct for the `list_issues` / `list_pull_requests`
+    // calls we issue here.
+    WorkspaceInfo {
+        id: format!("repo-aggregate:{}", repo.id),
+        name: repo.name.clone(),
+        branch: String::new(),
+        worktree_path: repo.path.clone(),
+        repo_path: repo.path.clone(),
+        repo_id: Some(repo.id.clone()),
+    }
+}
+
+fn cache_fresh(entry: &RepoListEntry) -> bool {
+    entry.last_fetched.elapsed().as_secs() < REPO_LIST_CACHE_TTL_SECS
+}
+
+/// Persist a repo-wide list cache row to SQLite. Best-effort — failures
+/// are logged and swallowed so an unwritable cache row never blocks the
+/// in-memory return path.
+async fn persist_repo_list_cache(
+    db_path: &std::path::Path,
+    repo_id: &str,
+    list_kind: &str,
+    provider: Option<&str>,
+    payload_json: &str,
+    error: Option<&str>,
+) {
+    match Database::open(db_path) {
+        Ok(db) => {
+            if let Err(e) = db.upsert_repo_scm_list_cache(&RepoScmListCacheRow {
+                repo_id: repo_id.to_string(),
+                list_kind: list_kind.to_string(),
+                provider: provider.map(str::to_string),
+                payload: payload_json.to_string(),
+                error: error.map(str::to_string),
+                fetched_at: String::new(),
+            }) {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    repo_id = %repo_id,
+                    list_kind = %list_kind,
+                    error = %e,
+                    "failed to persist repo SCM list cache"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::scm",
+                error = %e,
+                "failed to open DB for repo SCM list cache persistence"
+            );
+        }
+    }
+}
+
+/// Hydrate `repo_scm_lists_cache` from SQLite at boot. Mirrors
+/// [`seed_scm_cache_from_db`] — anchors `last_fetched` 60s in the past so
+/// the first poll cycle treats every entry as stale and refreshes it.
+async fn seed_repo_scm_lists_cache_from_db(
+    db_path: &std::path::Path,
+    cache: &crate::state::RepoScmListsCache,
+) {
+    let rows = match Database::open(db_path) {
+        Ok(db) => match db.load_all_repo_scm_list_cache() {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    error = %e,
+                    "failed to load repo SCM list cache from DB on seed"
+                );
+                return;
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::scm",
+                error = %e,
+                "failed to open DB for repo SCM list cache seed"
+            );
+            return;
+        }
+    };
+
+    let stale_anchor = Instant::now()
+        .checked_sub(Duration::from_secs(60))
+        .unwrap_or_else(Instant::now);
+
+    let mut entries = cache.entries.write().await;
+    for row in rows {
+        let payload = serde_json::from_str::<serde_json::Value>(&row.payload)
+            .unwrap_or_else(|_| serde_json::json!([]));
+        entries.insert(
+            (row.repo_id, row.list_kind),
+            RepoListEntry {
+                payload,
+                last_fetched: stale_anchor,
+                error: row.error,
+                unsupported: false,
+                provider: row.provider,
+            },
+        );
+    }
+}
+
+/// List the open issues for a repository from its resolved SCM provider.
+///
+/// Returns an empty payload (and skips all plugin work) when:
+/// - the project-view feature flag is off, OR
+/// - the repo has no resolved SCM provider.
+///
+/// When the resolved provider does not implement `list_issues`, returns
+/// `unsupported: true` so the UI can render a muted hint rather than an
+/// error banner.
+///
+/// `scope` defaults to `IssueScope::Open` — every open issue on the repo.
+/// `IssueScope::Mine` narrows to issues *opened by* the authenticated
+/// user; `IssueScope::Assigned` narrows to issues *assigned to* them.
+/// The two are intentionally separate (rather than a union) because the
+/// workflows differ — "what did I file?" vs. "what's on my plate?".
+#[tauri::command]
+pub async fn list_repo_open_issues(
+    repo_id: String,
+    scope: Option<IssueScope>,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<RepoIssuesPayload, String> {
+    let scope = scope.unwrap_or(IssueScope::Open);
+    // 1. Backend feature-gate short-circuit (defense in depth).
+    {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        if !read_project_view_flag(&db) {
+            return Ok(RepoIssuesPayload {
+                issues: vec![],
+                scope,
+                fetched_at: now_iso(),
+                error: None,
+                unsupported: false,
+                provider: None,
+            });
+        }
+    }
+
+    let (provider_opt, repo) = resolve_repo_provider(&state, &repo_id).await?;
+    let Some(provider_name) = provider_opt else {
+        return Ok(RepoIssuesPayload {
+            issues: vec![],
+            scope,
+            fetched_at: now_iso(),
+            error: None,
+            unsupported: false,
+            provider: None,
+        });
+    };
+
+    let list_kind = list_kind_for_issue_scope(scope);
+    let cache_key = (repo_id.clone(), list_kind.clone());
+
+    // Cache hit.
+    {
+        let entries = state.repo_scm_lists_cache.entries.read().await;
+        if let Some(entry) = entries.get(&cache_key)
+            && cache_fresh(entry)
+        {
+            return Ok(issues_payload_from_entry(entry, scope, Some(provider_name)));
+        }
+    }
+
+    let ws_info = make_workspace_info_for_repo(&repo);
+    let limit_val = limit.unwrap_or(REPO_LIST_DEFAULT_LIMIT);
+    let args = serde_json::json!({
+        "state": "open",
+        "scope": scope.as_cache_segment(),
+        "limit": limit_val,
+    });
+
+    let result = {
+        let _permit = state
+            .scm_semaphore
+            .acquire()
+            .await
+            .map_err(|e| e.to_string())?;
+        let registry = state.plugins.read().await;
+        registry
+            .call_operation(&provider_name, "list_issues", args, ws_info)
+            .await
+    };
+
+    let entry = build_repo_list_entry(
+        result,
+        Some(provider_name.clone()),
+        &cache_key,
+        &state.repo_scm_lists_cache,
+    )
+    .await;
+
+    let payload_json = serde_json::to_string(&entry.payload).unwrap_or_else(|_| "[]".to_string());
+    persist_repo_list_cache(
+        &state.db_path,
+        &repo_id,
+        &cache_key.1,
+        entry.provider.as_deref(),
+        &payload_json,
+        entry.error.as_deref(),
+    )
+    .await;
+
+    let resp = issues_payload_from_entry(&entry, scope, Some(provider_name));
+    state
+        .repo_scm_lists_cache
+        .entries
+        .write()
+        .await
+        .insert(cache_key, entry);
+    Ok(resp)
+}
+
+/// List the repo-wide pull requests for a given scope from its resolved
+/// SCM provider. See [`list_repo_open_issues`] for the gating contract;
+/// the same short-circuit / unsupported semantics apply.
+#[tauri::command]
+pub async fn list_repo_open_pull_requests(
+    repo_id: String,
+    scope: Option<PullRequestScope>,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<RepoPullRequestsPayload, String> {
+    let scope = scope.unwrap_or(PullRequestScope::Open);
+    {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        if !read_project_view_flag(&db) {
+            return Ok(RepoPullRequestsPayload {
+                pull_requests: vec![],
+                scope,
+                fetched_at: now_iso(),
+                error: None,
+                unsupported: false,
+                provider: None,
+            });
+        }
+    }
+
+    let (provider_opt, repo) = resolve_repo_provider(&state, &repo_id).await?;
+    let Some(provider_name) = provider_opt else {
+        return Ok(RepoPullRequestsPayload {
+            pull_requests: vec![],
+            scope,
+            fetched_at: now_iso(),
+            error: None,
+            unsupported: false,
+            provider: None,
+        });
+    };
+
+    let list_kind = list_kind_for_pr_scope(scope);
+    let cache_key = (repo_id.clone(), list_kind.clone());
+
+    {
+        let entries = state.repo_scm_lists_cache.entries.read().await;
+        if let Some(entry) = entries.get(&cache_key)
+            && cache_fresh(entry)
+        {
+            return Ok(pull_requests_payload_from_entry(
+                entry,
+                scope,
+                Some(provider_name),
+            ));
+        }
+    }
+
+    let ws_info = make_workspace_info_for_repo(&repo);
+    let limit_val = limit.unwrap_or(REPO_LIST_DEFAULT_LIMIT);
+    let args = serde_json::json!({
+        "scope": scope.as_cache_segment(),
+        "limit": limit_val,
+    });
+
+    let result = {
+        let _permit = state
+            .scm_semaphore
+            .acquire()
+            .await
+            .map_err(|e| e.to_string())?;
+        let registry = state.plugins.read().await;
+        registry
+            .call_operation(&provider_name, "list_pull_requests", args, ws_info)
+            .await
+    };
+
+    let entry = build_repo_list_entry(
+        result,
+        Some(provider_name.clone()),
+        &cache_key,
+        &state.repo_scm_lists_cache,
+    )
+    .await;
+
+    let payload_json = serde_json::to_string(&entry.payload).unwrap_or_else(|_| "[]".to_string());
+    persist_repo_list_cache(
+        &state.db_path,
+        &repo_id,
+        &cache_key.1,
+        entry.provider.as_deref(),
+        &payload_json,
+        entry.error.as_deref(),
+    )
+    .await;
+
+    let resp = pull_requests_payload_from_entry(&entry, scope, Some(provider_name));
+    state
+        .repo_scm_lists_cache
+        .entries
+        .write()
+        .await
+        .insert(cache_key, entry);
+    Ok(resp)
+}
+
+/// Persist the association between a workspace and the SCM item (issue
+/// or PR) it was created for via the project-view "Send to new
+/// workspace" gesture. Keyed on `workspace_id` — one workspace owns at
+/// most one item, so a re-link replaces.
+///
+/// Returns the saved row (with the DB-assigned `created_at`). The caller
+/// treats failure as non-fatal: the workspace and its first turn already
+/// landed, so a missing link only costs the project-view badge.
+#[tauri::command]
+pub async fn create_workspace_scm_link(
+    workspace_id: String,
+    repo_id: String,
+    kind: String,
+    number: i64,
+    url: String,
+    title: String,
+    state: State<'_, AppState>,
+) -> Result<WorkspaceScmLinkRow, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    // Feature-gate short-circuit (defense in depth): the association is
+    // part of the project-view issues/PRs feature, and the only caller
+    // (`sendToNewWorkspace`) is reachable only from the gated sections.
+    // A stale frontend must not be able to write links with the flag off.
+    if !read_project_view_flag(&db) {
+        return Err("project-view issues/PRs feature is disabled".to_string());
+    }
+    // Validate `kind` server-side: the frontend resolver matches and
+    // filters on it, so an unexpected value would silently break badge
+    // resolution. The `workspace_scm_links.kind` CHECK constraint also
+    // rejects it at the DB layer — this guard just fails earlier with a
+    // clearer message than a raw SQLite constraint error.
+    if kind != "issue" && kind != "pr" {
+        return Err(format!(
+            "invalid SCM link kind {kind:?}: expected \"issue\" or \"pr\""
+        ));
+    }
+    let row = WorkspaceScmLinkRow {
+        workspace_id,
+        repo_id,
+        kind,
+        number,
+        url,
+        title,
+        created_at: String::new(),
+    };
+    db.upsert_workspace_scm_link(&row)
+        .map_err(|e| e.to_string())?;
+    // Re-load so the caller sees the DB-assigned `created_at`. `load_all`
+    // is fine here — this is a rare, user-triggered action and the table
+    // only ever holds one row per live workspace.
+    let saved = db
+        .load_all_workspace_scm_links()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|r| r.workspace_id == row.workspace_id)
+        .unwrap_or(row);
+    Ok(saved)
+}
+
+/// Drop the in-memory + on-disk cache for a repo's project-view lists so the
+/// next `list_repo_open_*` call hits the plugin fresh. Used by the Refresh
+/// button in the project-view sections.
+#[tauri::command]
+pub async fn refresh_repo_scm_lists(
+    repo_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    {
+        let mut entries = state.repo_scm_lists_cache.entries.write().await;
+        entries.retain(|(rid, _), _| rid != &repo_id);
+    }
+    if let Ok(db) = Database::open(&state.db_path) {
+        let _ = db.delete_repo_scm_list_cache_for_repo(&repo_id);
+    }
+    Ok(())
+}
+
+/// Build a `RepoListEntry` from the plugin result, falling back to the prior
+/// cached payload on transient errors (so a brief network blip doesn't blank
+/// the UI). `OperationNotSupported` translates into `unsupported: true` with
+/// an empty payload — distinct from a transient error.
+async fn build_repo_list_entry(
+    result: Result<serde_json::Value, PluginError>,
+    provider: Option<String>,
+    cache_key: &(String, String),
+    cache: &crate::state::RepoScmListsCache,
+) -> RepoListEntry {
+    match result {
+        Ok(value) => RepoListEntry {
+            payload: value,
+            last_fetched: Instant::now(),
+            error: None,
+            unsupported: false,
+            provider,
+        },
+        Err(PluginError::OperationNotSupported(_)) => RepoListEntry {
+            payload: serde_json::json!([]),
+            last_fetched: Instant::now(),
+            error: None,
+            unsupported: true,
+            provider,
+        },
+        Err(e) => {
+            // Preserve prior payload on transient error (network blip,
+            // rate limit, CLI auth expiry). Mirrors the merge_scm_results
+            // "fall back to previous" contract.
+            let previous = {
+                let entries = cache.entries.read().await;
+                entries.get(cache_key).map(|prev| prev.payload.clone())
+            };
+            RepoListEntry {
+                payload: previous.unwrap_or_else(|| serde_json::json!([])),
+                last_fetched: Instant::now(),
+                error: Some(e.to_string()),
+                unsupported: false,
+                provider,
+            }
+        }
+    }
+}
+
+/// Deserialize a JSON array into `Vec<T>`, tolerating per-row failures.
+/// A single malformed item used to take down the entire list via
+/// `unwrap_or_default()` returning empty — masking real bugs behind a
+/// "No open issues" empty-state. We walk the array item by item, log
+/// rows that fail to deserialize, and keep the successful ones.
+fn deserialize_list_tolerant<T: serde::de::DeserializeOwned>(
+    value: &serde_json::Value,
+    kind: &str,
+) -> Vec<T> {
+    let Some(arr) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for (idx, raw) in arr.iter().enumerate() {
+        match serde_json::from_value::<T>(raw.clone()) {
+            Ok(v) => out.push(v),
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    kind = %kind,
+                    index = idx,
+                    error = %e,
+                    "dropping row that failed to deserialize"
+                );
+            }
+        }
+    }
+    out
+}
+
+fn issues_payload_from_entry(
+    entry: &RepoListEntry,
+    scope: IssueScope,
+    provider: Option<String>,
+) -> RepoIssuesPayload {
+    let issues = deserialize_list_tolerant::<Issue>(&entry.payload, "issue");
+    RepoIssuesPayload {
+        issues,
+        scope,
+        fetched_at: now_iso(),
+        error: entry.error.clone(),
+        unsupported: entry.unsupported,
+        provider: entry.provider.clone().or(provider),
+    }
+}
+
+fn pull_requests_payload_from_entry(
+    entry: &RepoListEntry,
+    scope: PullRequestScope,
+    provider: Option<String>,
+) -> RepoPullRequestsPayload {
+    let pull_requests = deserialize_list_tolerant::<PullRequest>(&entry.payload, "pull_request");
+    RepoPullRequestsPayload {
+        pull_requests,
+        scope,
+        fetched_at: now_iso(),
+        error: entry.error.clone(),
+        unsupported: entry.unsupported,
+        provider: entry.provider.clone().or(provider),
+    }
+}
+
 // --- Helpers ---
 
 /// Resolve provider without holding a Database reference across await points.
@@ -472,9 +1100,7 @@ fn merge_scm_results(
 
     let (pull_request, prs_err) = match prs_result {
         Ok(val) => {
-            let parsed = serde_json::from_value::<Vec<PullRequest>>(val)
-                .ok()
-                .and_then(|prs| prs.into_iter().find(|pr| pr.branch == branch));
+            let parsed = pull_request_for_branch(&val, branch);
             (parsed, None)
         }
         Err(e) => (
@@ -508,6 +1134,61 @@ fn merge_scm_results(
         error,
         should_persist,
     }
+}
+
+fn pull_request_for_branch(value: &serde_json::Value, branch: &str) -> Option<PullRequest> {
+    serde_json::from_value::<Vec<PullRequest>>(value.clone())
+        .ok()
+        .and_then(|prs| prs.into_iter().find(|pr| pr.branch == branch))
+}
+
+fn scm_cache_entry_is_no_pr(entry: &ScmCacheEntry) -> bool {
+    entry.pull_request.is_none() && entry.error.is_none()
+}
+
+fn scm_cache_entry_fresh(
+    entry: &ScmCacheEntry,
+    standard_ttl: Duration,
+    current_head_sha: Option<&str>,
+) -> bool {
+    let ttl = if scm_cache_entry_is_no_pr(entry) {
+        SCM_NO_PR_NEGATIVE_CACHE_TTL
+    } else {
+        standard_ttl
+    };
+    if entry.last_fetched.elapsed() >= ttl {
+        return false;
+    }
+    if scm_cache_entry_is_no_pr(entry)
+        && let (Some(cached), Some(current)) = (entry.head_sha.as_deref(), current_head_sha)
+        && cached != current
+    {
+        return false;
+    }
+    true
+}
+
+async fn workspace_head_sha(workspace: &claudette::model::Workspace) -> Option<String> {
+    let worktree = workspace.worktree_path.as_deref()?;
+    claudette::git::head_commit(worktree).await.ok()
+}
+
+async fn scm_fetch_lock_for_key(
+    state: &AppState,
+    key: &(String, String),
+) -> Arc<tokio::sync::Mutex<()>> {
+    let now = Instant::now();
+    let mut locks = state.scm_fetch_locks.write().await;
+    locks.retain(|_, entry| {
+        entry.last_used.elapsed() < SCM_FETCH_LOCK_TTL || Arc::strong_count(&entry.lock) > 1
+    });
+    if let Some(entry) = locks.get_mut(key) {
+        return entry.touch(now);
+    }
+    let entry = locks
+        .entry(key.clone())
+        .or_insert_with(|| AsyncGateEntry::new(now));
+    Arc::clone(&entry.lock)
 }
 
 /// Build a `ScmDetail` payload from a previously-cached entry, used when the
@@ -588,6 +1269,7 @@ async fn seed_scm_cache_from_db(db_path: &std::path::Path, cache: &crate::state:
                 ci_checks,
                 last_fetched: stale_anchor,
                 error: row.error,
+                head_sha: None,
             },
         );
     }
@@ -611,6 +1293,7 @@ async fn persist_scm_cache(
     pull_request: &Option<PullRequest>,
     ci_checks: &[CiCheck],
     error: Option<String>,
+    head_sha: Option<String>,
 ) {
     let cache_map_key = (key.repo_id.to_string(), key.branch.to_string());
     {
@@ -622,6 +1305,7 @@ async fn persist_scm_cache(
                 ci_checks: ci_checks.to_vec(),
                 last_fetched: Instant::now(),
                 error: error.clone(),
+                head_sha,
             },
         );
     }
@@ -650,6 +1334,46 @@ async fn persist_scm_cache(
             tracing::warn!(target: "claudette::scm", error = %e, "failed to open DB for SCM cache persistence");
         }
     }
+}
+
+async fn fetch_branch_scm_results(
+    registry: &claudette::plugin_runtime::PluginRegistry,
+    scm_semaphore: &tokio::sync::Semaphore,
+    provider_name: &str,
+    branch: &str,
+    ws_info: WorkspaceInfo,
+) -> Result<
+    (
+        Result<serde_json::Value, PluginError>,
+        Result<serde_json::Value, PluginError>,
+    ),
+    String,
+> {
+    let args = serde_json::json!({"branch": branch});
+    let _permit = scm_semaphore.acquire().await.map_err(|e| e.to_string())?;
+    let prs_result = registry
+        .call_operation(
+            provider_name,
+            "list_pull_requests",
+            args.clone(),
+            ws_info.clone(),
+        )
+        .await;
+    drop(_permit);
+
+    let should_fetch_ci = match &prs_result {
+        Ok(value) => pull_request_for_branch(value, branch).is_some(),
+        Err(_) => true,
+    };
+    if !should_fetch_ci {
+        return Ok((prs_result, Ok(serde_json::Value::Array(vec![]))));
+    }
+
+    let _permit = scm_semaphore.acquire().await.map_err(|e| e.to_string())?;
+    let ci_result = registry
+        .call_operation(provider_name, "ci_status", args, ws_info)
+        .await;
+    Ok((prs_result, ci_result))
 }
 
 fn make_workspace_info(
@@ -746,12 +1470,16 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
     };
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+    let head_sha = workspace_head_sha(&ctx.workspace).await;
+    let fetch_lock = scm_fetch_lock_for_key(app_state, &cache_key).await;
+    let _fetch_guard = fetch_lock.lock().await;
 
-    // Skip if cache is fresh (< 30s for background polling)
+    // Skip if cache is fresh. No-PR entries get a longer negative-cache
+    // window, but only while the branch HEAD still matches the fetched row.
     {
         let cache = app_state.scm_cache.entries.read().await;
         if let Some(entry) = cache.get(&cache_key)
-            && entry.last_fetched.elapsed().as_secs() < 30
+            && scm_cache_entry_fresh(entry, SCM_POLL_CACHE_TTL, head_sha.as_deref())
         {
             // Return cached data so frontend still gets populated
             return Some(ScmDetail {
@@ -764,23 +1492,17 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
         }
     }
 
-    // Two permits because tokio::join! below runs two CLI operations
-    // concurrently. One permit per in-flight subprocess.
-    let _permit = app_state.scm_semaphore.acquire_many(2).await.ok()?;
-    let registry = app_state.plugins.read().await;
-
     let branch = ctx.workspace.branch_name.clone();
-    let args = serde_json::json!({"branch": &branch});
-
-    let (prs_result, ci_result) = tokio::join!(
-        registry.call_operation(
-            &provider_name,
-            "list_pull_requests",
-            args.clone(),
-            ws_info.clone()
-        ),
-        registry.call_operation(&provider_name, "ci_status", args, ws_info),
-    );
+    let registry = app_state.plugins_snapshot().await;
+    let (prs_result, ci_result) = fetch_branch_scm_results(
+        &registry,
+        &app_state.scm_semaphore,
+        &provider_name,
+        &branch,
+        ws_info,
+    )
+    .await
+    .ok()?;
 
     let outcome = {
         let cache = app_state.scm_cache.entries.read().await;
@@ -818,6 +1540,7 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
             &pull_request,
             &ci_checks,
             error.clone(),
+            head_sha,
         )
         .await;
     }
@@ -904,6 +1627,141 @@ fn tier_interval(
     }
 }
 
+fn parse_ci_auto_fix_cooldown_seconds(raw: Option<String>) -> u64 {
+    raw.and_then(|s| s.parse::<u64>().ok())
+        .map(|seconds| {
+            seconds.clamp(
+                CI_AUTO_FIX_COOLDOWN_MIN_SECONDS,
+                CI_AUTO_FIX_COOLDOWN_MAX_SECONDS,
+            )
+        })
+        .unwrap_or(CI_AUTO_FIX_COOLDOWN_DEFAULT_SECONDS)
+}
+
+fn load_scm_poll_settings_snapshot(db: &Database) -> ScmPollSettingsSnapshot {
+    let active: Vec<(String, String)> = db
+        .list_workspaces()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|ws| {
+            ws.status == claudette::model::WorkspaceStatus::Active
+                && ws
+                    .worktree_path
+                    .as_deref()
+                    .is_some_and(|path| !path.trim().is_empty())
+        })
+        .map(|ws| (ws.id, ws.repository_id))
+        .collect();
+    let global_archive = db
+        .get_app_setting("archive_on_merge")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true");
+    let repo_ids: std::collections::HashSet<&str> =
+        active.iter().map(|(_, rid)| rid.as_str()).collect();
+    let per_repo_archive: HashMap<String, bool> = repo_ids
+        .iter()
+        .filter_map(|rid| {
+            let key = format!("repo:{rid}:archive_on_merge");
+            let val = db.get_app_setting(&key).ok().flatten()?;
+            if val.is_empty() {
+                return None;
+            }
+            Some((rid.to_string(), val == "true"))
+        })
+        .collect();
+
+    let global_ci_auto_fix = db
+        .get_app_setting("ci_auto_fix_enabled")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true");
+    let per_repo_ci_auto_fix: HashMap<String, bool> = repo_ids
+        .iter()
+        .filter_map(|rid| {
+            let key = format!("repo:{rid}:ci_auto_fix_enabled");
+            let val = db.get_app_setting(&key).ok().flatten()?;
+            if val.is_empty() {
+                return None;
+            }
+            Some((rid.to_string(), val == "true"))
+        })
+        .collect();
+    let per_repo_ci_auto_fix_prompts: HashMap<String, String> = repo_ids
+        .iter()
+        .filter_map(|rid| {
+            let key = format!("repo:{rid}:ci_auto_fix_prompt");
+            let val = db.get_app_setting(&key).ok().flatten()?;
+            if val.is_empty() {
+                return None;
+            }
+            Some((rid.to_string(), val))
+        })
+        .collect();
+    let ci_auto_fix_prompt = db
+        .get_app_setting("ci_auto_fix_prompt")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_CI_AUTO_FIX_PROMPT.to_string());
+    let ci_auto_fix_cooldown = parse_ci_auto_fix_cooldown_seconds(
+        db.get_app_setting("ci_auto_fix_cooldown_seconds")
+            .ok()
+            .flatten(),
+    );
+    // When the user picks an explicit CI auto-fix model, take its explicit
+    // provider (may be None for the legacy Anthropic-direct case). When
+    // there's no explicit pick, fall back to the user's global default
+    // *pair* — `default_model` + `default_agent_backend` — together. Reading
+    // `ci_auto_fix_model_provider` while the model itself came from
+    // `default_model` would silently leave the backend at None and route a
+    // non-Anthropic default (Codex Native, Pi, OpenAI) through the wrong
+    // harness.
+    let explicit_ci_model = db
+        .get_app_setting("ci_auto_fix_model")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty());
+    let (ci_auto_fix_model, ci_auto_fix_model_provider) = match explicit_ci_model {
+        Some(model) => {
+            let provider = db
+                .get_app_setting("ci_auto_fix_model_provider")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty());
+            (Some(model), provider)
+        }
+        None => {
+            let default_model = db
+                .get_app_setting("default_model")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty());
+            let default_backend = db
+                .get_app_setting("default_agent_backend")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty());
+            (default_model, default_backend)
+        }
+    };
+
+    ScmPollSettingsSnapshot {
+        workspace_ids: active,
+        global_archive,
+        per_repo_archive,
+        global_ci_auto_fix,
+        per_repo_ci_auto_fix,
+        per_repo_ci_auto_fix_prompts,
+        ci_auto_fix_prompt,
+        ci_auto_fix_cooldown,
+        ci_auto_fix_model,
+        ci_auto_fix_model_provider,
+    }
+}
+
 /// Start the background SCM polling loop.
 ///
 /// Ticks every 30s — the smallest tier interval — but only polls each
@@ -923,6 +1781,8 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
         {
             let app_state = handle.state::<AppState>();
             seed_scm_cache_from_db(&app_state.db_path, &app_state.scm_cache).await;
+            seed_repo_scm_lists_cache_from_db(&app_state.db_path, &app_state.repo_scm_lists_cache)
+                .await;
             seed_workspace_activity_from_db(&app_state.db_path, &app_state.workspace_activity)
                 .await;
         }
@@ -933,10 +1793,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
         loop {
             let app_state = handle.state::<AppState>();
 
-            // All DB reads for this poll cycle in one block.
-            // Collect workspace IDs with their repo IDs so we can resolve
-            // per-repo archive_on_merge overrides after polling.
-            let (workspace_ids, global_archive, per_repo_archive) = {
+            let settings = {
                 let db = match Database::open(&app_state.db_path) {
                     Ok(db) => db,
                     Err(_) => {
@@ -944,33 +1801,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         continue;
                     }
                 };
-                let active: Vec<(String, String)> = db
-                    .list_workspaces()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|ws| ws.status == claudette::model::WorkspaceStatus::Active)
-                    .map(|ws| (ws.id, ws.repository_id))
-                    .collect();
-                let global = db
-                    .get_app_setting("archive_on_merge")
-                    .ok()
-                    .flatten()
-                    .as_deref()
-                    == Some("true");
-                let repo_ids: std::collections::HashSet<&str> =
-                    active.iter().map(|(_, rid)| rid.as_str()).collect();
-                let per_repo: std::collections::HashMap<String, bool> = repo_ids
-                    .into_iter()
-                    .filter_map(|rid| {
-                        let key = format!("repo:{rid}:archive_on_merge");
-                        let val = db.get_app_setting(&key).ok().flatten()?;
-                        if val.is_empty() {
-                            return None;
-                        }
-                        Some((rid.to_string(), val == "true"))
-                    })
-                    .collect();
-                (active, global, per_repo)
+                load_scm_poll_settings_snapshot(&db)
             };
 
             // Snapshot the per-tick decision inputs once so all tier
@@ -990,7 +1821,8 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
             let now = Instant::now();
 
             // Filter down to workspaces that are actually due on this tick.
-            let due: Vec<(String, String)> = workspace_ids
+            let due: Vec<(String, String)> = settings
+                .workspace_ids
                 .into_iter()
                 .filter(|(ws_id, _)| {
                     let interval = tier_interval(
@@ -1045,10 +1877,11 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
 
                     let _ = handle.emit("scm-data-updated", &detail);
 
-                    let should_archive = per_repo_archive
+                    let should_archive = settings
+                        .per_repo_archive
                         .get(&repo_id)
                         .copied()
-                        .unwrap_or(global_archive);
+                        .unwrap_or(settings.global_archive);
 
                     if should_archive
                         && detail
@@ -1060,12 +1893,353 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         let pr_number = detail.pull_request.as_ref().map(|pr| pr.number);
                         auto_archive_workspace(&handle, &app_state, &ws_id, pr_number).await;
                     }
+
+                    // CI auto-fix: detect failure transitions
+                    let ci_auto_fix_enabled = settings
+                        .per_repo_ci_auto_fix
+                        .get(&repo_id)
+                        .copied()
+                        .unwrap_or(settings.global_ci_auto_fix);
+
+                    if ci_auto_fix_enabled {
+                        let current_status =
+                            claudette::scm::types::derive_overall_ci_status(&detail.ci_checks);
+                        let mut ci_map = app_state.ci_last_status.write().await;
+                        let prev = ci_map.get(&ws_id);
+                        let prev_status = prev.and_then(|s| s.overall_status.clone());
+                        let prev_triggered = prev.and_then(|s| s.last_auto_fix_triggered);
+
+                        let is_failure_transition =
+                            is_ci_failure_transition(prev_status.clone(), current_status.clone());
+
+                        let within_cooldown = prev_triggered
+                            .is_some_and(|t| t.elapsed().as_secs() < settings.ci_auto_fix_cooldown);
+
+                        let should_create_auto_fix = is_failure_transition && !within_cooldown;
+
+                        let effective_prompt = settings
+                            .per_repo_ci_auto_fix_prompts
+                            .get(&repo_id)
+                            .cloned()
+                            .unwrap_or_else(|| settings.ci_auto_fix_prompt.clone());
+
+                        if !should_create_auto_fix {
+                            ci_map.insert(
+                                ws_id.clone(),
+                                crate::state::CiTransitionState {
+                                    overall_status: current_status.clone(),
+                                    last_auto_fix_triggered: prev_triggered,
+                                },
+                            );
+                        }
+                        drop(ci_map);
+
+                        if should_create_auto_fix {
+                            tracing::info!(
+                                target: "claudette::scm",
+                                workspace_id = %ws_id,
+                                "CI failure detected — creating auto-fix session"
+                            );
+                            let handled = auto_create_ci_fix_session(
+                                &handle,
+                                &app_state,
+                                &ws_id,
+                                &detail,
+                                &effective_prompt,
+                                settings.ci_auto_fix_model.as_deref(),
+                                settings.ci_auto_fix_model_provider.as_deref(),
+                            )
+                            .await;
+                            let next_state = next_ci_transition_state(
+                                current_status,
+                                prev_triggered,
+                                handled,
+                                Instant::now(),
+                            );
+                            app_state
+                                .ci_last_status
+                                .write()
+                                .await
+                                .insert(ws_id.clone(), next_state);
+                        }
+                    }
                 }
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }
     });
+}
+
+const DEFAULT_CI_AUTO_FIX_PROMPT: &str = "\
+CI has failed on this branch. Please analyze the failures and fix the issues.
+
+## Failed checks
+{{failed_checks}}
+
+## Failure logs
+{{failure_logs}}
+
+Branch: {{branch}}
+PR: {{pr_title}} ({{pr_url}})
+
+Investigate the failing checks, identify the root cause, and make the necessary code changes to fix the CI failures.";
+
+fn format_failed_checks(checks: &[CiCheck]) -> String {
+    checks
+        .iter()
+        .filter(|c| c.status == CiCheckStatus::Failure)
+        .map(|c| {
+            let url_part = c.url.as_deref().unwrap_or("no URL");
+            format!("- **{}**: failure — {}", c.name, url_part)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_all_checks(checks: &[CiCheck]) -> String {
+    checks
+        .iter()
+        .map(|c| {
+            let status = match c.status {
+                CiCheckStatus::Success => "success",
+                CiCheckStatus::Failure => "failure",
+                CiCheckStatus::Pending => "pending",
+                CiCheckStatus::Cancelled => "cancelled",
+                CiCheckStatus::Skipped => "skipped",
+            };
+            let url_part = c.url.as_deref().unwrap_or("no URL");
+            format!("- **{}**: {} — {}", c.name, status, url_part)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_ci_failure_transition(
+    previous: Option<CiOverallStatus>,
+    current: Option<CiOverallStatus>,
+) -> bool {
+    matches!(
+        (previous, current),
+        (Some(prev), Some(CiOverallStatus::Failure)) if prev != CiOverallStatus::Failure
+    )
+}
+
+/// Compute the next `CiTransitionState` after observing `current_status`
+/// and (when a failure transition fired) attempting to create an
+/// auto-fix session. Recording the observed status is unconditional so
+/// a transient `handled == false` doesn't leave `overall_status` at the
+/// prior non-failure value and re-fire every poll tick. The cooldown
+/// stamp only advances on success.
+fn next_ci_transition_state(
+    current_status: Option<CiOverallStatus>,
+    prev_triggered: Option<Instant>,
+    handled: bool,
+    now: Instant,
+) -> crate::state::CiTransitionState {
+    crate::state::CiTransitionState {
+        overall_status: current_status,
+        last_auto_fix_triggered: if handled { Some(now) } else { prev_triggered },
+    }
+}
+
+fn format_failure_logs(logs: &[CiFailureLog]) -> String {
+    if logs.is_empty() {
+        return "*(Failure logs unavailable — check the URLs above for details.)*".to_string();
+    }
+    logs.iter()
+        .map(|l| {
+            let fence = markdown_code_fence_for(&l.log);
+            format!("### {}\n{fence}\n{}\n{fence}", l.check_name, l.log)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn markdown_code_fence_for(text: &str) -> String {
+    let mut current_run = 0usize;
+    let mut longest_run = 0usize;
+    for ch in text.chars() {
+        if ch == '`' {
+            current_run += 1;
+            longest_run = longest_run.max(current_run);
+        } else {
+            current_run = 0;
+        }
+    }
+    "`".repeat(longest_run.saturating_add(1).max(3))
+}
+
+fn format_ci_auto_fix_prompt(
+    template: &str,
+    checks: &[CiCheck],
+    failure_logs: &[CiFailureLog],
+    branch: &str,
+    pr: Option<&PullRequest>,
+) -> String {
+    template
+        .replace("{{failed_checks}}", &format_failed_checks(checks))
+        .replace("{{all_checks}}", &format_all_checks(checks))
+        .replace("{{failure_logs}}", &format_failure_logs(failure_logs))
+        .replace("{{branch}}", branch)
+        .replace("{{pr_title}}", pr.map(|p| p.title.as_str()).unwrap_or(""))
+        .replace("{{pr_url}}", pr.map(|p| p.url.as_str()).unwrap_or(""))
+        .replace(
+            "{{pr_number}}",
+            &pr.map(|p| p.number.to_string()).unwrap_or_default(),
+        )
+}
+
+async fn auto_create_ci_fix_session(
+    handle: &tauri::AppHandle,
+    app_state: &AppState,
+    workspace_id: &str,
+    detail: &ScmDetail,
+    prompt_template: &str,
+    model: Option<&str>,
+    model_provider: Option<&str>,
+) -> bool {
+    let failed_check_names: Vec<String> = detail
+        .ci_checks
+        .iter()
+        .filter(|c| c.status == CiCheckStatus::Failure)
+        .map(|c| c.name.clone())
+        .collect();
+
+    let ctx = match lookup_workspace_context(&app_state.db_path, workspace_id).await {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::scm",
+                workspace_id,
+                error = %e,
+                "CI auto-fix failed to lookup workspace context"
+            );
+            return false;
+        }
+    };
+    let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+    let branch = ctx.workspace.branch_name.as_str();
+    let mut failure_logs: Vec<CiFailureLog> = Vec::new();
+
+    if let Some(provider) = &detail.provider {
+        let args = serde_json::json!({
+            "branch": branch,
+            "failed_checks": failed_check_names,
+        });
+
+        let registry = app_state.plugins.read().await;
+        match registry
+            .call_operation(provider, "ci_failure_logs", args, ws_info)
+            .await
+        {
+            Ok(val) => {
+                if let Ok(logs) = serde_json::from_value::<Vec<CiFailureLog>>(val) {
+                    failure_logs = logs;
+                }
+            }
+            Err(claudette::plugin_runtime::PluginError::OperationNotSupported(_)) => {
+                tracing::info!(
+                    target: "claudette::scm",
+                    provider,
+                    "CI auto-fix plugin does not support ci_failure_logs; degrading to check names only"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    provider,
+                    error = %e,
+                    "CI auto-fix failed to fetch failure logs"
+                );
+            }
+        }
+    }
+
+    let prompt = format_ci_auto_fix_prompt(
+        prompt_template,
+        &detail.ci_checks,
+        &failure_logs,
+        branch,
+        detail.pull_request.as_ref(),
+    );
+
+    let session_id = match Database::open(&app_state.db_path) {
+        Ok(db) => match db.create_chat_session(workspace_id) {
+            Ok(session) => session.id,
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    workspace_id,
+                    error = %e,
+                    "CI auto-fix failed to create chat session"
+                );
+                return false;
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::scm",
+                workspace_id,
+                error = %e,
+                "CI auto-fix failed to open DB"
+            );
+            return false;
+        }
+    };
+
+    let payload = serde_json::json!({
+        "workspace_id": workspace_id,
+        "session_id": session_id,
+        "prompt": prompt,
+        "failed_checks": detail.ci_checks.iter()
+            .filter(|c| c.status == CiCheckStatus::Failure)
+            .collect::<Vec<_>>(),
+        "model": model,
+        "backend_id": model_provider,
+    });
+
+    if let Err(e) = handle.emit("ci-auto-fix-session-created", payload) {
+        tracing::warn!(
+            target: "claudette::scm",
+            workspace_id,
+            session_id,
+            error = %e,
+            "CI auto-fix failed to emit created session event"
+        );
+        match Database::open(&app_state.db_path)
+            .and_then(|db| db.archive_chat_session_only(&session_id))
+        {
+            Ok(()) => {
+                tracing::info!(
+                    target: "claudette::scm",
+                    workspace_id,
+                    session_id,
+                    "CI auto-fix archived session after emit failure"
+                );
+            }
+            Err(archive_err) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    workspace_id,
+                    session_id,
+                    error = %archive_err,
+                    "CI auto-fix failed to archive session after emit failure"
+                );
+            }
+        }
+        // The DB row already existed, so treat the attempt as handled for
+        // cooldown/dedup even though the frontend never received the event.
+        return true;
+    }
+    tracing::info!(
+        target: "claudette::scm",
+        workspace_id,
+        session_id,
+        failed_check_count = failed_check_names.len(),
+        "CI auto-fix created session"
+    );
+    true
 }
 
 /// Auto-archive a workspace when its PR is merged.
@@ -1306,6 +2480,7 @@ mod tests {
             ci_checks: checks,
             last_fetched: Instant::now(),
             error: None,
+            head_sha: None,
         }
     }
 
@@ -1444,6 +2619,89 @@ mod tests {
         assert!(outcome.should_persist);
     }
 
+    #[test]
+    fn no_pr_cache_uses_longer_ttl_until_head_changes() {
+        let mut entry = make_entry(None, vec![]);
+        entry.head_sha = Some("head-a".into());
+        entry.last_fetched = Instant::now()
+            .checked_sub(SCM_POLL_CACHE_TTL + Duration::from_secs(5))
+            .unwrap();
+
+        assert!(
+            scm_cache_entry_fresh(&entry, SCM_POLL_CACHE_TTL, Some("head-a")),
+            "negative no-PR cache should remain fresh beyond the normal poll TTL",
+        );
+        assert!(
+            !scm_cache_entry_fresh(&entry, SCM_POLL_CACHE_TTL, Some("head-b")),
+            "a branch HEAD change must invalidate the no-PR negative cache",
+        );
+    }
+
+    #[test]
+    fn pr_cache_still_uses_standard_ttl() {
+        let mut entry = make_entry(Some(make_pr("feature/cached", 10)), vec![]);
+        entry.last_fetched = Instant::now()
+            .checked_sub(SCM_POLL_CACHE_TTL + Duration::from_secs(1))
+            .unwrap();
+
+        assert!(
+            !scm_cache_entry_fresh(&entry, SCM_POLL_CACHE_TTL, Some("head-a")),
+            "positive PR cache should not inherit the long no-PR TTL",
+        );
+    }
+
+    #[tokio::test]
+    async fn scm_fetch_lock_is_shared_per_repo_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins = claudette::plugin_runtime::PluginRegistry::discover(dir.path());
+        let state = AppState::new(
+            dir.path().join("db.sqlite"),
+            dir.path().join("worktrees"),
+            plugins,
+        );
+        let key = ("repo-1".to_string(), "feature/x".to_string());
+        let other_key = ("repo-1".to_string(), "feature/y".to_string());
+
+        let lock_a = scm_fetch_lock_for_key(&state, &key).await;
+        let lock_b = scm_fetch_lock_for_key(&state, &key).await;
+        let lock_other = scm_fetch_lock_for_key(&state, &other_key).await;
+
+        assert!(Arc::ptr_eq(&lock_a, &lock_b));
+        assert!(!Arc::ptr_eq(&lock_a, &lock_other));
+    }
+
+    #[tokio::test]
+    async fn scm_fetch_lock_prunes_idle_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins = claudette::plugin_runtime::PluginRegistry::discover(dir.path());
+        let state = AppState::new(
+            dir.path().join("db.sqlite"),
+            dir.path().join("worktrees"),
+            plugins,
+        );
+        let stale_key = ("repo-1".to_string(), "old".to_string());
+        let active_key = ("repo-1".to_string(), "active".to_string());
+
+        let active_lock = scm_fetch_lock_for_key(&state, &active_key).await;
+        {
+            let mut locks = state.scm_fetch_locks.write().await;
+            locks.insert(
+                stale_key.clone(),
+                AsyncGateEntry::new(Instant::now() - SCM_FETCH_LOCK_TTL - Duration::from_secs(1)),
+            );
+            if let Some(entry) = locks.get_mut(&active_key) {
+                entry.last_used = Instant::now() - SCM_FETCH_LOCK_TTL - Duration::from_secs(1);
+            }
+        }
+
+        let _fresh =
+            scm_fetch_lock_for_key(&state, &("repo-1".to_string(), "new".to_string())).await;
+        let locks = state.scm_fetch_locks.read().await;
+        assert!(!locks.contains_key(&stale_key));
+        assert!(locks.contains_key(&active_key));
+        drop(active_lock);
+    }
+
     /// Build a minimal `Repository` fixture for DB tests. We can't reuse
     /// `claudette::db::test_support::make_repo` because it's `pub(crate)`.
     fn fixture_repo(id: &str, path: &str) -> claudette::model::Repository {
@@ -1463,6 +2721,7 @@ mod tests {
             archive_script_auto_run: false,
             base_branch: None,
             default_remote: None,
+            required_inputs: None,
             path_valid: true,
         }
     }
@@ -1479,6 +2738,7 @@ mod tests {
             status_line: String::new(),
             created_at: String::new(),
             sort_order: 0,
+            input_values: None,
         }
     }
 
@@ -1652,5 +2912,187 @@ mod tests {
             Duration::from_secs(30 * 60),
             "selection of an unrelated workspace must not promote ws1 to hot",
         );
+    }
+}
+
+#[cfg(test)]
+mod ci_auto_fix_tests {
+    use super::*;
+    use claudette::scm::types::{CiCheck, CiCheckStatus, CiFailureLog, PrState, PullRequest};
+
+    fn make_check(name: &str, status: CiCheckStatus) -> CiCheck {
+        CiCheck {
+            name: name.to_string(),
+            status,
+            url: Some(format!("https://ci.example.com/{name}")),
+            started_at: None,
+        }
+    }
+
+    #[test]
+    fn format_failed_checks_filters_only_failures() {
+        let checks = vec![
+            make_check("build", CiCheckStatus::Failure),
+            make_check("lint", CiCheckStatus::Success),
+            make_check("test", CiCheckStatus::Failure),
+        ];
+        let result = format_failed_checks(&checks);
+        assert!(result.contains("**build**: failure"));
+        assert!(result.contains("**test**: failure"));
+        assert!(!result.contains("lint"));
+    }
+
+    #[test]
+    fn format_all_checks_includes_all() {
+        let checks = vec![
+            make_check("build", CiCheckStatus::Failure),
+            make_check("lint", CiCheckStatus::Success),
+            make_check("docs", CiCheckStatus::Skipped),
+        ];
+        let result = format_all_checks(&checks);
+        assert!(result.contains("**build**: failure"));
+        assert!(result.contains("**lint**: success"));
+        assert!(result.contains("**docs**: skipped"));
+    }
+
+    #[test]
+    fn format_failure_logs_empty_shows_degraded_message() {
+        let result = format_failure_logs(&[]);
+        assert!(result.contains("Failure logs unavailable"));
+    }
+
+    #[test]
+    fn format_failure_logs_renders_code_blocks() {
+        let logs = vec![CiFailureLog {
+            check_name: "build".to_string(),
+            log: "error: compilation failed".to_string(),
+            url: None,
+        }];
+        let result = format_failure_logs(&logs);
+        assert!(result.contains("### build"));
+        assert!(result.contains("error: compilation failed"));
+        assert!(result.contains("```"));
+    }
+
+    #[test]
+    fn format_failure_logs_uses_longer_fence_when_log_contains_backticks() {
+        let logs = vec![CiFailureLog {
+            check_name: "build".to_string(),
+            log: "before\n```\ninner\n```\nafter".to_string(),
+            url: None,
+        }];
+        let result = format_failure_logs(&logs);
+        assert!(result.contains("````\nbefore\n```"));
+        assert!(result.ends_with("\n````"));
+    }
+
+    #[test]
+    fn ci_auto_fix_cooldown_is_clamped_to_supported_range() {
+        assert_eq!(parse_ci_auto_fix_cooldown_seconds(None), 300);
+        assert_eq!(parse_ci_auto_fix_cooldown_seconds(Some("bad".into())), 300);
+        assert_eq!(parse_ci_auto_fix_cooldown_seconds(Some("0".into())), 60);
+        assert_eq!(parse_ci_auto_fix_cooldown_seconds(Some("120".into())), 120);
+        assert_eq!(
+            parse_ci_auto_fix_cooldown_seconds(Some("99999".into())),
+            3600,
+        );
+    }
+
+    #[test]
+    fn format_ci_auto_fix_prompt_substitutes_all_variables() {
+        let checks = vec![
+            make_check("build", CiCheckStatus::Failure),
+            make_check("test", CiCheckStatus::Success),
+        ];
+        let logs = vec![CiFailureLog {
+            check_name: "build".to_string(),
+            log: "FAIL".to_string(),
+            url: None,
+        }];
+        let pr = PullRequest {
+            number: 42,
+            title: "Fix stuff".to_string(),
+            state: PrState::Open,
+            url: "https://github.com/org/repo/pull/42".to_string(),
+            author: "user".to_string(),
+            branch: "fix-branch".to_string(),
+            base: "main".to_string(),
+            draft: false,
+            ci_status: Some(CiOverallStatus::Failure),
+        };
+        let template = "Branch: {{branch}}, PR: {{pr_title}} {{pr_url}} #{{pr_number}}\n{{failed_checks}}\n{{failure_logs}}\n{{all_checks}}";
+        let result = format_ci_auto_fix_prompt(template, &checks, &logs, "fix-branch", Some(&pr));
+        assert!(result.contains("Branch: fix-branch"));
+        assert!(result.contains("PR: Fix stuff"));
+        assert!(result.contains("https://github.com/org/repo/pull/42"));
+        assert!(result.contains("#42"));
+        assert!(result.contains("**build**: failure"));
+        assert!(result.contains("### build"));
+        assert!(result.contains("**test**: success"));
+    }
+
+    #[test]
+    fn format_ci_auto_fix_prompt_no_pr() {
+        let checks = vec![make_check("build", CiCheckStatus::Failure)];
+        let template = "PR: {{pr_title}} ({{pr_url}})";
+        let result = format_ci_auto_fix_prompt(template, &checks, &[], "main", None);
+        assert_eq!(result, "PR:  ()");
+    }
+
+    #[test]
+    fn ci_auto_fix_only_triggers_on_observed_transition_to_failure() {
+        assert!(!is_ci_failure_transition(
+            None,
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(is_ci_failure_transition(
+            Some(CiOverallStatus::Pending),
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(is_ci_failure_transition(
+            Some(CiOverallStatus::Success),
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(!is_ci_failure_transition(
+            Some(CiOverallStatus::Failure),
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(!is_ci_failure_transition(
+            Some(CiOverallStatus::Pending),
+            Some(CiOverallStatus::Success),
+        ));
+    }
+
+    #[test]
+    fn next_ci_transition_state_records_status_even_when_unhandled() {
+        // Persistent DB / session-create failure: `handled == false`. We
+        // must still update `overall_status` so the next poll's
+        // `is_ci_failure_transition` returns false against the new
+        // value, preventing a 30s retry storm. The cooldown stamp keeps
+        // its prior value (None here, since this is the first transition).
+        let now = Instant::now();
+        let state = next_ci_transition_state(Some(CiOverallStatus::Failure), None, false, now);
+        assert_eq!(state.overall_status, Some(CiOverallStatus::Failure));
+        assert!(state.last_auto_fix_triggered.is_none());
+    }
+
+    #[test]
+    fn next_ci_transition_state_advances_cooldown_on_success() {
+        let now = Instant::now();
+        let state = next_ci_transition_state(Some(CiOverallStatus::Failure), None, true, now);
+        assert_eq!(state.overall_status, Some(CiOverallStatus::Failure));
+        assert_eq!(state.last_auto_fix_triggered, Some(now));
+    }
+
+    #[test]
+    fn next_ci_transition_state_preserves_prior_cooldown_when_unhandled() {
+        // A previous successful auto-fix set `last_auto_fix_triggered`.
+        // A later unhandled retry must not erase that stamp, otherwise
+        // the cooldown effectively resets and the user can be re-prompted.
+        let earlier = Instant::now();
+        let later = earlier + std::time::Duration::from_secs(10);
+        let state =
+            next_ci_transition_state(Some(CiOverallStatus::Failure), Some(earlier), false, later);
+        assert_eq!(state.last_auto_fix_triggered, Some(earlier));
     }
 }

@@ -68,4 +68,12 @@ describe("roleClassKey", () => {
       "role_System_block",
     );
   });
+
+  it("allows auth failures to opt out of the centered system pill", () => {
+    expect(
+      roleClassKey("System", "Not logged in · Please run /login", {
+        forceSystemBlock: true,
+      }),
+    ).toBe("role_System_block");
+  });
 });

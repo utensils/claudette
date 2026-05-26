@@ -74,6 +74,22 @@ export function firstApprovalDetailString(
   return null;
 }
 
+export function initialToolInputJson(input: unknown): string {
+  if (input == null) return "";
+  if (
+    typeof input === "object" &&
+    !Array.isArray(input) &&
+    Object.keys(input as Record<string, unknown>).length === 0
+  ) {
+    return "";
+  }
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return "";
+  }
+}
+
 export function extractAssistantMessageParts(content: ContentBlock[]): {
   text: string;
   thinking: string;

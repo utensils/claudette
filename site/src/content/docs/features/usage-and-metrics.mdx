@@ -3,16 +3,32 @@ title: Usage & Metrics
 description: Track Claude Code consumption against your plan and inspect Claudette's local activity dashboard.
 ---
 
-Claudette surfaces two related but distinct views:
+Claudette surfaces three related but distinct views:
 
-1. **Claude Code usage** — tokens consumed against your Anthropic account. Fetched from Anthropic's usage API.
-2. **Claudette metrics** — local activity (workspaces, sessions, commits, slash commands). Computed from Claudette's database; never sent off-machine.
+1. **Composer usage meter** — small battery indicator next to the mic button in every chat composer. Always visible for Codex / OpenAI / OpenRouter / Pi / Ollama / LM Studio sessions (driven by Claudette's per-turn token records). For Claude-family sessions, the meter is greyed out until you opt in to the **Claude Code Usage** experimental toggle, at which point it surfaces real Anthropic subscription quotas.
+2. **Claude Code subscription panel** — the deeper **Settings > Usage** view, gated by the same toggle. Shows session / weekly limits and resets.
+3. **Claudette metrics** — local activity (workspaces, sessions, commits, slash commands). Computed from Claudette's database; never sent off-machine.
 
-## Claude Code usage
+## Composer usage meter
+
+The composer indicator picks a data source per backend:
+
+| Backend kind | Data source | Always-on? |
+|---|---|---|
+| Anthropic / Custom Anthropic | Anthropic OAuth Usage API (subscription quotas) | Off by default — gated by the **Claude Code Usage** toggle |
+| Codex Native / Codex Subscription | Live Codex `account/rateLimits/*` quotas (Session 5h + Weekly) when available; falls back to local-aggregate tokens with a plain `Codex` label until the first rate-limits push lands | Yes |
+| OpenAI API / Custom OpenAI / OpenRouter | Local-aggregate tokens + OpenRouter `/credits` balance when the active endpoint is OpenRouter | Yes |
+| Ollama / LM Studio / Pi | Local-aggregate tokens; Pi OpenRouter models also show OpenRouter `/credits` balance | Yes |
+
+Local-aggregate data comes from the `chat_messages.input_tokens` / `output_tokens` / `cost_usd` columns Claudette already writes for every turn. Nothing leaves your machine for those backends.
+
+Pi sessions record token usage and provider-reported cost at the end of each turn when Pi exposes it. For OpenRouter-backed Pi models, Claudette also polls OpenRouter's account credits endpoint with the same OpenRouter key configured for Pi and silently falls back to local token totals if the credits call fails.
+
+## Claude Code subscription panel
 
 The **Settings > Usage** panel shows your subscription type, rate-limit tier, and current consumption against your plan. Open it from the sidebar footer or via the `/usage` slash command.
 
-This panel is gated by the **Usage Insights** experimental toggle (off by default). When the toggle is off, Claudette never reads your Claude Code OAuth tokens for usage data — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use. Enable it in **Settings > Experimental** if you want the panel. Requires a Pro or Max plan with standard login (env-var auth tokens like `CLAUDE_CODE_OAUTH_TOKEN` lack the OAuth scopes the API needs).
+This panel is gated by the **Claude Code Usage** experimental toggle (off by default). When the toggle is off, Claudette never reads your Claude Code OAuth tokens for usage data — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use. Enable it in **Settings > Experimental** if you want the panel. Requires a Pro or Max plan with standard login (env-var auth tokens like `CLAUDE_CODE_OAUTH_TOKEN` lack the OAuth scopes the API needs).
 
 Claude Code sign-in itself is separate and always available in **Settings > Models**. Usage credential failures reuse that same sign-in flow.
 
@@ -71,6 +87,7 @@ Archiving a workspace doesn't drop its activity from the metrics. Closed-out wor
 | Source | Data | Trigger |
 |---|---|---|
 | Anthropic usage API | Subscription, tier, token totals | Opening the Usage panel; cached 5 min |
+| OpenRouter credits API | Total, used, and remaining credits for OpenRouter-backed sessions | Composer meter refresh; 5-min cadence while active |
 | Local SQLite | Everything else | On view; never network |
 
 See [Privacy](/claudette/privacy/) for the full network-activity ledger.

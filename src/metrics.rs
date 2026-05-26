@@ -17,6 +17,45 @@ use crate::model::{
 /// 8 turn-count buckets: [1,2], [3,4], [5,8], [9,16], [17,32], [33,64], [65,128], [129+].
 const TURN_BUCKET_UPPER_BOUNDS: [i64; 7] = [2, 4, 8, 16, 32, 64, 128];
 
+const MERGED_SESSIONS_CTE: &str = r#"
+WITH merged_sessions AS (
+    SELECT started_at,
+           ended_at,
+           completed_ok,
+           workspace_id,
+           turn_count,
+           1 AS session_count,
+           CASE WHEN completed_ok THEN 1 ELSE 0 END AS success_count
+    FROM agent_sessions
+    UNION ALL
+    SELECT started_at,
+           ended_at,
+           completed_ok,
+           workspace_id,
+           turn_count,
+           1 AS session_count,
+           CASE WHEN completed_ok THEN 1 ELSE 0 END AS success_count
+    FROM deleted_agent_sessions
+    UNION ALL
+    SELECT COALESCE(first_message_at, workspace_created_at) AS started_at,
+           last_message_at AS ended_at,
+           CASE WHEN sessions_completed > 0 THEN 1 ELSE 0 END AS completed_ok,
+           workspace_id,
+           CASE
+               WHEN total_turns > 0 THEN CAST(ROUND(total_turns * 1.0 / sessions_started) AS INTEGER)
+               ELSE 0
+           END AS turn_count,
+           sessions_started AS session_count,
+           sessions_completed AS success_count
+    FROM deleted_workspace_summaries s
+    WHERE sessions_started > 0
+      AND NOT EXISTS (
+          SELECT 1 FROM deleted_agent_sessions ds
+          WHERE ds.workspace_id = s.workspace_id
+      )
+)
+"#;
+
 pub fn dashboard_metrics(db_path: &Path) -> Result<DashboardMetrics, rusqlite::Error> {
     let conn = Connection::open(db_path)?;
     dashboard_metrics_with(&conn)
@@ -121,23 +160,35 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
     // Range form on raw `started_at` keeps `idx_agent_sessions_started` usable.
     // `started_at` is stored as naive UTC (`datetime('now')` form), so comparing
     // it against UTC boundary timestamps is well-defined lexicographically.
-    let sessions_today: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM agent_sessions
+    let sessions_today_sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT COALESCE(SUM(session_count), 0)
+         FROM merged_sessions
          WHERE started_at >= datetime('now', 'localtime', 'start of day', 'utc')
-           AND started_at <  datetime('now', 'localtime', 'start of day', '+1 day', 'utc')",
-        [],
-        |row| row.get::<_, i64>(0).map(|n| n as u32),
-    )?;
+           AND started_at <  datetime('now', 'localtime', 'start of day', '+1 day', 'utc')"
+    );
+    let sessions_today: u32 = conn.query_row(&sessions_today_sql, [], |row| {
+        row.get::<_, i64>(0).map(|n| n as u32)
+    })?;
 
     let commits_today: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM agent_commits WHERE date(committed_at, 'localtime') = date('now', 'localtime')",
+        "SELECT COUNT(*) FROM (
+             SELECT committed_at FROM agent_commits
+             UNION ALL
+             SELECT committed_at FROM deleted_agent_commits
+         )
+         WHERE date(committed_at, 'localtime') = date('now', 'localtime')",
         [],
         |row| row.get::<_, i64>(0).map(|n| n as u32),
     )?;
 
     let (additions_7d, deletions_7d): (u64, u64) = conn.query_row(
         "SELECT COALESCE(SUM(additions), 0), COALESCE(SUM(deletions), 0)
-         FROM agent_commits
+         FROM (
+             SELECT additions, deletions, committed_at FROM agent_commits
+             UNION ALL
+             SELECT additions, deletions, committed_at FROM deleted_agent_commits
+         )
          WHERE date(committed_at, 'localtime') >= date('now', 'localtime', '-6 days')",
         [],
         |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
@@ -158,16 +209,22 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
     )?;
     let cost_30d_usd = live_cost_30d + deleted_cost_30d;
 
-    let success_rate_30d: f32 = conn
-        .query_row(
-            "SELECT AVG(CASE WHEN completed_ok THEN 1.0 ELSE 0.0 END)
-             FROM agent_sessions
-             WHERE ended_at IS NOT NULL
-               AND started_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')",
-            [],
-            |row| row.get::<_, Option<f64>>(0),
-        )?
-        .unwrap_or(0.0) as f32;
+    let success_rate_sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT COALESCE(SUM(success_count), 0), COALESCE(SUM(session_count), 0)
+         FROM merged_sessions
+         WHERE ended_at IS NOT NULL
+           AND started_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')"
+    );
+    let (successes_30d, completed_30d): (u64, u64) =
+        conn.query_row(&success_rate_sql, [], |row| {
+            Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64))
+        })?;
+    let success_rate_30d = if completed_30d > 0 {
+        successes_30d as f32 / completed_30d as f32
+    } else {
+        0.0
+    };
 
     let (live_input_30d, live_output_30d): (u64, u64) = conn.query_row(
         "SELECT COALESCE(SUM(COALESCE(input_tokens, 0)), 0),
@@ -231,7 +288,12 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
 
 fn daily_counts_14d(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT date(committed_at, 'localtime') AS d, COUNT(*) FROM agent_commits
+        "SELECT date(committed_at, 'localtime') AS d, COUNT(*)
+         FROM (
+             SELECT committed_at FROM agent_commits
+             UNION ALL
+             SELECT committed_at FROM deleted_agent_commits
+         )
          WHERE date(committed_at, 'localtime') >= date('now', 'localtime', '-13 days')
          GROUP BY d",
     )?;
@@ -245,7 +307,14 @@ fn daily_counts_14d(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
 
 fn daily_cost_30d(conn: &Connection) -> Result<Vec<f64>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT date(created_at, 'localtime') AS d, COALESCE(SUM(cost_usd), 0) FROM chat_messages
+        "SELECT date(created_at, 'localtime') AS d, COALESCE(SUM(cost_usd), 0)
+         FROM (
+             SELECT created_at, cost_usd FROM chat_messages
+             UNION ALL
+             SELECT last_message_at AS created_at, total_cost_usd AS cost_usd
+             FROM deleted_workspace_summaries
+             WHERE last_message_at IS NOT NULL
+         )
          WHERE created_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')
          GROUP BY d",
     )?;
@@ -260,8 +329,17 @@ fn daily_cost_30d(conn: &Connection) -> Result<Vec<f64>, rusqlite::Error> {
 fn daily_tokens_30d(conn: &Connection) -> Result<Vec<u64>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT date(created_at, 'localtime') AS d,
-                COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0)
-         FROM chat_messages
+                COALESCE(SUM(tokens), 0)
+         FROM (
+             SELECT created_at,
+                    COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) AS tokens
+             FROM chat_messages
+             UNION ALL
+             SELECT last_message_at AS created_at,
+                    COALESCE(total_input_tokens, 0) + COALESCE(total_output_tokens, 0) AS tokens
+             FROM deleted_workspace_summaries
+             WHERE last_message_at IS NOT NULL
+         )
          WHERE created_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')
          GROUP BY d",
     )?;
@@ -472,14 +550,16 @@ fn repo_leaderboard(conn: &Connection) -> Result<Vec<RepoLeaderRow>, rusqlite::E
 
 fn heatmap(conn: &Connection) -> Result<Vec<HeatmapCell>, rusqlite::Error> {
     // 13 weeks × 7 days = 91 cells. Week index = days-ago / 7 (0 = most recent).
-    let mut stmt = conn.prepare(
-        "SELECT CAST(strftime('%w', started_at, 'localtime') AS INTEGER) AS dow,
+    let sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT CAST(strftime('%w', started_at, 'localtime') AS INTEGER) AS dow,
                 CAST((julianday(date('now', 'localtime')) - julianday(date(started_at, 'localtime'))) / 7 AS INTEGER) AS week,
-                COUNT(*) AS c
-         FROM agent_sessions
+                COALESCE(SUM(session_count), 0) AS c
+         FROM merged_sessions
          WHERE started_at >= datetime('now', 'localtime', 'start of day', '-90 days', 'utc')
-         GROUP BY dow, week",
-    )?;
+         GROUP BY dow, week"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let mut grid = [[0u32; 13]; 7];
     for row in stmt.query_map([], |row| {
         Ok((
@@ -507,15 +587,23 @@ fn heatmap(conn: &Connection) -> Result<Vec<HeatmapCell>, rusqlite::Error> {
 }
 
 fn turn_histogram(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
-    let mut stmt = conn.prepare("SELECT turn_count FROM agent_sessions WHERE turn_count > 0")?;
+    let sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT turn_count, session_count
+         FROM merged_sessions
+         WHERE turn_count > 0"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let mut buckets = vec![0u32; 8];
-    for row in stmt.query_map([], |row| row.get::<_, i64>(0))? {
-        let count = row?;
+    for row in stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as u32))
+    })? {
+        let (count, session_count) = row?;
         let idx = TURN_BUCKET_UPPER_BOUNDS
             .iter()
             .position(|&upper| count <= upper)
             .unwrap_or(7);
-        buckets[idx] += 1;
+        buckets[idx] += session_count;
     }
     Ok(buckets)
 }
@@ -523,7 +611,11 @@ fn turn_histogram(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
 fn top_slash_commands(conn: &Connection) -> Result<Vec<(String, u32)>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT command_name, CAST(SUM(use_count) AS INTEGER) AS total
-         FROM slash_command_usage
+         FROM (
+             SELECT command_name, use_count FROM slash_command_usage
+             UNION ALL
+             SELECT command_name, use_count FROM deleted_slash_command_usage
+         )
          GROUP BY command_name
          ORDER BY total DESC
          LIMIT 5",
@@ -545,14 +637,16 @@ fn recent_sessions_24h(conn: &Connection) -> Result<Vec<SessionDot>, rusqlite::E
     // local time by V8, which would shift every dot by the user's UTC
     // offset — mirroring the backend's `ensure_utc_tz` treatment of
     // SQLite timestamps elsewhere.
-    let mut stmt = conn.prepare(
-        "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ended_at), completed_ok, workspace_id
-         FROM agent_sessions
+    let sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ended_at), completed_ok, workspace_id
+         FROM merged_sessions
          WHERE ended_at IS NOT NULL
            AND workspace_id IS NOT NULL
            AND ended_at >= datetime('now','-24 hours')
-         ORDER BY ended_at DESC",
-    )?;
+         ORDER BY ended_at DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     stmt.query_map([], |row| {
         Ok(SessionDot {
             ended_at: row.get(0)?,
@@ -691,6 +785,28 @@ mod tests {
         );
         let m = dashboard_metrics(&path).unwrap();
         assert!((m.cost_30d_usd - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dashboard_time_series_merge_deleted_summary_totals() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        exec(
+            &conn,
+            "INSERT INTO deleted_workspace_summaries (
+                id, workspace_id, workspace_name, repository_id, workspace_created_at,
+                total_cost_usd, total_input_tokens, total_output_tokens, last_message_at
+             )
+             VALUES (
+                'd1', 'wsdel', 'dead', 'r', datetime('now','-10 days'),
+                7.25, 12000, 3000, datetime('now')
+             )",
+        );
+
+        let m = dashboard_metrics(&path).unwrap();
+        assert!((m.cost_daily_30d.last().unwrap() - 7.25).abs() < 1e-6);
+        assert_eq!(*m.tokens_daily_30d.last().unwrap(), 15000);
     }
 
     #[test]
@@ -902,6 +1018,86 @@ mod tests {
             a.top_slash_commands,
             vec![("commit".to_string(), 5), ("review".to_string(), 4)]
         );
+    }
+
+    #[test]
+    fn metrics_survive_workspace_hard_delete_detail_tables() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "w", "r");
+        exec(
+            &conn,
+            "INSERT INTO agent_sessions (
+                id, workspace_id, repository_id, started_at, last_message_at,
+                ended_at, completed_ok, turn_count
+             )
+             VALUES (
+                's1', 'w', 'r', datetime('now'), datetime('now'),
+                datetime('now'), 1, 5
+             )",
+        );
+        exec(
+            &conn,
+            "INSERT INTO agent_commits (
+                commit_hash, workspace_id, repository_id, additions, deletions,
+                files_changed, committed_at
+             )
+             VALUES ('c1', 'w', 'r', 10, 3, 2, datetime('now'))",
+        );
+        exec(
+            &conn,
+            "INSERT INTO slash_command_usage (workspace_id, command_name, use_count)
+             VALUES ('w', 'commit', 4)",
+        );
+
+        Database::open(&path)
+            .unwrap()
+            .delete_workspace_with_summary("w")
+            .unwrap();
+
+        let d = dashboard_metrics(&path).unwrap();
+        assert_eq!(d.sessions_today, 1);
+        assert_eq!(d.commits_today, 1);
+        assert_eq!(d.additions_7d, 10);
+        assert_eq!(d.deletions_7d, 3);
+        assert_eq!(*d.commits_daily_14d.last().unwrap(), 1);
+        assert!((d.success_rate_30d - 1.0).abs() < 1e-6);
+
+        let a = analytics_metrics(&path).unwrap();
+        assert_eq!(a.heatmap.iter().map(|c| c.count).sum::<u32>(), 1);
+        assert_eq!(a.turn_histogram, vec![0, 0, 1, 0, 0, 0, 0, 0]);
+        assert_eq!(a.top_slash_commands, vec![("commit".to_string(), 4)]);
+        assert_eq!(a.recent_sessions_24h.len(), 1);
+        assert_eq!(a.recent_sessions_24h[0].workspace_id, "w");
+    }
+
+    #[test]
+    fn metrics_use_deleted_summary_fallback_when_detail_rows_are_unavailable() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        exec(
+            &conn,
+            "INSERT INTO deleted_workspace_summaries (
+                id, workspace_id, workspace_name, repository_id, workspace_created_at,
+                sessions_started, sessions_completed, total_turns, last_message_at
+             )
+             VALUES (
+                'd1', 'w-gone', 'gone', 'r', datetime('now'),
+                2, 1, 6, datetime('now')
+             )",
+        );
+
+        let d = dashboard_metrics(&path).unwrap();
+        assert_eq!(d.sessions_today, 2);
+        assert!((d.success_rate_30d - 0.5).abs() < 1e-6);
+
+        let a = analytics_metrics(&path).unwrap();
+        assert_eq!(a.heatmap.iter().map(|c| c.count).sum::<u32>(), 2);
+        assert_eq!(a.turn_histogram, vec![0, 2, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(a.recent_sessions_24h.len(), 1);
+        assert_eq!(a.recent_sessions_24h[0].workspace_id, "w-gone");
     }
 
     #[test]

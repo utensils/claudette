@@ -28,12 +28,18 @@ import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
+import { setPlanModeAndPersist } from "../components/chat/planModePersistence";
 import {
   applyCommandLineEvent,
   approvalDetailValue,
   extractAssistantMessageParts,
   firstApprovalDetailString,
+  initialToolInputJson,
 } from "./useAgentStreamLogic";
+import {
+  clearPromptStartTimeIfWorkspaceIdle,
+  syncWorkspaceTurnStatus,
+} from "../components/chat/chatTurnLifecycle";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const CODEX_COMMAND_APPROVAL_TOOL = "CodexCommandApproval";
@@ -182,7 +188,6 @@ export function useAgentStream() {
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
   const setAgentApproval = useAppStore((s) => s.setAgentApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
-  const setPlanMode = useAppStore((s) => s.setPlanMode);
   const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
 
   // Per-session map: sessionId → (content-block index → tool entry). Two
@@ -210,30 +215,11 @@ export function useAgentStream() {
   // gating) — it is not displayed verbatim. Call this whenever a session
   // or background task transitions so the aggregate stays accurate even
   // with concurrent sessions and async task updates.
-  const syncWorkspaceAgentStatus = (wsId: string) => {
+  const ensurePromptStartTime = (wsId: string) => {
     const state = useAppStore.getState();
-    const sessions = state.sessionsByWorkspace[wsId] ?? [];
-    const anyRunning = sessions.some(
-      (s) => s.status === "Active" && s.agent_status === "Running",
-    );
-    const activeSessionIds = new Set(
-      sessions.filter((s) => s.status === "Active").map((s) => s.id),
-    );
-    const anyBackground = Object.entries(state.agentBackgroundTasksBySessionId)
-      .some(([sessionId, tabs]) =>
-        activeSessionIds.has(sessionId) &&
-        tabs.some((tab) => {
-          const status = (tab.task_status ?? "").toLowerCase();
-          return status === "starting" || status === "running";
-        }),
-      );
-    state.updateWorkspace(wsId, {
-      agent_status: anyRunning
-        ? "Running"
-        : anyBackground
-          ? "IdleWithBackground"
-          : "Idle",
-    });
+    if (state.promptStartTime[wsId] == null) {
+      state.setPromptStartTime(wsId, Date.now());
+    }
   };
 
   useEffect(() => {
@@ -272,8 +258,8 @@ export function useAgentStream() {
         // Natural completion emits a `result` event (wasFinalized=true) → Idle.
         // User stop or crash has no prior `result` → Stopped.
         updateChatSession(sessionId, { agent_status: wasFinalized ? "Idle" : "Stopped" });
-        syncWorkspaceAgentStatus(wsId);
-        useAppStore.getState().clearPromptStartTime(wsId);
+        syncWorkspaceTurnStatus(wsId);
+        clearPromptStartTimeIfWorkspaceIdle(wsId);
         setStreamingContent(sessionId, "");
         clearStreamingThinking(sessionId);
         clearBlockToolsForSession(blockToolMapRef.current, sessionId);
@@ -292,6 +278,7 @@ export function useAgentStream() {
 
       if (!("Stream" in agentEvent)) return;
       const streamEvent = agentEvent.Stream;
+      ensurePromptStartTime(wsId);
 
       // Handle different stream event types based on the Rust enum serialization
       if ("type" in streamEvent) {
@@ -351,12 +338,22 @@ export function useAgentStream() {
               }
             }
             // Compaction lifecycle: status -> "compacting" marks start;
-            // compact_boundary marks end.
+            // compact_boundary marks success-path end. `status: "running"`
+            // is the abort-path counterpart — emitted by the Pi harness
+            // when an auto-compaction failed mid-turn, where there's no
+            // boundary divider to clear the Compacting affordance.
             if (
               streamEvent.subtype === "status" &&
               streamEvent.status === "compacting"
             ) {
               updateWorkspace(wsId, { agent_status: "Compacting" });
+              break;
+            }
+            if (
+              streamEvent.subtype === "status" &&
+              streamEvent.status === "running"
+            ) {
+              updateWorkspace(wsId, { agent_status: "Running" });
               break;
             }
             if (
@@ -520,6 +517,9 @@ export function useAgentStream() {
                     "type" in inner.content_block &&
                     inner.content_block.type === "tool_use"
                   ) {
+                    const inputJson = initialToolInputJson(
+                      inner.content_block.input,
+                    );
                     setBlockTool(
                       blockToolMapRef.current,
                       sessionId,
@@ -532,10 +532,12 @@ export function useAgentStream() {
                     addToolActivity(sessionId, {
                       toolUseId: inner.content_block.id,
                       toolName: inner.content_block.name,
-                      inputJson: "",
+                      inputJson,
                       resultText: "",
                       collapsed: true,
-                      summary: "",
+                      summary: inputJson
+                        ? extractToolSummary(inner.content_block.name, inputJson)
+                        : "",
                       startedAt: new Date().toISOString(),
                       assistantMessageOrdinal:
                         (turnMessageCountRef.current[sessionId] || 0) +
@@ -544,12 +546,15 @@ export function useAgentStream() {
                           ? 1
                           : 0),
                     });
-                    // Detect plan mode changes from agent tool calls.
+                    // Detect plan mode changes from agent tool calls. Persist
+                    // alongside the in-memory update so an agent-driven
+                    // ExitPlanMode survives a restart instead of being
+                    // clobbered by the global `default_plan_mode` on remount.
                     if (inner.content_block.name === "EnterPlanMode") {
-                      setPlanMode(sessionId, true);
+                      void setPlanModeAndPersist(sessionId, true);
                     } else if (inner.content_block.name === "ExitPlanMode") {
                       debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "content_block_start" });
-                      setPlanMode(sessionId, false);
+                      void setPlanModeAndPersist(sessionId, false);
                     }
                   }
                   break;
@@ -584,13 +589,14 @@ export function useAgentStream() {
                     }
                   }
 
-                  // NOTE: AskUserQuestion / ExitPlanMode card-showing is no
-                  // longer driven by content_block_stop. The Rust bridge emits
-                  // an `agent-permission-prompt` event the moment the CLI's
+                  // AskUserQuestion / ExitPlanMode card-showing is NOT driven
+                  // by content_block_stop. The Rust bridge emits an
+                  // `agent-permission-prompt` event the moment the CLI's
                   // `control_request` is captured (and pending_permissions is
                   // populated). The listener below handles those tools — that
                   // way the card cannot be clicked before the Rust side is
-                  // ready to receive the answer.
+                  // ready to receive the answer, and a card never gets
+                  // re-shown after the user has already answered it.
                   break;
                 }
               }
@@ -675,8 +681,8 @@ export function useAgentStream() {
             turnFinalizedRef.current[sessionId] = true;
             turnSawUsageRef.current[sessionId] = false;
             updateChatSession(sessionId, { agent_status: "Idle" });
-            syncWorkspaceAgentStatus(wsId);
-            useAppStore.getState().clearPromptStartTime(wsId);
+            syncWorkspaceTurnStatus(wsId);
+            clearPromptStartTimeIfWorkspaceIdle(wsId);
             useAppStore.getState().markWorkspaceAsUnread(wsId);
             break;
           }
@@ -726,7 +732,6 @@ export function useAgentStream() {
     setPlanApproval,
     upsertAgentToolCall,
     finalizeTurn,
-    setPlanMode,
     addCompactionEvent,
     updateChatSession,
   ]);
@@ -867,14 +872,26 @@ export function useAgentStream() {
           }
         }
       } else if (toolName === "ExitPlanMode") {
-        // Mirror the content_block_start clear at the control_request boundary
-        // in case that event arrived without the tool `name` populated.
-        // Idempotent — setting to the same value is a no-op.
-        debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "agent-permission-prompt" });
-        setPlanMode(sessionId, false);
+        const inputObj =
+          input && typeof input === "object"
+            ? (input as Record<string, unknown>)
+            : null;
+        const codexPlanContent =
+          typeof inputObj?.codexPlanContent === "string"
+            ? inputObj.codexPlanContent
+            : null;
+        const isCodexSyntheticPlan =
+          inputObj?.codexSyntheticPlan === true && codexPlanContent !== null;
+        // Claude's ExitPlanMode tool means the agent is leaving plan mode now.
+        // Codex's synthetic plan approval is client-side: keep plan mode on
+        // until the user chooses "Approve plan".
+        if (!isCodexSyntheticPlan) {
+          debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "agent-permission-prompt" });
+          void setPlanModeAndPersist(sessionId, false);
+        }
         let allowedPrompts: Array<{ tool: string; prompt: string }> = [];
-        if (input && typeof input === "object" && "allowedPrompts" in input) {
-          const ap = (input as { allowedPrompts?: unknown }).allowedPrompts;
+        if (inputObj && "allowedPrompts" in inputObj) {
+          const ap = inputObj.allowedPrompts;
           if (Array.isArray(ap)) {
             allowedPrompts = ap as Array<{ tool: string; prompt: string }>;
           }
@@ -904,7 +921,14 @@ export function useAgentStream() {
         if (!planFilePath && planFilePathRef.current[sessionId]) {
           planFilePath = planFilePathRef.current[sessionId];
         }
-        setPlanApproval({ sessionId, toolUseId, planFilePath, allowedPrompts });
+        setPlanApproval({
+          sessionId,
+          toolUseId,
+          planFilePath,
+          allowedPrompts,
+          source: isCodexSyntheticPlan ? "codex" : "claude",
+          planContent: codexPlanContent,
+        });
         updateChatSession(sessionId, {
           needs_attention: true,
           attention_kind: "Plan",
@@ -931,7 +955,7 @@ export function useAgentStream() {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [setAgentApproval, setAgentQuestion, setPlanApproval, setPlanMode, updateChatSession]);
+  }, [setAgentApproval, setAgentQuestion, setPlanApproval, updateChatSession]);
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
@@ -1197,7 +1221,7 @@ export function useAgentStream() {
           agent_status: hasRunningBackground ? "IdleWithBackground" : "Idle",
         });
       }
-      syncWorkspaceAgentStatus(wsId);
+      syncWorkspaceTurnStatus(wsId);
     });
     return () => {
       active = false;

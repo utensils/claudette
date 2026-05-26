@@ -1,9 +1,10 @@
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { ToolActivity } from "../../stores/useAppStore";
+import { parseMcpToolName } from "./mcpToolName";
 
 export type ToolActivityDisplayGroup = {
   key: string;
-  kind: "tools" | "agent" | "skill";
+  kind: "tools" | "agent" | "skill" | "mcp";
   label: string;
   activities: ToolActivity[];
 };
@@ -18,6 +19,7 @@ export function groupToolActivitiesForDisplay(
 
   const groups: ToolActivityDisplayGroup[] = [];
   let directTools: ToolActivity[] = [];
+  let mcpRun: { server: string; activities: ToolActivity[] } | null = null;
 
   const flushDirectTools = () => {
     if (directTools.length === 0) return;
@@ -30,6 +32,21 @@ export function groupToolActivitiesForDisplay(
     directTools = [];
   };
 
+  const flushMcpRun = () => {
+    if (!mcpRun) return;
+    groups.push({
+      key: `mcp:${mcpRun.server}:${mcpRun.activities
+        .map((activity) => activity.toolUseId)
+        .join(",")}`,
+      kind: "mcp",
+      label: mcpRun.server,
+      activities: mcpRun.activities,
+    });
+    mcpRun = null;
+  };
+
+  // `directTools` and `mcpRun` are mutually exclusive accumulators: pushing to
+  // either flushes the other first, so at most one is non-empty at a time.
   for (const activity of activities) {
     // Agents and skills are first-class transcript entries, not tool
     // calls — they break a run of direct tools and render on their own
@@ -37,13 +54,29 @@ export function groupToolActivitiesForDisplay(
     // marker) rather than getting bundled into the "N tool calls" pill.
     if (isAgentActivity(activity) || isSkillActivity(activity)) {
       flushDirectTools();
+      flushMcpRun();
       groups.push(activityDisplayGroup(activity));
       continue;
     }
+    // MCP tool calls get pulled out of the generic "N tool calls" pill into
+    // a per-server group (Plug2 + server name). Consecutive calls to the
+    // same server accumulate; a different server or a plain tool flushes the
+    // run, preserving transcript order.
+    const mcp = parseMcpToolName(activity.toolName);
+    if (mcp) {
+      flushDirectTools();
+      if (mcpRun && mcpRun.server !== mcp.server) flushMcpRun();
+      (mcpRun ??= { server: mcp.server, activities: [] }).activities.push(
+        activity,
+      );
+      continue;
+    }
+    flushMcpRun();
     directTools.push(activity);
   }
 
   flushDirectTools();
+  flushMcpRun();
   return groups;
 }
 

@@ -1,3 +1,9 @@
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+};
+
 use serde::{Deserialize, Serialize};
 
 /// Workspace-scoped output file for the Claudette Terminal tab. This is
@@ -6,14 +12,149 @@ use serde::{Deserialize, Serialize};
 /// `.claudette.json` setup script, every chat session's Bash tool
 /// commands (foreground and the mirror of background tasks). xterm.js
 /// tails this one file; the tab created on workspace create/fork
-/// points here from the start and never rebinds, so the user can
-/// scroll back through the full history of everything that ever ran
-/// in the workspace.
-pub fn workspace_terminal_output_path(workspace_id: &str) -> std::path::PathBuf {
+/// points here from the start and never rebinds, so users can scroll
+/// back through the recent workspace transcript.
+///
+/// The file is a **tail-bounded ring**, not an append-only log: when
+/// the next append would push it past [`TERMINAL_OUTPUT_MAX_BYTES`]
+/// the writer rewrites it in place to keep only the last
+/// [`TERMINAL_OUTPUT_TAIL_BYTES`] (preceded by a truncation banner).
+/// See [`append_terminal_output_sync`] for the writer and issue #937
+/// for the rationale.
+pub fn workspace_terminal_output_path(workspace_id: &str) -> PathBuf {
     std::env::temp_dir()
         .join("claudette-workspace-terminal")
         .join(workspace_id)
         .join("terminal.output")
+}
+
+/// Hard ceiling for any workspace `terminal.output` file. Once a file would
+/// exceed this size on the next append, the writer rotates it in place to
+/// keep only the most recent [`TERMINAL_OUTPUT_TAIL_BYTES`] (preceded by a
+/// truncation banner) so a chatty long-running background bash cannot grow
+/// the file unbounded. The Claudette Terminal tail reader already handles
+/// in-place shrinkage (`tail_agent_task_file` resets when `len < offset`).
+///
+/// 64 MiB / 32 MiB is enough scrollback for any practical debugging session
+/// while bounding the worst-case heap retained by the Tauri → xterm.js
+/// pipeline. See issue #937 for the OOM that motivated the cap.
+pub const TERMINAL_OUTPUT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+pub const TERMINAL_OUTPUT_TAIL_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Per-path mutexes used to serialize size-cap rotations against concurrent
+/// appenders. Each workspace's `terminal.output` gets its own lock, so
+/// unrelated workspaces never block each other; rotations and appends to
+/// the same path are serialized so the truncate-to-tail rewrite cannot
+/// lose concurrent writes.
+///
+/// Both writers to the workspace terminal file — the agent stream path
+/// in `commands::chat::send` and the env-provider /  setup-script sink
+/// in `commands::env` — take this lock from sync context. The async
+/// agent path defers to `tokio::task::spawn_blocking` so the std mutex
+/// is never held across an await.
+fn terminal_output_lock_for(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    // Tolerate poisoning: a prior panic while holding the lock map mutex
+    // would otherwise propagate a panic into every subsequent terminal-
+    // output write and crash the app. The map's data is just `Arc`
+    // handles and `PathBuf` keys — recovering the inner value is safe.
+    let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
+    guard
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn terminal_output_truncation_banner() -> String {
+    format!(
+        "\r\n[claudette: terminal output truncated, keeping last {} MiB]\r\n",
+        TERMINAL_OUTPUT_TAIL_BYTES / (1024 * 1024)
+    )
+}
+
+/// Rewrite `path` in place to its last [`TERMINAL_OUTPUT_TAIL_BYTES`] (plus
+/// a truncation banner) when the projected post-append size would exceed
+/// the cap. Pass `incoming` = bytes about to be appended so a single
+/// oversized payload that would jump from "just under the cap" to "well
+/// over" is caught before the bytes hit disk.
+fn rotate_terminal_output_if_needed_sync(path: &Path, incoming: u64) -> std::io::Result<()> {
+    let len = match std::fs::metadata(path) {
+        Ok(meta) => meta.len(),
+        Err(_) => return Ok(()),
+    };
+    if len.saturating_add(incoming) <= TERMINAL_OUTPUT_MAX_BYTES {
+        return Ok(());
+    }
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let start = len.saturating_sub(TERMINAL_OUTPUT_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start))?;
+    let mut tail = Vec::with_capacity(TERMINAL_OUTPUT_TAIL_BYTES as usize);
+    file.read_to_end(&mut tail)?;
+    let banner = terminal_output_truncation_banner();
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(banner.as_bytes())?;
+    file.write_all(&tail)?;
+    let new_len = banner.len() as u64 + tail.len() as u64;
+    file.set_len(new_len)?;
+    Ok(())
+}
+
+/// Sync writer for the workspace `terminal.output` file shared by every
+/// path that streams into it (agent bash echoes + mirror, env-provider
+/// streaming sink, setup-script sink). All callers must go through this
+/// helper so the per-path mutex serializes them with the rotation rewrite
+/// — otherwise a concurrent appender can lose bytes during truncation.
+///
+/// Handles three regimes:
+/// 1. `bytes` fits comfortably under the cap → plain append.
+/// 2. `bytes` plus the current file size would exceed the cap →
+///    rotate-to-tail first, then append.
+/// 3. `bytes` *alone* exceeds [`TERMINAL_OUTPUT_TAIL_BYTES`] (e.g. a
+///    single huge ToolResult) → write only the tail of the payload,
+///    preceded by the same truncation banner, so the resulting file
+///    never lives past the ceiling.
+pub fn append_terminal_output_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let lock = terminal_output_lock_for(path);
+    // Same poisoning policy as the lock map: tolerate a prior panic so
+    // a single bad write doesn't silently kill the terminal pipeline.
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
+
+    let tail_cap = TERMINAL_OUTPUT_TAIL_BYTES as usize;
+    let oversized_payload = bytes.len() > tail_cap;
+
+    if oversized_payload {
+        // The payload itself is larger than the tail target. Discard the
+        // current file (no point preserving any of it — none of it will
+        // remain on disk), then write banner + tail-of-payload so the
+        // post-write size is `banner + tail_cap` regardless of how big
+        // `bytes` was.
+        use std::io::Write;
+        let banner = terminal_output_truncation_banner();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        file.write_all(banner.as_bytes())?;
+        let start = bytes.len() - tail_cap;
+        return file.write_all(&bytes[start..]);
+    }
+
+    rotate_terminal_output_if_needed_sync(path, bytes.len() as u64)?;
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(bytes)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -323,5 +464,171 @@ mod tests {
             .is_none()
         );
         assert!(parse_task_notification("plain text").is_none());
+    }
+
+    #[test]
+    fn append_caps_terminal_output_via_truncate_to_tail() {
+        // Issue #937: workspace `terminal.output` grew to 15.6 GB because a
+        // long-running background bash mirror appended without bound. The
+        // appender must rotate the file when it exceeds the hard cap so the
+        // tail-emit pipeline can't blow up memory.
+        let path = std::env::temp_dir().join(format!(
+            "claudette-cap-{}.terminal.output",
+            uuid::Uuid::new_v4()
+        ));
+        // Seed the file just past the cap so the next append triggers
+        // rotation. Use a small marker at the very end so we can assert
+        // recent bytes survive truncation.
+        let mut seed = vec![b'A'; TERMINAL_OUTPUT_MAX_BYTES as usize + 1024];
+        let marker = b"TAIL_MARKER_KEEP_ME";
+        let marker_at = seed.len() - marker.len();
+        seed[marker_at..].copy_from_slice(marker);
+        std::fs::write(&path, &seed).unwrap();
+
+        append_terminal_output_sync(&path, b"new-line\r\n").unwrap();
+
+        let after = std::fs::read(&path).unwrap();
+        // Cap brought us back well under the ceiling. tail bytes + banner +
+        // the new "new-line" append must all fit comfortably inside the cap.
+        assert!(
+            (after.len() as u64) <= TERMINAL_OUTPUT_TAIL_BYTES + 256,
+            "file should have been truncated, got {} bytes",
+            after.len()
+        );
+        let after_str = String::from_utf8_lossy(&after);
+        assert!(after_str.starts_with("\r\n[claudette: terminal output truncated"));
+        // The marker we appended *just before* rotation must survive — the
+        // rotator keeps the tail of the file, not the head.
+        assert!(
+            after.windows(marker.len()).any(|w| w == marker),
+            "expected tail marker to survive truncation"
+        );
+        // The newly appended line is at the very end.
+        assert!(
+            after_str.ends_with("new-line\r\n"),
+            "expected newest append at end"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn append_rotates_when_post_state_would_exceed_cap() {
+        // Regression test for the off-by-one in the cap check. Seed the file
+        // at exactly the ceiling so the *current* len is not over-cap, then
+        // append a payload that would push it past. The rotator must look
+        // at `len + incoming`, not just `len`, otherwise a single large
+        // bash result could land the file well past the documented hard
+        // ceiling before any future write triggers rotation.
+        let path = std::env::temp_dir().join(format!(
+            "claudette-cap-post-{}.terminal.output",
+            uuid::Uuid::new_v4()
+        ));
+        let seed = vec![b'B'; TERMINAL_OUTPUT_MAX_BYTES as usize];
+        std::fs::write(&path, &seed).unwrap();
+
+        // Appending even a single byte should be enough to trigger rotation
+        // now that the helper compares `len + incoming` against the cap.
+        append_terminal_output_sync(&path, b"X").unwrap();
+
+        let after_len = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            after_len <= TERMINAL_OUTPUT_TAIL_BYTES + 256,
+            "expected rotation when post-append size would exceed cap, got {after_len} bytes"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn append_caps_oversized_single_payload_to_tail_of_bytes() {
+        // Even rarer corner: the incoming append is *itself* larger than
+        // the tail target. A naive rotate-then-append still leaves the
+        // file at `banner + tail_cap + bytes.len()` — much bigger than
+        // the ceiling. The writer must keep only the tail of the payload
+        // so a single massive ToolResult (or env-resolve burst) cannot
+        // push the file past the hard ceiling on one write.
+        let path = std::env::temp_dir().join(format!(
+            "claudette-oversized-{}.terminal.output",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"existing content that should be discarded\n").unwrap();
+
+        // Payload twice the tail target. Lead-in bytes are distinct from
+        // tail bytes so we can assert exactly which half survived.
+        let lead_size = TERMINAL_OUTPUT_TAIL_BYTES as usize;
+        let mut payload = vec![b'H'; lead_size]; // head — should be dropped
+        payload.extend(std::iter::repeat_n(b'T', lead_size)); // tail — should survive
+        append_terminal_output_sync(&path, &payload).unwrap();
+
+        let after = std::fs::read(&path).unwrap();
+        let banner = terminal_output_truncation_banner();
+        assert!(
+            after.starts_with(banner.as_bytes()),
+            "expected truncation banner at start"
+        );
+        let body = &after[banner.len()..];
+        assert_eq!(
+            body.len() as u64,
+            TERMINAL_OUTPUT_TAIL_BYTES,
+            "expected exactly the tail of the payload"
+        );
+        assert!(
+            body.iter().all(|&b| b == b'T'),
+            "expected only the tail (T) bytes to survive — head (H) bytes must be dropped"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn shared_sync_helper_serializes_concurrent_writers_through_rotation() {
+        // Multiple writers (the agent stream path and the env-provider /
+        // setup-script sinks) all funnel through this helper. The per-path
+        // mutex must serialize them with the rotation rewrite — otherwise
+        // lines written between the rotator's tail read and `set_len` would
+        // be dropped. Hammer the helper from many threads around the cap
+        // boundary and assert that every line we wrote survives.
+        let path = std::env::temp_dir().join(format!(
+            "claudette-shared-{}.terminal.output",
+            uuid::Uuid::new_v4()
+        ));
+        let seed = vec![b'A'; TERMINAL_OUTPUT_MAX_BYTES as usize - 4096];
+        std::fs::write(&path, &seed).unwrap();
+
+        const WRITERS: usize = 8;
+        const LINES_PER_WRITER: usize = 64;
+        let mut handles = Vec::new();
+        for w in 0..WRITERS {
+            let path = path.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..LINES_PER_WRITER {
+                    let line = format!("LINE w{w} i{i}\n");
+                    append_terminal_output_sync(&path, line.as_bytes()).unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let after = std::fs::read(&path).unwrap();
+        assert!(
+            (after.len() as u64) <= TERMINAL_OUTPUT_TAIL_BYTES + 8192,
+            "file should have been truncated, got {} bytes",
+            after.len()
+        );
+        let after_str = String::from_utf8_lossy(&after);
+        for w in 0..WRITERS {
+            for i in 0..LINES_PER_WRITER {
+                let needle = format!("LINE w{w} i{i}");
+                assert!(
+                    after_str.contains(&needle),
+                    "missing line {needle:?} — must not be lost during rotation"
+                );
+            }
+        }
+
+        let _ = std::fs::remove_file(path);
     }
 }

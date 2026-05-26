@@ -141,6 +141,7 @@
 
 .actionBtn {
   flex: 1;
+  width: 100%;
   background: var(--chat-input-bg);
   border: 1px solid var(--sidebar-border);
   color: var(--text-primary);

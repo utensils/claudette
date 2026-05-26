@@ -4,6 +4,7 @@ import {
   Cpu,
   Palette,
   Bell,
+  Clock,
   FileCode,
   GitBranch,
   FlaskConical,
@@ -17,37 +18,35 @@ import {
   Flag,
   Stethoscope,
   Variable,
+  HardDrive,
+  ArrowLeft,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
+import { BoundedScrollPane } from "../shared/BoundedScrollPane";
 import styles from "./Settings.module.css";
 
-export function getAppSections(
-  pluginManagementEnabled: boolean,
-  communityRegistryEnabled: boolean,
-) {
+export function getAppSections() {
   return [
     { id: "general", icon: SlidersHorizontal },
     { id: "apps", icon: AppWindow },
     { id: "models", icon: Cpu },
     { id: "appearance", icon: Palette },
     { id: "notifications", icon: Bell },
+    { id: "automation", icon: Clock },
     { id: "editor", icon: FileCode },
     { id: "environment", icon: Variable },
     { id: "diagnostics", icon: Stethoscope },
+    { id: "storage", icon: HardDrive },
     { id: "git", icon: GitBranch },
     { id: "keyboard", icon: Keyboard },
     { id: "cli", icon: Terminal },
     { id: "claude-flags", icon: Flag },
     { id: "pinned-prompts", icon: Bookmark },
     { id: "plugins", icon: Puzzle },
-    ...(communityRegistryEnabled
-      ? [{ id: "community", icon: Globe }]
-      : []),
-    ...(pluginManagementEnabled
-      ? [{ id: "claude-code-plugins", icon: Puzzle }]
-      : []),
+    { id: "community", icon: Globe },
+    { id: "claude-code-plugins", icon: Puzzle },
     { id: "help", icon: HelpCircle },
   ] as const;
 }
@@ -59,10 +58,6 @@ export function SettingsSidebar() {
   const closeSettings = useAppStore((s) => s.closeSettings);
   const repositories = useAppStore((s) => s.repositories);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
-  const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
-  const communityRegistryEnabled = useAppStore(
-    (s) => s.communityRegistryEnabled,
-  );
 
   const sectionLabel = (id: string) => {
     if (id === "general") return t("settings:nav_general");
@@ -70,9 +65,11 @@ export function SettingsSidebar() {
     if (id === "models") return t("settings:nav_models");
     if (id === "appearance") return t("settings:nav_appearance");
     if (id === "notifications") return t("settings:nav_notifications");
+    if (id === "automation") return t("settings:nav_automation");
     if (id === "editor") return t("settings:nav_editor");
     if (id === "environment") return t("settings:nav_environment");
     if (id === "diagnostics") return t("settings:nav_diagnostics");
+    if (id === "storage") return t("settings:nav_storage");
     if (id === "git") return t("settings:nav_git");
     if (id === "keyboard") return t("settings:nav_keyboard");
     if (id === "cli") return t("settings:nav_cli");
@@ -87,11 +84,16 @@ export function SettingsSidebar() {
 
   return (
     <div className={styles.sidebar}>
-      <button className={styles.backLink} onClick={closeSettings}>
-        {t("common:back_to_app")}
-      </button>
+      <div className={styles.sidebarHeader}>
+        <button className={styles.backLink} onClick={closeSettings}>
+          <ArrowLeft size={13} aria-hidden="true" />
+          <span>{t("common:back_to_app")}</span>
+        </button>
+        <h2 className={styles.sidebarTitle}>{t("settings:settings_title")}</h2>
+      </div>
+      <BoundedScrollPane className={styles.sidebarNav}>
 
-      {getAppSections(pluginManagementEnabled, communityRegistryEnabled).map((s) => (
+      {getAppSections().map((s) => (
         <button
           key={s.id}
           className={
@@ -145,6 +147,7 @@ export function SettingsSidebar() {
           </button>
         );
       })}
+      </BoundedScrollPane>
     </div>
   );
 }

@@ -25,6 +25,7 @@ function makeWorkspace(
     status_line: "",
     created_at: "2026-01-01T00:00:00Z",
     sort_order: 0,
+    input_values: null,
     remote_connection_id: null,
   };
 }
@@ -40,6 +41,7 @@ function makePersistedState(
     sidebarWidth: 260,
     rightSidebarWidth: 250,
     terminalHeight: 300,
+    composerHeight: 52,
     rightSidebarTab: "files",
     sidebarGroupBy: "repo",
     sidebarRepoFilter: "all",
@@ -72,7 +74,8 @@ function resetStore() {
     sidebarWidth: 260,
     rightSidebarWidth: 250,
     terminalHeight: 300,
-    rightSidebarTab: "files",
+    composerHeight: 52,
+    rightSidebarTabByWorkspace: {},
     sidebarGroupBy: "repo",
     sidebarRepoFilter: "all",
     sidebarShowArchived: false,
@@ -117,6 +120,7 @@ describe("view state persistence", () => {
           loaded: true,
           loadError: null,
           preview: "source",
+          editorViewState: null,
           externallyChanged: false,
         },
       },

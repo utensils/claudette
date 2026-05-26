@@ -27,6 +27,18 @@ describe("collapsedToolGroupKey", () => {
     expect(collapsedToolGroupKey([activity("a", "Agent")])).toBe("agent:a");
   });
 
+  it("prefixes MCP activities with mcp: instead of tools:", () => {
+    // The discriminator keys MCP groups separately so the collapse state
+    // persists across the live→completed transition (both paths call this
+    // helper with the same first activity).
+    expect(
+      collapsedToolGroupKey([
+        activity("a", "mcp__datadog__search_datadog_dashboards"),
+        activity("b", "mcp__datadog__list_datadog_skills"),
+      ]),
+    ).toBe("mcp:a");
+  });
+
   it("returns null for an empty group", () => {
     expect(collapsedToolGroupKey([])).toBeNull();
   });

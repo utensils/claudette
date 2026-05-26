@@ -38,7 +38,10 @@ import {
   processActivities,
   turnHasTaskActivity,
 } from "../../hooks/useTaskTracker";
-import type { TaskTrackerResult, TrackedTask } from "../../hooks/useTaskTracker";
+import type {
+  TaskTrackerResult,
+  TrackedTask,
+} from "../../hooks/useTaskTracker";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 import { TurnSummary } from "./TurnSummary";
@@ -46,9 +49,7 @@ import { ToolActivityRow } from "./ToolActivityRow";
 import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { TurnFooter } from "./TurnFooter";
 import { TurnEditSummaryCard } from "./EditChangeSummary";
-import {
-  summarizeTurnEdits,
-} from "./editActivitySummary";
+import { summarizeTurnEdits } from "./editActivitySummary";
 import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
@@ -58,6 +59,7 @@ import {
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
 import { monacoFileLinkTarget } from "./chatFileLinks";
+import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import { useWorkspaceFileIndex } from "./useWorkspaceFileIndex";
 import { detectFileReferences } from "../../utils/filePathLinks";
 import {
@@ -298,7 +300,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         return assistantPositions[safeOrdinal - 1] ?? turn.afterMessageIndex;
       };
 
-      const activitiesByPosition = new Map<number, CompletedTurn["activities"]>();
+      const activitiesByPosition = new Map<
+        number,
+        CompletedTurn["activities"]
+      >();
       for (const activity of turn.activities) {
         const position = positionForOrdinal(activity.assistantMessageOrdinal);
         const existing = activitiesByPosition.get(position);
@@ -348,7 +353,13 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     });
 
     return { groupsByPosition, finalFooterByPosition, positions };
-  }, [completedTurns, findTriggeringUserIdx, globalOffset, messages, toolDisplayMode]);
+  }, [
+    completedTurns,
+    findTriggeringUserIdx,
+    globalOffset,
+    messages,
+    toolDisplayMode,
+  ]);
 
   const completedTurnPositions = chronologicalTurnLayout.positions;
 
@@ -480,6 +491,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   // passing a bad key into the file-tab store.
   const openFileInMonaco = useCallback(
     (filePath: string) => {
+      // Agent-managed files (plans, memory) live outside the worktree —
+      // route them to a read-only Monaco tab before worktree resolution.
+      if (tryOpenAgentFileTab(workspaceId, filePath, openFileTab)) {
+        onOpenFileLink?.();
+        return true;
+      }
       const target = monacoFileLinkTarget(filePath, worktreePath);
       if (!target) return false;
       onOpenFileLink?.();
@@ -517,7 +534,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       localCompletedTurnPositions,
       checkpoints,
     );
-  }, [checkpoints, localCompletedTurnPositions, messages, rollbackCheckpointByIdx]);
+  }, [
+    checkpoints,
+    localCompletedTurnPositions,
+    messages,
+    rollbackCheckpointByIdx,
+  ]);
 
   const renderPlainTurnFooter = (position: number) => {
     const data = plainTurnFootersByPosition.get(position);
@@ -565,18 +587,38 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     const map = new Map<number, TaskTrackerResult>();
     const taskMap = new Map<string, TrackedTask>();
     const todoMap = new Map<string, TrackedTask>();
+    const planMap = new Map<string, TrackedTask>();
+    const planMeta: { explanation?: string } = {};
     const nextSyntheticId = { value: 1 };
     let anyTasksSoFar = false;
 
     for (let i = 0; i < completedTurns.length; i++) {
-      processActivities(completedTurns[i].activities, taskMap, todoMap, nextSyntheticId);
+      processActivities(
+        completedTurns[i].activities,
+        taskMap,
+        todoMap,
+        nextSyntheticId,
+        planMap,
+        planMeta,
+      );
       if (turnHasTaskActivity(completedTurns[i])) {
         anyTasksSoFar = true;
       }
       if (anyTasksSoFar) {
-        const tasks = [...taskMap.values(), ...todoMap.values()];
-        const completedCount = tasks.filter((task) => task.status === "completed").length;
-        map.set(i, { tasks, completedCount, totalCount: tasks.length });
+        const tasks = [
+          ...taskMap.values(),
+          ...todoMap.values(),
+          ...planMap.values(),
+        ];
+        const completedCount = tasks.filter(
+          (task) => task.status === "completed",
+        ).length;
+        map.set(i, {
+          tasks,
+          completedCount,
+          totalCount: tasks.length,
+          explanation: planMeta.explanation,
+        });
       }
     }
     return map;
@@ -590,97 +632,111 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       turnLayout: completedTurns.map((turn) => ({
         id: turn.id,
         afterMessageIndex: turn.afterMessageIndex,
-        postLastMessage: turn.afterMessageIndex >= globalOffset + messages.length,
+        postLastMessage:
+          turn.afterMessageIndex >= globalOffset + messages.length,
         toolCount: turn.activities.length,
       })),
     });
   }, [workspaceId, sessionId, messages, completedTurns, globalOffset]);
 
   const renderTurns = (position: number) => {
-    const groupEntries = chronologicalTurnLayout.groupsByPosition[position] ?? [];
-    const footerEntries = chronologicalTurnLayout.finalFooterByPosition[position] ?? [];
+    const groupEntries =
+      chronologicalTurnLayout.groupsByPosition[position] ?? [];
+    const footerEntries =
+      chronologicalTurnLayout.finalFooterByPosition[position] ?? [];
     if (groupEntries.length === 0 && footerEntries.length === 0) return null;
     return (
       <>
-        {groupEntries.map(({ turn, globalIdx, activities, label, kind, showFooter }) => {
-          // Skills aren't tool calls — render the flat "<skill> activated"
-          // marker, never a collapsible TurnSummary. (`showFooter` is
-          // always false for skill groups; see the layout builder.)
-          if (kind === "skill" && activities[0]) {
+        {groupEntries.map(
+          ({ turn, globalIdx, activities, label, kind, showFooter }) => {
+            // Skills aren't tool calls — render the flat "<skill> activated"
+            // marker, never a collapsible TurnSummary. (`showFooter` is
+            // always false for skill groups; see the layout builder.)
+            if (kind === "skill" && activities[0]) {
+              return (
+                <ToolActivityRow
+                  key={`${turn.id}:${position}:skill:${activities[0].toolUseId}`}
+                  activity={activities[0]}
+                  searchQuery={searchQuery}
+                  worktreePath={worktreePath}
+                  inline={toolDisplayMode === "inline"}
+                />
+              );
+            }
+            // A single turn can produce multiple display groups when
+            // chronologically-interleaved messages split its activities;
+            // each group needs its own collapse state so clicking one
+            // chevron doesn't drag every sibling group's expansion with
+            // it.
+            //
+            // The key intentionally drops `turn.id` and matches the live
+            // `GroupedToolActivityRows` key format — see
+            // `collapsedToolGroupKey` for the rationale: the same
+            // activity moves from `toolActivities[sessionId]` into
+            // `completedTurns[sessionId][N].activities` when the turn
+            // ends, but its `toolUseId` is preserved verbatim. Sharing
+            // the key across both surfaces means a user-toggled
+            // expand/collapse choice made while running survives the
+            // turn-end transition.
+            //
+            // When no override has been set yet, fall back to
+            // `turn.collapsed` so the turn-level persisted state still
+            // seeds the initial view of replayed-from-DB completed turns.
+            const groupKey =
+              collapsedToolGroupKey(activities) ??
+              // Synthetic fallback for the (impossible-in-practice)
+              // empty-activities case — keep keys session-unique without
+              // accidentally colliding with a real tool group.
+              `tools:__empty__:${turn.id}`;
+            const userOverride = collapsedToolGroups?.[groupKey];
+            const collapsed = userOverride ?? turn.collapsed;
+            // Single-group turns also flip the legacy `turn.collapsed`
+            // flag so persistence-aware code (Cmd-A "collapse all" etc.)
+            // sees the same state without needing to consult the override
+            // map. Multi-group turns only mutate the per-group override —
+            // touching `turn.collapsed` there would re-create the original
+            // bug.
+            const isSingleGroupTurn =
+              (chronologicalTurnLayout.groupsByPosition[position] ?? []).filter(
+                (g) => g.globalIdx === globalIdx,
+              ).length === 1;
+            const onToggle = () => {
+              const next = !collapsed;
+              setCollapsedToolGroup(sessionId, groupKey, next);
+              if (isSingleGroupTurn && next !== turn.collapsed) {
+                toggleCompletedTurn(sessionId, globalIdx);
+              }
+            };
             return (
-              <ToolActivityRow
-                key={`${turn.id}:${position}:skill:${activities[0].toolUseId}`}
-                activity={activities[0]}
+              <TurnSummary
+                key={`${turn.id}:${position}:${label}:${activities[0]?.toolUseId ?? "empty"}`}
+                turn={turn}
+                activities={activities}
+                label={label}
+                inline={toolDisplayMode === "inline"}
+                mcp={kind === "mcp"}
+                showFooter={showFooter}
+                collapsed={collapsed}
+                onToggle={onToggle}
+                taskProgress={
+                  showFooter ? taskProgressByTurn.get(globalIdx) : undefined
+                }
+                assistantText={
+                  showFooter ? (assistantTextByTurnId.get(turn.id) ?? "") : ""
+                }
+                onFork={
+                  showFooter && onForkTurn
+                    ? () => onForkTurn(turn.id)
+                    : undefined
+                }
+                onRollback={showFooter ? buildOnRollback(turn.id) : undefined}
                 searchQuery={searchQuery}
                 worktreePath={worktreePath}
-                inline={toolDisplayMode === "inline"}
+                onOpenEditFile={showFooter ? openFileInMonaco : undefined}
               />
             );
-          }
-          // A single turn can produce multiple display groups when
-          // chronologically-interleaved messages split its activities;
-          // each group needs its own collapse state so clicking one
-          // chevron doesn't drag every sibling group's expansion with
-          // it.
-          //
-          // The key intentionally drops `turn.id` and matches the live
-          // `GroupedToolActivityRows` key format — see
-          // `collapsedToolGroupKey` for the rationale: the same
-          // activity moves from `toolActivities[sessionId]` into
-          // `completedTurns[sessionId][N].activities` when the turn
-          // ends, but its `toolUseId` is preserved verbatim. Sharing
-          // the key across both surfaces means a user-toggled
-          // expand/collapse choice made while running survives the
-          // turn-end transition.
-          //
-          // When no override has been set yet, fall back to
-          // `turn.collapsed` so the turn-level persisted state still
-          // seeds the initial view of replayed-from-DB completed turns.
-          const groupKey =
-            collapsedToolGroupKey(activities) ??
-            // Synthetic fallback for the (impossible-in-practice)
-            // empty-activities case — keep keys session-unique without
-            // accidentally colliding with a real tool group.
-            `tools:__empty__:${turn.id}`;
-          const userOverride = collapsedToolGroups?.[groupKey];
-          const collapsed = userOverride ?? turn.collapsed;
-          // Single-group turns also flip the legacy `turn.collapsed`
-          // flag so persistence-aware code (Cmd-A "collapse all" etc.)
-          // sees the same state without needing to consult the override
-          // map. Multi-group turns only mutate the per-group override —
-          // touching `turn.collapsed` there would re-create the original
-          // bug.
-          const isSingleGroupTurn =
-            (chronologicalTurnLayout.groupsByPosition[position] ?? []).filter(
-              (g) => g.globalIdx === globalIdx,
-            ).length === 1;
-          const onToggle = () => {
-            const next = !collapsed;
-            setCollapsedToolGroup(sessionId, groupKey, next);
-            if (isSingleGroupTurn && next !== turn.collapsed) {
-              toggleCompletedTurn(sessionId, globalIdx);
-            }
-          };
-          return (
-            <TurnSummary
-              key={`${turn.id}:${position}:${label}:${activities[0]?.toolUseId ?? "empty"}`}
-              turn={turn}
-              activities={activities}
-              label={label}
-              inline={toolDisplayMode === "inline"}
-              showFooter={showFooter}
-              collapsed={collapsed}
-              onToggle={onToggle}
-              taskProgress={showFooter ? taskProgressByTurn.get(globalIdx) : undefined}
-              assistantText={showFooter ? (assistantTextByTurnId.get(turn.id) ?? "") : ""}
-              onFork={showFooter && onForkTurn ? () => onForkTurn(turn.id) : undefined}
-              onRollback={showFooter ? buildOnRollback(turn.id) : undefined}
-              searchQuery={searchQuery}
-              worktreePath={worktreePath}
-              onOpenEditFile={showFooter ? openFileInMonaco : undefined}
-            />
-          );
-        })}
+          },
+        )}
         {footerEntries.map(({ turn }) => {
           const turnActivitySummary = editSummaryByTurnId.get(turn.id) ?? null;
           return (
@@ -725,7 +781,8 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   };
 
   const pendingMessageInWindow = useMemo(
-    () => !!pendingMessageId && messages.some((msg) => msg.id === pendingMessageId),
+    () =>
+      !!pendingMessageId && messages.some((msg) => msg.id === pendingMessageId),
     [messages, pendingMessageId],
   );
 
@@ -789,14 +846,24 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             );
           }
         }
+        const isAuthFailureMessage =
+          (msg.role === "Assistant" || msg.role === "System") &&
+          isClaudeAuthError(msg.content);
+
         // Default rendering for User, Assistant, and non-sentinel System messages.
         return (
           <React.Fragment key={msg.id}>
             {renderTurns(globalOffset + idx)}
             {renderLiveToolActivity(globalOffset + idx)}
-            {msg.id === pendingMessageId ? streamingMessageNode : (
+            {msg.id === pendingMessageId ? (
+              streamingMessageNode
+            ) : (
               <div
-                className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}${
+                className={`${styles.message} ${styles[
+                  roleClassKey(msg.role, msg.content, {
+                    forceSystemBlock: isAuthFailureMessage,
+                  })
+                ]}${
                   msg.role === "Assistant" && msg.thinking && showThinkingBlocks
                     ? ` ${styles.messageLeadingThinking}`
                     : ""
@@ -811,14 +878,16 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                     className={styles.userMessageCopyButton}
                   />
                 )}
-                {msg.role === "Assistant" && msg.thinking && showThinkingBlocks && (
-                  <ThinkingBlock
-                    content={msg.thinking}
-                    isStreaming={false}
-                    inline={toolDisplayMode === "inline"}
-                    searchQuery={searchQuery}
-                  />
-                )}
+                {msg.role === "Assistant" &&
+                  msg.thinking &&
+                  showThinkingBlocks && (
+                    <ThinkingBlock
+                      content={msg.thinking}
+                      isStreaming={false}
+                      inline={toolDisplayMode === "inline"}
+                      searchQuery={searchQuery}
+                    />
+                  )}
                 <div className={styles.content}>
                   {attachmentsByMessage.has(msg.id) && (
                     <div className={styles.messageImages}>
@@ -867,7 +936,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                             <MessageAttachment
                               key={att.id}
                               attachment={att}
-                              handlers={{ onContextMenu: onAttachmentContextMenu }}
+                              handlers={{
+                                onContextMenu: onAttachmentContextMenu,
+                              }}
                             />
                           );
                         }
@@ -900,16 +971,14 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                       })}
                     </div>
                   )}
-                  {(msg.role === "Assistant" || msg.role === "System") &&
-                  isClaudeAuthError(msg.content) &&
+                  {isAuthFailureMessage &&
                   msg.id === lastAuthFailureMessageId &&
                   msg.id !== resolvedClaudeAuthFailureMessageId ? (
                     <ChatAuthFailureCallout
                       error={msg.content}
                       messageId={msg.id}
                     />
-                  ) : (msg.role === "Assistant" || msg.role === "System") &&
-                    isClaudeAuthError(msg.content) ? (
+                  ) : isAuthFailureMessage ? (
                     <div
                       className={
                         msg.id === resolvedClaudeAuthFailureMessageId
@@ -944,7 +1013,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                     // highlighted text so matches inside them get marked. The
                     // ultrathink rainbow animation is suppressed in this mode —
                     // searchability wins over the easter egg.
-                    <HighlightedPlainText text={msg.content} query={searchQuery} />
+                    <HighlightedPlainText
+                      text={msg.content}
+                      query={searchQuery}
+                    />
                   ) : (
                     renderFileLinkedPlainText(msg.content, {
                       animated: false,

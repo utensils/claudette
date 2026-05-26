@@ -379,7 +379,10 @@ impl VoiceProviderRegistry {
         )
     }
 
-    #[cfg(test)]
+    // Consumed only by the macOS/Windows-gated platform-speech tests;
+    // gate the helper the same way so it isn't dead code on Linux, where
+    // `cargo test --no-run` compiles test targets under `-Dwarnings`.
+    #[cfg(all(test, any(target_os = "macos", windows)))]
     fn with_platform_runtime(
         model_root: PathBuf,
         recorder: Arc<dyn AudioRecorder>,

@@ -7,11 +7,14 @@ interface PaneToolbarProps {
   path?: string;
   /** Show an unsaved-changes dot next to the path. */
   dirty?: boolean;
+  /** Optional metadata chip rendered between the path and the actions —
+   *  e.g. an agent-managed file's "Plan" / "Memory" badge. */
+  badge?: ReactNode;
   /** Right-aligned controls (segmented controls, icon buttons). */
   actions: ReactNode;
 }
 
-export function PaneToolbar({ path, dirty, actions }: PaneToolbarProps) {
+export function PaneToolbar({ path, dirty, badge, actions }: PaneToolbarProps) {
   return (
     <div className={styles.toolbar}>
       {path !== undefined && (
@@ -22,6 +25,7 @@ export function PaneToolbar({ path, dirty, actions }: PaneToolbarProps) {
           {path}
         </span>
       )}
+      {badge}
       <div className={styles.actions}>{actions}</div>
     </div>
   );

@@ -455,6 +455,30 @@ pub fn enriched_path() -> OsString {
     std::env::join_paths(&merged_dirs).unwrap_or(process_path)
 }
 
+/// Merge a provider-supplied `PATH` with the app's [`enriched_path`].
+///
+/// Provider entries come first: an env-provider (Nix devshell, direnv,
+/// mise) puts the toolchain the user wants on `PATH`, and those copies
+/// must shadow any system ones. Enriched-base entries not already present
+/// are appended so `/usr/bin/env`, the user's shell, and Claudette's own
+/// shims still resolve even when a provider emits a narrow `PATH`.
+///
+/// Both the agent spawn path (`apply_resolved_env_to_command`) and the
+/// integrated terminal (`spawn_pty`) route a provider `PATH` through this
+/// so the two stay in sync — see issue #915.
+pub fn merge_path_with_enriched(provider_path: &str) -> OsString {
+    let base = enriched_path();
+    let mut dirs: Vec<std::path::PathBuf> = std::env::split_paths(provider_path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .collect();
+    for dir in std::env::split_paths(&base) {
+        if !dir.as_os_str().is_empty() && !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    std::env::join_paths(&dirs).unwrap_or(base)
+}
+
 #[cfg(unix)]
 fn base_path() -> Option<OsString> {
     shell_path()
@@ -599,6 +623,50 @@ pub fn enriched_env() -> crate::env_provider::ResolvedEnv {
     if let Some(env) = shell_env() {
         for (k, v) in &env.vars {
             vars.insert(k.clone(), Some(v.clone()));
+/// Runs `$SHELL -l -c 'printf "%s\n" "$PATH"'` with a 5-second timeout.
+/// For fish shells, uses `string join :` to convert the space-separated list.
+///
+/// If the shell prints startup output (motd, banner, etc.), only the last
+/// non-empty line is used as the PATH value.
+fn login_shell_path_probe() -> Option<OsString> {
+    let shell = std::env::var("SHELL").ok()?;
+
+    // Validate: must be an absolute path.
+    if !shell.starts_with('/') {
+        return None;
+    }
+
+    // Fish treats $PATH as a list and prints space-separated entries.
+    let is_fish = shell.ends_with("/fish");
+    let cmd_arg = if is_fish {
+        r#"printf '%s\n' (string join : $PATH)"#
+    } else {
+        r#"printf '%s\n' "$PATH""#
+    };
+
+    let mut child = crate::process::std_command(&shell)
+        .args(["-l", "-c", cmd_arg])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    // Wait up to 5 seconds. If the shell init hangs (nvm, pyenv, etc.),
+    // kill the subprocess to avoid leaking a stuck process.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => break None,
         }
         sources.push(ResolvedSource {
             plugin_name: "shell-env".to_string(),
@@ -724,6 +792,61 @@ mod tests {
     }
 
     #[test]
+    fn merge_path_keeps_provider_entries_first() {
+        // A devshell-style provider PATH: its entries must come first so
+        // the devshell's tools shadow any system copies.
+        let provider = std::env::join_paths(["/nix/store/devshell/bin", "/custom/bin"]).unwrap();
+        let merged = merge_path_with_enriched(&provider.to_string_lossy());
+        let dirs: Vec<_> = std::env::split_paths(&merged).collect();
+        assert_eq!(
+            dirs.first().unwrap(),
+            &std::path::PathBuf::from("/nix/store/devshell/bin"),
+            "provider entries must lead the merged PATH; got {merged:?}"
+        );
+    }
+
+    #[test]
+    fn merge_path_appends_missing_enriched_entries() {
+        // A provider that emits a narrow PATH must not lose the enriched
+        // base — system tools (`/usr/bin/env`, the shell) still resolve.
+        let base = enriched_path();
+        let base_first = std::env::split_paths(&base).next().unwrap();
+        let merged = merge_path_with_enriched("/custom/bin");
+        let dirs: Vec<_> = std::env::split_paths(&merged).collect();
+        assert!(
+            dirs.iter().any(|d| d == &base_first),
+            "merged PATH must retain enriched base entries; merged={merged:?}, base={base:?}"
+        );
+    }
+
+    #[test]
+    fn merge_path_dedupes_and_drops_empty_entries() {
+        // The provider already contains an enriched entry plus an empty
+        // segment — neither should produce a duplicate or a `::` hole.
+        let base = enriched_path();
+        let base_first = std::env::split_paths(&base).next().unwrap();
+        // Build the provider PATH from `OsStr`s — `base_first` may not be
+        // valid UTF-8, so `to_str().unwrap()` could panic on some systems.
+        let provider = std::env::join_paths([
+            std::ffi::OsStr::new("/custom/bin"),
+            base_first.as_os_str(),
+            std::ffi::OsStr::new(""),
+        ])
+        .unwrap();
+        let merged = merge_path_with_enriched(&provider.to_string_lossy());
+        let dirs: Vec<_> = std::env::split_paths(&merged).collect();
+        assert_eq!(
+            dirs.iter().filter(|d| *d == &base_first).count(),
+            1,
+            "an entry shared by provider and base must appear once; got {merged:?}"
+        );
+        assert!(
+            !dirs.iter().any(|d| d.as_os_str().is_empty()),
+            "merged PATH must not contain empty entries; got {merged:?}"
+        );
+    }
+
+    #[test]
     fn which_in_enriched_path_finds_echo() {
         let result = which_in_enriched_path("echo");
         assert!(result.is_ok(), "should find `echo` in enriched PATH");
@@ -789,8 +912,7 @@ mod tests {
     #[test]
     fn apply_std_sets_env_on_command() {
         let env = sample_env();
-        let mut cmd = std::process::Command::new("echo");
-        cmd.no_console_window();
+        let mut cmd = crate::process::std_command("echo");
         env.apply_std(&mut cmd);
 
         let envs: Vec<_> = cmd.get_envs().collect();

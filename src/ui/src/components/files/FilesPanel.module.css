@@ -11,3 +11,12 @@
   color: var(--text-dim);
   font-size: var(--body-size);
 }
+
+.refreshError {
+  margin: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--diff-removed-text);
+  font-size: var(--caption-size);
+}

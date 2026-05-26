@@ -275,14 +275,50 @@ export function stripFileLineSuffix(path: string): string {
   return parseFilePathTarget(path).path;
 }
 
+/**
+ * Match an absolute path that sits under a Claudette-managed git worktree
+ * directory (`~/.claudette/workspaces/<project>/<workspace>/<rest>`) and
+ * capture the `<rest>` portion — the file's path relative to its worktree
+ * root. Used to recognize cross-worktree references: a plan or chat message
+ * authored in one workspace that mentions paths under a sibling workspace
+ * of the same repository.
+ */
+const CLAUDETTE_WORKTREE_RELATIVE_REGEX =
+  /\/\.claudette\/workspaces\/[^/]+\/[^/]+\/(.+)$/;
+
+/**
+ * If `path` points inside a Claudette-managed worktree directory, return
+ * the workspace-relative file path; otherwise return `null`. Because every
+ * worktree of a given repo shares the same file structure, the returned
+ * relative path is also the equivalent file in any other worktree of that
+ * repo — including the one the user is currently viewing.
+ *
+ * Captures containing `..` traversal segments are rejected so a path like
+ * `~/.claudette/workspaces/proj/ws/../other` doesn't slip past callers'
+ * parent-traversal guards as a bare `../other` workspace-relative path.
+ */
+export function extractClaudetteWorktreeRelativePath(
+  path: string,
+): string | null {
+  const normalized = path.replace(/\\/g, "/");
+  const captured = normalized.match(CLAUDETTE_WORKTREE_RELATIVE_REGEX)?.[1];
+  if (!captured) return null;
+  if (
+    captured === ".." ||
+    captured.startsWith("../") ||
+    captured.endsWith("/..") ||
+    captured.includes("/../")
+  ) {
+    return null;
+  }
+  return captured;
+}
+
 export function formatFilePathDisplayLabel(path: string): string {
   const target = parseFilePathTarget(path);
   const normalizedPath = target.path.replace(/\\/g, "/");
-  const workspaceRelativeMatch = normalizedPath.match(
-    /\/\.claudette\/workspaces\/[^/]+\/[^/]+\/(.+)$/,
-  );
   const displayPath =
-    workspaceRelativeMatch?.[1] ??
+    extractClaudetteWorktreeRelativePath(normalizedPath) ??
     normalizedPath.split("/").filter(Boolean).pop() ??
     normalizedPath;
   const rangeSuffix = formatFilePathRangeSuffix(target);

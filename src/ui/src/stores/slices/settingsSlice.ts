@@ -60,19 +60,18 @@ export interface SettingsSlice {
   claudetteTerminalEnabled: boolean;
   setClaudetteTerminalEnabled: (enabled: boolean) => void;
 
+  // Git / SCM
+  /// Surface open issues + pull requests on the repo overview screen via
+  /// the resolved SCM provider. Off by default. Persisted to app_settings
+  /// as `project_view_issues_prs_enabled`; the backend Tauri commands
+  /// short-circuit on the same key so a stale UI cannot trigger network
+  /// calls. Hydrated in App.tsx at boot.
+  projectViewIssuesPrsEnabled: boolean;
+  setProjectViewIssuesPrsEnabled: (enabled: boolean) => void;
+
   // Experimental
   usageInsightsEnabled: boolean;
   setUsageInsightsEnabled: (enabled: boolean) => void;
-  pluginManagementEnabled: boolean;
-  setPluginManagementEnabled: (enabled: boolean) => void;
-  claudeRemoteControlEnabled: boolean;
-  setClaudeRemoteControlEnabled: (enabled: boolean) => void;
-  /// Gate the Settings → Community section. When false, the section is
-  /// hidden from the sidebar and direct navigation falls back to
-  /// Experimental. The backend community_* commands ship unconditionally
-  /// — flipping this flag exposes them to the user.
-  communityRegistryEnabled: boolean;
-  setCommunityRegistryEnabled: (enabled: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
   alternativeBackendsAvailable: boolean;
@@ -112,6 +111,8 @@ export interface SettingsSlice {
   setEditorGitGutterBase: (value: "head" | "merge_base") => void;
   editorMinimapEnabled: boolean;
   setEditorMinimapEnabled: (enabled: boolean) => void;
+  revealActiveFileInTree: boolean;
+  setRevealActiveFileInTree: (enabled: boolean) => void;
   /// File-viewer chrome: soft-wrap long lines in Monaco. Mirrors the
   /// `editorMinimapEnabled` persistence pattern — hydrated from
   /// `editor_word_wrap` in app_settings on app boot, written through
@@ -195,35 +196,11 @@ export const createSettingsSlice: StateCreator<
   claudetteTerminalEnabled: true,
   setClaudetteTerminalEnabled: (enabled) =>
     set({ claudetteTerminalEnabled: enabled }),
+  projectViewIssuesPrsEnabled: false,
+  setProjectViewIssuesPrsEnabled: (enabled) =>
+    set({ projectViewIssuesPrsEnabled: enabled }),
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
-  pluginManagementEnabled: false,
-  setPluginManagementEnabled: (enabled) =>
-    set((state) => ({
-      pluginManagementEnabled: enabled,
-      settingsSection:
-        !enabled && state.settingsSection === "claude-code-plugins"
-          ? "experimental"
-          : state.settingsSection,
-      pluginSettingsIntent: enabled ? state.pluginSettingsIntent : null,
-      pluginSettingsRepoId: enabled ? state.pluginSettingsRepoId : null,
-      pluginSettingsTab: enabled ? state.pluginSettingsTab : "available",
-    })),
-  claudeRemoteControlEnabled: true,
-  setClaudeRemoteControlEnabled: (enabled) =>
-    set({ claudeRemoteControlEnabled: enabled }),
-  communityRegistryEnabled: false,
-  setCommunityRegistryEnabled: (enabled) =>
-    set((state) => ({
-      communityRegistryEnabled: enabled,
-      // Bounce out of the Community section if the user disables the
-      // flag while it's open. Same shape as the claude-code-plugins
-      // bounce above.
-      settingsSection:
-        !enabled && state.settingsSection === "community"
-          ? "experimental"
-          : state.settingsSection,
-    })),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   alternativeBackendsAvailable: false,
@@ -255,6 +232,9 @@ export const createSettingsSlice: StateCreator<
   setEditorGitGutterBase: (value) => set({ editorGitGutterBase: value }),
   editorMinimapEnabled: false,
   setEditorMinimapEnabled: (enabled) => set({ editorMinimapEnabled: enabled }),
+  revealActiveFileInTree: true,
+  setRevealActiveFileInTree: (enabled) =>
+    set({ revealActiveFileInTree: enabled }),
   editorWordWrap: true,
   setEditorWordWrap: (enabled) => set({ editorWordWrap: enabled }),
   editorLineNumbersEnabled: true,

@@ -1,6 +1,7 @@
 import type { StateCreator } from "zustand";
 import { notifyWorkspaceSelected } from "../../services/tauri";
 import type { Workspace } from "../../types";
+import { prewarmWorkspaceFiles } from "../../utils/workspaceFileCache";
 import type { AppState } from "../useAppStore";
 
 // Fire-and-forget wrapper around the typed service call. Errors are
@@ -92,6 +93,20 @@ function notifyBackendSelection(workspaceId: string | null) {
   notifyWorkspaceSelected(workspaceId).catch(() => {});
 }
 
+function prewarmWorkspaceSelection(
+  workspaceId: string | null,
+  refreshNonceByWorkspace: Record<string, number>,
+  pendingCreates: Record<string, string>,
+  pendingForks: Record<string, string>,
+) {
+  if (!workspaceId) return;
+  if (workspaceId in pendingCreates || workspaceId in pendingForks) return;
+  prewarmWorkspaceFiles(
+    workspaceId,
+    refreshNonceByWorkspace[workspaceId] ?? 0,
+  );
+}
+
 export type WorkspaceEnvironmentStatus = "idle" | "preparing" | "ready" | "error";
 
 export interface WorkspaceEnvironmentPreparation {
@@ -177,6 +192,7 @@ export interface WorkspacesSlice {
    *  it failed). */
   cancelPendingCreate: (placeholderId: string, restoreSelectionTo: string | null) => void;
   workspaceEnvironment: Record<string, WorkspaceEnvironmentPreparation>;
+  workspaceEnvironmentRetryNonce: Record<string, number>;
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (ws: Workspace) => void;
   updateWorkspace: (id: string, updates: Partial<Workspace>) => void;
@@ -195,6 +211,7 @@ export interface WorkspacesSlice {
     status: WorkspaceEnvironmentStatus,
     error?: string,
   ) => void;
+  retryWorkspaceEnvironment: (id: string) => void;
   /** Update the per-workspace progress entry from a
    *  `workspace_env_progress` Tauri event. `plugin === null` clears
    *  the active plugin (paired with the matching `finished` event).
@@ -275,7 +292,6 @@ export const createWorkspacesSlice: StateCreator<
         workspaces: [...s.workspaces, placeholder],
         selectedWorkspaceId: placeholder.id,
         selectedRepositoryId: null,
-        rightSidebarTab: "files",
         diffSelectionByWorkspace: selectionMap,
         diffSelectedFile: null,
         diffSelectedLayer: null,
@@ -393,7 +409,6 @@ export const createWorkspacesSlice: StateCreator<
         workspaces: [...s.workspaces, placeholder],
         selectedWorkspaceId: placeholder.id,
         selectedRepositoryId: null,
-        rightSidebarTab: "files",
         diffSelectionByWorkspace: selectionMap,
         diffSelectedFile: null,
         diffSelectedLayer: null,
@@ -476,6 +491,7 @@ export const createWorkspacesSlice: StateCreator<
       };
     }),
   workspaceEnvironment: {},
+  workspaceEnvironmentRetryNonce: {},
   setWorkspaces: (workspaces) => set({ workspaces }),
   // Idempotent by id: workspace creates can race between the Tauri
   // command's response (Sidebar calls `addWorkspace` after the await
@@ -568,6 +584,8 @@ export const createWorkspacesSlice: StateCreator<
       delete newScmSummary[id];
       const newScmDetails = { ...s.scmDetails };
       delete newScmDetails[id];
+      const newRightSidebarTabByWorkspace = { ...s.rightSidebarTabByWorkspace };
+      delete newRightSidebarTabByWorkspace[id];
       return {
         workspaces: s.workspaces.filter((w) => w.id !== id),
         selectedWorkspaceId:
@@ -586,12 +604,19 @@ export const createWorkspacesSlice: StateCreator<
         workspaceEnvironment: newWorkspaceEnvironment,
         scmSummary: newScmSummary,
         scmDetails: newScmDetails,
+        rightSidebarTabByWorkspace: newRightSidebarTabByWorkspace,
       };
     }),
   selectWorkspace: (id) =>
     set((s) => {
       if (id === s.selectedWorkspaceId) return s;
       notifyBackendSelection(id);
+      prewarmWorkspaceSelection(
+        id,
+        s.fileTreeRefreshNonceByWorkspace,
+        s.pendingCreates,
+        s.pendingForks,
+      );
 
       // Save the outgoing workspace's active diff selection, or clear it if
       // the user left that workspace in chat view (e.g. they clicked a chat
@@ -629,7 +654,6 @@ export const createWorkspacesSlice: StateCreator<
         // `selectWorkspace(null)` (Back-to-Dashboard) preserves any
         // selectedRepositoryId the user already navigated to.
         selectedRepositoryId: id ? null : s.selectedRepositoryId,
-        rightSidebarTab: "files",
         diffSelectionByWorkspace: selectionMap,
         diffSelectedFile: tabExists ? restored!.path : null,
         diffSelectedLayer: tabExists ? restored!.layer : null,
@@ -710,6 +734,17 @@ export const createWorkspacesSlice: StateCreator<
         },
       };
     }),
+  retryWorkspaceEnvironment: (id) =>
+    set((s) => ({
+      workspaceEnvironment: {
+        ...s.workspaceEnvironment,
+        [id]: { status: "preparing" },
+      },
+      workspaceEnvironmentRetryNonce: {
+        ...s.workspaceEnvironmentRetryNonce,
+        [id]: (s.workspaceEnvironmentRetryNonce[id] ?? 0) + 1,
+      },
+    })),
   setWorkspaceEnvironmentProgress: (id, plugin, started_at) =>
     set((s) => {
       const previous = s.workspaceEnvironment[id];

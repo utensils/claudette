@@ -8,6 +8,7 @@ import {
   isTerminalFocused,
 } from "../utils/focusTargets";
 import { adjustTerminalFontSize, adjustUiFontSize } from "../utils/fontSettings";
+import { setPlanModeAndPersist } from "../components/chat/planModePersistence";
 import { resolveHotkeyAction } from "../hotkeys/bindings";
 import {
   executeCloseTab,
@@ -15,6 +16,10 @@ import {
   executeNewWorkspace,
 } from "../hotkeys/contextActions";
 import type { HotkeyActionId } from "../hotkeys/actions";
+import {
+  computeStatusVisibleWorkspaces,
+  filterSidebarWorkspaces,
+} from "../utils/sidebarJumpTargets";
 
 export function useKeyboardShortcuts() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -36,7 +41,6 @@ export function useKeyboardShortcuts() {
       ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null
       : null,
   );
-  const setPlanMode = useAppStore((s) => s.setPlanMode);
   const planMode = useAppStore(
     (s) => (activeSessionId ? s.planMode[activeSessionId] ?? false : false),
   );
@@ -128,12 +132,16 @@ export function useKeyboardShortcuts() {
 
       const overlayOpen =
         state.settingsOpen || !!state.activeModal || state.commandPaletteOpen || state.fuzzyFinderOpen;
+      const filePaletteAction =
+        action === "global.open-command-palette-file-mode" ||
+        action === "global.open-command-palette-file-mode-alt";
       if (
         overlayOpen &&
         action !== "global.open-settings" &&
         action !== "global.toggle-command-palette" &&
         action !== "global.toggle-fuzzy-finder" &&
-        action !== "global.show-keyboard-shortcuts"
+        action !== "global.show-keyboard-shortcuts" &&
+        !(state.commandPaletteOpen && filePaletteAction)
       ) return;
       if (action === "global.toggle-plan-mode" && (!activeSessionId || isInteractive)) return;
 
@@ -142,8 +150,29 @@ export function useKeyboardShortcuts() {
       if (jumpMatch) {
         e.preventDefault();
         const currentState = useAppStore.getState();
-        const localRepos = currentState.repositories.filter((r) => !r.remote_connection_id);
         const idx = parseInt(jumpMatch[1], 10) - 1;
+
+        if (currentState.sidebarGroupBy === "status") {
+          // Status mode: Cmd+N jumps to the Nth visible workspace —
+          // computed from exactly the same ordered/filtered list the
+          // sidebar paints (see filterSidebarWorkspaces +
+          // computeStatusVisibleWorkspaces) so the badge number on screen
+          // and the jump target can never disagree.
+          const filtered = filterSidebarWorkspaces(currentState.workspaces, {
+            showArchived: currentState.sidebarShowArchived,
+            repoFilter: currentState.sidebarRepoFilter,
+          });
+          const visible = computeStatusVisibleWorkspaces(
+            filtered,
+            currentState.scmSummary,
+            currentState.statusGroupCollapsed,
+          );
+          const target = visible[idx];
+          if (target) currentState.selectWorkspace(target.id);
+          return;
+        }
+
+        const localRepos = currentState.repositories.filter((r) => !r.remote_connection_id);
         if (idx < localRepos.length) {
           const repo = localRepos[idx];
           const ws = currentState.workspaces.find(
@@ -167,7 +196,7 @@ export function useKeyboardShortcuts() {
         e.preventDefault();
         switch (id) {
           case "global.toggle-plan-mode":
-            if (activeSessionId) setPlanMode(activeSessionId, !planMode);
+            if (activeSessionId) void setPlanModeAndPersist(activeSessionId, !planMode);
             return;
           case "global.cycle-tab-prev":
             useAppStore.getState().cycleWorkspaceTab("prev");
@@ -214,6 +243,10 @@ export function useKeyboardShortcuts() {
             return;
           case "global.open-command-palette-file-mode":
           case "global.open-command-palette-file-mode-alt":
+            if (useAppStore.getState().commandPaletteOpen) {
+              toggleCommandPalette();
+              return;
+            }
             if (selectedWorkspaceId) openCommandPaletteFileMode();
             return;
           case "global.toggle-right-sidebar":
@@ -347,7 +380,6 @@ export function useKeyboardShortcuts() {
     diffSelectedFile,
     selectedWorkspaceId,
     activeSessionId,
-    setPlanMode,
     planMode,
     chatSearchOpen,
     openChatSearch,

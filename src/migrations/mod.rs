@@ -229,4 +229,39 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260513144558_turn_tool_activity_agent_transcript.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260513200000_repo_required_inputs",
+        sql: include_str!("20260513200000_repo_required_inputs.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20260517190000_agent_scheduled_tasks",
+        sql: include_str!("20260517190000_agent_scheduled_tasks.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20260519210359_repo_scm_lists_cache",
+        sql: include_str!("20260519210359_repo_scm_lists_cache.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20260519231159_deleted_workspace_metric_details",
+        sql: include_str!("20260519231159_deleted_workspace_metric_details.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20260520153000_workspace_scm_links",
+        sql: include_str!("20260520153000_workspace_scm_links.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20260521062827_checkpoint_files_dedup",
+        sql: include_str!("20260521062827_checkpoint_files_dedup.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20260521212019_agent_scheduled_task_failures",
+        sql: include_str!("20260521212019_agent_scheduled_task_failures.sql"),
+        legacy_version: None,
+    },
 ];

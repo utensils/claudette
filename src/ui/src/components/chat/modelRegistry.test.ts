@@ -4,6 +4,7 @@ import {
   PI_SUBSECTION_PRIMARY_CAP,
   buildModelRegistry,
   findModelInRegistry,
+  getHarnessForModel,
   groupPiDiscoveredModels,
   is1mContextModel,
   get1mFallback,
@@ -85,6 +86,71 @@ describe("modelRegistry", () => {
         expect(target, `${m.id} → ${fallback} not in MODELS`).toBeDefined();
         expect(target!.contextWindowTokens, `${m.id} → ${fallback} should be non-1M`).toBeLessThan(1_000_000);
       }
+    });
+  });
+
+  describe("getHarnessForModel", () => {
+    it("returns claude_code for curated Claude Code entries that have no runtimeHarness field", () => {
+      expect(getHarnessForModel(MODELS, "sonnet", "anthropic")).toBe("claude_code");
+      expect(getHarnessForModel(MODELS, "opus", "anthropic")).toBe("claude_code");
+      expect(getHarnessForModel(MODELS, "claude-opus-4-7", "anthropic")).toBe("claude_code");
+      expect(getHarnessForModel(MODELS, "haiku", "anthropic")).toBe("claude_code");
+    });
+
+    it("returns the backend's effective harness for backend-injected entries", () => {
+      const registry = buildModelRegistry(true, [
+        {
+          id: "openai-api",
+          label: "OpenAI API",
+          kind: "openai_api",
+          enabled: true,
+          capabilities: { thinking: false, effort: false, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "gpt-5.4", label: "gpt-5.4", context_window_tokens: 272_000 },
+          ],
+        },
+      ]);
+      expect(getHarnessForModel(registry, "gpt-5.4", "openai-api")).toBe("claude_code");
+    });
+
+    it("returns codex_app_server for native Codex models", () => {
+      const registry = buildModelRegistry(false, [
+        {
+          id: "codex-native",
+          label: "Codex Native",
+          kind: "codex_native",
+          enabled: true,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "gpt-5.4", label: "gpt-5.4", context_window_tokens: 272_000 },
+          ],
+        },
+      ], /* codexEnabled */ true);
+      expect(getHarnessForModel(registry, "gpt-5.4", "codex-native")).toBe("codex_app_server");
+    });
+
+    it("returns pi_sdk for Pi-routed models", () => {
+      const registry = buildModelRegistry(true, [
+        {
+          id: "pi-sdk",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: true,
+          capabilities: { thinking: false, effort: false, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "ollama/llama3", label: "llama3", context_window_tokens: 131_072 },
+          ],
+        },
+      ]);
+      expect(getHarnessForModel(registry, "ollama/llama3", "pi-sdk")).toBe("pi_sdk");
+    });
+
+    it("returns undefined for unknown models", () => {
+      expect(getHarnessForModel(MODELS, "nonexistent-model")).toBeUndefined();
+      expect(getHarnessForModel(MODELS, undefined)).toBeUndefined();
     });
   });
 

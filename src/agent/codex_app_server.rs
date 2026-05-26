@@ -1,18 +1,17 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::process::{ChildStdin, Command};
+use tokio::process::ChildStdin;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::process::CommandWindowExt as _;
-
+use super::environment::build_agent_command;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
     InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle,
@@ -21,6 +20,7 @@ use super::{
 type CodexStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
 type PendingRequests = Arc<tokio::sync::Mutex<BTreeMap<JsonRpcId, PendingCodexRequest>>>;
 type TurnOutputBuffer = Arc<tokio::sync::Mutex<CodexTurnOutput>>;
+const MAX_CODEX_STDOUT_PREAMBLE_LINES: usize = 256;
 
 struct PendingCodexRequest {
     method: String,
@@ -31,6 +31,17 @@ struct PendingCodexRequest {
 struct CodexTurnOutput {
     text: String,
     thinking: String,
+    /// Item-id of the agentMessage item currently accumulating into
+    /// `text`. When a delta with a different item_id arrives (or that
+    /// item's `item/completed` fires), we drain `text` as its own
+    /// `ContentBlock::Text` so the persisted turn keeps item boundaries
+    /// instead of gluing every assistant utterance into one wall.
+    text_item_id: Option<String>,
+    /// Same idea for reasoning items: each discrete reasoning item is
+    /// drained as its own `ContentBlock::Thinking` so the UI's
+    /// `Thinking…` collapsible streams progressively rather than
+    /// arriving as one mega-block after the turn ends.
+    thinking_item_id: Option<String>,
     command_outputs: BTreeMap<String, String>,
 }
 
@@ -38,6 +49,7 @@ struct CodexTurnOutput {
 pub struct CodexAppServerOptions {
     pub model: Option<String>,
     pub permission_level: CodexPermissionLevel,
+    pub plan_mode: bool,
     pub fast_mode: bool,
     pub reasoning_effort: Option<String>,
     pub resume_thread_id: Option<String>,
@@ -52,6 +64,7 @@ impl Default for CodexAppServerOptions {
         Self {
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             resume_thread_id: None,
@@ -67,11 +80,28 @@ pub struct CodexAppServerSession {
     pid: u32,
     stdin: Option<CodexStdin>,
     event_tx: broadcast::Sender<AgentEvent>,
+    /// Side-channel for `account/rateLimits/updated` notifications and
+    /// the initial `account/rateLimits/read` seed. Lives separately
+    /// from `event_tx` so the usage cache can subscribe without having
+    /// to filter every chat event. The Tauri host wires this to
+    /// `AppState.codex_rate_limits` in `chat::send` when it spawns the
+    /// session; non-chat callers (discovery probe, model listing) can
+    /// ignore it.
+    rate_limits_tx: broadcast::Sender<CodexRateLimitSnapshot>,
     pending: PendingRequests,
+    /// Set the first time the stderr reader recognises an unrecoverable
+    /// Codex auth-expiry message. Once set, the session is considered
+    /// terminally broken: in-flight requests are failed with a user-facing
+    /// re-auth hint, and subsequent matching stderr lines are silenced so
+    /// the log isn't flooded with the same line per second. Persists for
+    /// the lifetime of the session; the user must re-spawn (e.g. by
+    /// resending after running `codex login`) to clear it.
+    auth_expired: Arc<AtomicBool>,
     next_request_id: AtomicI64,
     working_dir: PathBuf,
     model: Option<String>,
     permission_level: CodexPermissionLevel,
+    plan_mode: bool,
     fast_mode: bool,
     reasoning_effort: Option<String>,
     resume_thread_id: Option<String>,
@@ -79,6 +109,10 @@ pub struct CodexAppServerSession {
     mcp_config: Option<String>,
     thread_id: Arc<tokio::sync::Mutex<Option<String>>>,
     active_turn_id: Arc<tokio::sync::Mutex<Option<String>>>,
+    /// True only for an explicit `/compact` turn started through
+    /// `thread/compact/start`. Auto-compaction happens inside a normal
+    /// Codex turn and must not synthesize a terminal Result.
+    manual_compaction_in_flight: Arc<AtomicBool>,
     turn_output: TurnOutputBuffer,
 }
 
@@ -100,18 +134,22 @@ impl CodexAppServerSession {
         crate::missing_cli::precheck_cwd(working_dir)?;
 
         let codex_path = super::binary::resolve_codex_path().await;
-        let mut cmd = Command::new(codex_path);
-        cmd.no_console_window();
-        cmd.args(codex_app_server_args())
-            .current_dir(working_dir)
-            .stdin(std::process::Stdio::piped())
+        let args = codex_app_server_args()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let built_command = build_agent_command(
+            codex_path.as_os_str(),
+            &args,
+            working_dir,
+            options.resolved_env.as_ref(),
+        );
+        let mut cmd = built_command.command;
+        cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         crate::env::enriched_env().apply(&mut cmd);
 
-        if let Some(env) = options.resolved_env.as_ref() {
-            env.apply(&mut cmd);
-        }
         if let Some(env) = options.workspace_env.as_ref() {
             env.apply(&mut cmd);
         }
@@ -138,15 +176,23 @@ impl CodexAppServerSession {
             .ok_or_else(|| "Failed to capture Codex app-server stderr".to_string())?;
 
         let (event_tx, _) = broadcast::channel(2048);
+        // Rate-limit updates are infrequent (a few per session). A
+        // small buffer is plenty; late subscribers can miss earlier
+        // snapshots without harm — the cache always reflects whichever
+        // value arrived last.
+        let (rate_limits_tx, _) = broadcast::channel(16);
         let session = Self {
             pid,
             stdin: Some(Arc::new(tokio::sync::Mutex::new(stdin))),
             event_tx,
+            rate_limits_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            auth_expired: Arc::new(AtomicBool::new(false)),
             next_request_id: AtomicI64::new(1),
             working_dir: working_dir.to_path_buf(),
             model: options.model,
             permission_level: options.permission_level,
+            plan_mode: options.plan_mode,
             fast_mode: options.fast_mode,
             reasoning_effort: normalize_codex_reasoning_effort(options.reasoning_effort.as_deref()),
             resume_thread_id: options.resume_thread_id,
@@ -154,6 +200,7 @@ impl CodexAppServerSession {
             mcp_config: options.mcp_config,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
+            manual_compaction_in_flight: Arc::new(AtomicBool::new(false)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
         };
 
@@ -190,21 +237,35 @@ impl CodexAppServerSession {
             return Err(err);
         }
 
+        // Note: we intentionally do NOT call `seed_rate_limits()`
+        // here. The seed would broadcast on `rate_limits_tx` before
+        // any caller has had a chance to subscribe (the
+        // `subscribe_rate_limits()` receiver is created *after*
+        // `start_with_options` returns), so the value would be
+        // dropped, paying an extra RPC for nothing. Callers that
+        // actually want a seed call `seed_rate_limits()` themselves
+        // after subscribing; callers that want a one-shot read
+        // (e.g. `prefetch_codex_rate_limits`) call
+        // [`read_rate_limits`] directly and use the return value.
         Ok(session)
     }
 
     #[doc(hidden)]
     pub fn new_for_test(pid: u32) -> Self {
         let (event_tx, _) = broadcast::channel(128);
+        let (rate_limits_tx, _) = broadcast::channel(16);
         Self {
             pid,
             stdin: None,
             event_tx,
+            rate_limits_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            auth_expired: Arc::new(AtomicBool::new(false)),
             next_request_id: AtomicI64::new(1),
             working_dir: PathBuf::from("/tmp"),
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             resume_thread_id: None,
@@ -212,6 +273,7 @@ impl CodexAppServerSession {
             mcp_config: None,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
+            manual_compaction_in_flight: Arc::new(AtomicBool::new(false)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
         }
     }
@@ -224,8 +286,43 @@ impl CodexAppServerSession {
         self.event_tx.subscribe()
     }
 
+    /// Subscribe to live Codex rate-limit snapshots. Receives every
+    /// `account/rateLimits/updated` notification the app-server
+    /// pushes, plus the one-shot seed value sent by [`Self::seed_rate_limits`]
+    /// after a successful `initialize`. The Tauri host drains this
+    /// receiver into `AppState.codex_rate_limits` so the composer
+    /// usage meter renders live quota data without polling.
+    pub fn subscribe_rate_limits(&self) -> broadcast::Receiver<CodexRateLimitSnapshot> {
+        self.rate_limits_tx.subscribe()
+    }
+
+    /// Fire `account/rateLimits/read` and publish the result onto the
+    /// `subscribe_rate_limits` channel so existing subscribers get a
+    /// snapshot before the first `account/rateLimits/updated`
+    /// notification arrives. Best-effort: a failure here just means
+    /// the meter waits for the next push, so we log and move on.
+    pub async fn seed_rate_limits(&self) {
+        match self.read_rate_limits().await {
+            Ok(response) => {
+                let _ = self.rate_limits_tx.send(response.rate_limits);
+            }
+            Err(err) => {
+                tracing::debug!(
+                    target: "claudette::agent",
+                    subsystem = "codex-app-server",
+                    pid = self.pid,
+                    error = %err,
+                    "Codex rateLimits/read seed failed; will rely on push notifications",
+                );
+            }
+        }
+    }
+
     pub fn publish_notification_event(&self, event: CodexNotificationEvent) {
-        for event in map_notification_to_agent_events(event) {
+        for event in map_notification_to_agent_events_with_compact_state(
+            event,
+            Some(&self.manual_compaction_in_flight),
+        ) {
             let _ = self.event_tx.send(event);
         }
     }
@@ -236,6 +333,15 @@ impl CodexAppServerSession {
         attachments: &[FileAttachment],
     ) -> Result<TurnHandle, String> {
         validate_codex_attachments(attachments)?;
+        // The codex-app-server subprocess is still running, but its
+        // refresh token has rotated and every websocket call will 401.
+        // Without this guard the user types a message and we sit on
+        // `turn/start` forever waiting for a notification that will
+        // never arrive (Codex's responses websocket can't open, but
+        // the JSON-RPC channel stays nominally healthy).
+        if self.is_auth_expired() {
+            return Err(CODEX_AUTH_EXPIRED_MESSAGE.to_string());
+        }
         let mut broadcast_rx = self.event_tx.subscribe();
         let thread_id = self.ensure_thread().await?;
         let response = self
@@ -246,6 +352,7 @@ impl CodexAppServerSession {
                 cwd: &self.working_dir,
                 model: self.model.as_deref(),
                 permission_level: self.permission_level,
+                plan_mode: self.plan_mode,
                 fast_mode: self.fast_mode,
                 reasoning_effort: self.reasoning_effort.as_deref(),
                 attachments,
@@ -338,6 +445,92 @@ impl CodexAppServerSession {
         Ok(())
     }
 
+    /// Trigger Codex's native context compaction via the `thread/compact/start`
+    /// JSON-RPC method. Returns a [`TurnHandle`] shaped exactly like
+    /// [`Self::send_turn`]'s so the caller (`send_chat_message`) can plug it
+    /// into the same per-turn event pump without branching.
+    ///
+    /// The compaction itself is asynchronous: Codex enqueues a non-steerable
+    /// turn and, on completion, emits an `item/completed` notification
+    /// carrying a `contextCompaction` thread item. That item is translated
+    /// into a `compact_boundary` + synthetic `Result` event pair by
+    /// [`map_codex_item_completed_to_agent_events`]. The boundary persists
+    /// the existing `COMPACTION:...` sentinel; the Result terminates the
+    /// per-turn pump so `session.agent_status` flips back to `"Idle"`.
+    ///
+    /// Codex's app-server protocol does not surface the compaction summary
+    /// text — `CompactedItem.message` is empty by design upstream, and the
+    /// `ContextCompaction` item carries only `{id}`. There is no equivalent
+    /// of Claude CLI's `SYNTHETIC_SUMMARY` here; the boundary divider is the
+    /// only user-visible artifact.
+    ///
+    /// Immediately after the RPC accepts, broadcasts a synthetic
+    /// `subtype: "status", status: "compacting"` event so the frontend
+    /// `useAgentStream` listener flips `workspace.agent_status` to
+    /// `"Compacting"` and shows the "Compacting context…" affordance the
+    /// Claude CLI emits natively. Without this, the UI sees nothing happen
+    /// for the entire wait between the RPC and the eventual
+    /// `ContextCompaction` item.
+    pub async fn start_compact(&self) -> Result<TurnHandle, String> {
+        if self.is_auth_expired() {
+            return Err(CODEX_AUTH_EXPIRED_MESSAGE.to_string());
+        }
+        // Subscribe BEFORE the RPC so neither the synthetic "compacting"
+        // status nor the eventual ContextCompaction item slip through
+        // before the per-turn pump exists.
+        let mut broadcast_rx = self.event_tx.subscribe();
+        let thread_id = self.ensure_thread().await?;
+        self.manual_compaction_in_flight
+            .store(true, Ordering::SeqCst);
+        if let Err(err) = self
+            .send_request(build_thread_compact_start_request(
+                self.next_id(),
+                &thread_id,
+            ))
+            .await
+        {
+            self.manual_compaction_in_flight
+                .store(false, Ordering::SeqCst);
+            return Err(err);
+        }
+        if self.manual_compaction_in_flight.load(Ordering::SeqCst) {
+            let _ = self.event_tx.send(codex_compacting_status_event());
+        }
+
+        let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
+        tokio::spawn(async move {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(event) => {
+                        let is_turn_end =
+                            matches!(&event, AgentEvent::Stream(StreamEvent::Result { .. }));
+                        let is_process_exit = matches!(&event, AgentEvent::ProcessExited(_));
+                        if mpsc_tx.send(event).await.is_err() {
+                            break;
+                        }
+                        if is_turn_end || is_process_exit {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "codex-app-server",
+                            dropped_events = n,
+                            "broadcast lag — codex compact pump missed events"
+                        );
+                    }
+                }
+            }
+        });
+
+        Ok(TurnHandle {
+            event_rx: mpsc_rx,
+            pid: self.pid,
+        })
+    }
+
     pub async fn read_account(
         &self,
         refresh_token: bool,
@@ -346,6 +539,18 @@ impl CodexAppServerSession {
             .send_request(build_account_read_request(self.next_id(), refresh_token))
             .await?;
         account_status_from_response(&response)
+    }
+
+    /// Issue `account/rateLimits/read` against the live Codex app-server.
+    /// Returns the current quota snapshot keyed by limit id (typically
+    /// just `"codex"`) plus the backward-compatible single-bucket view.
+    /// Notifications (`account/rateLimits/updated`) keep the snapshot
+    /// fresh after this initial seed; see [`CodexNotificationEvent::RateLimitsUpdated`].
+    pub async fn read_rate_limits(&self) -> Result<GetAccountRateLimitsResponse, String> {
+        let response = self
+            .send_request(build_account_rate_limits_read_request(self.next_id()))
+            .await?;
+        rate_limits_from_response(&response)
     }
 
     pub async fn list_models(&self) -> Result<Vec<CodexAppServerModel>, String> {
@@ -452,10 +657,16 @@ impl CodexAppServerSession {
             )
         })? {
             Ok(response) => Ok(response),
-            Err(error) => Err(format!(
-                "Codex app-server `{}` failed: {}",
-                request.method, error.error.message
-            )),
+            Err(error) => {
+                if codex_error_indicates_auth_expiry(&error.error.message) {
+                    self.auth_expired.store(true, Ordering::SeqCst);
+                    return Err(CODEX_AUTH_EXPIRED_MESSAGE.to_string());
+                }
+                Err(format!(
+                    "Codex app-server `{}` failed: {}",
+                    request.method, error.error.message
+                ))
+            }
         }
     }
 
@@ -474,9 +685,11 @@ impl CodexAppServerSession {
 
     fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
         let event_tx = self.event_tx.clone();
+        let rate_limits_tx = self.rate_limits_tx.clone();
         let pending = self.pending.clone();
         let stdin = self.stdin.clone();
         let active_turn_id = self.active_turn_id.clone();
+        let manual_compaction_in_flight = self.manual_compaction_in_flight.clone();
         let turn_output = self.turn_output.clone();
         let pid = self.pid;
         tokio::spawn(async move {
@@ -487,9 +700,11 @@ impl CodexAppServerSession {
                         route_app_server_message(
                             pid,
                             &event_tx,
+                            &rate_limits_tx,
                             &pending,
                             stdin.as_ref(),
                             Some(&active_turn_id),
+                            Some(&manual_compaction_in_flight),
                             Some(&turn_output),
                             message,
                         )
@@ -522,6 +737,8 @@ impl CodexAppServerSession {
 
     fn spawn_stderr_reader(&self, stderr: tokio::process::ChildStderr) {
         let event_tx = self.event_tx.clone();
+        let pending = self.pending.clone();
+        let auth_expired = self.auth_expired.clone();
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stderr);
@@ -532,16 +749,55 @@ impl CodexAppServerSession {
                     Ok(0) => break,
                     Ok(_) => {
                         let line = line.trim();
-                        if !line.is_empty() {
-                            tracing::warn!(
-                                target: "claudette::agent",
-                                subsystem = "codex-app-server",
-                                pid,
-                                line,
-                                "codex stderr"
-                            );
-                            let _ = event_tx.send(AgentEvent::Stderr(line.to_string()));
+                        if line.is_empty() {
+                            continue;
                         }
+                        // Codex's own login subsystem emits these phrases on
+                        // stderr when the cached refresh token has been
+                        // consumed (e.g. another `codex login` session
+                        // rotated it) and the websocket to ChatGPT 401s
+                        // before any notification flows back through stdout.
+                        // From Claudette's side this looks like a silent
+                        // hang on `turn/start`. Detect once, fail in-flight
+                        // RPCs with a user-readable hint, then mute further
+                        // matching lines so we don't WARN-flood the log at
+                        // ~5 Hz while Codex keeps retrying.
+                        let already_signalled = auth_expired.load(Ordering::SeqCst);
+                        if codex_stderr_indicates_auth_expiry(line) {
+                            if !already_signalled
+                                && auth_expired
+                                    .compare_exchange(
+                                        false,
+                                        true,
+                                        Ordering::SeqCst,
+                                        Ordering::SeqCst,
+                                    )
+                                    .is_ok()
+                            {
+                                tracing::warn!(
+                                    target: "claudette::agent",
+                                    subsystem = "codex-app-server",
+                                    pid,
+                                    line,
+                                    "Codex auth expired — failing pending requests"
+                                );
+                                fail_pending_requests(&pending, CODEX_AUTH_EXPIRED_MESSAGE).await;
+                                let _ = event_tx.send(AgentEvent::Stderr(
+                                    CODEX_AUTH_EXPIRED_MESSAGE.to_string(),
+                                ));
+                            }
+                            // Either we just signalled or a previous line
+                            // already did — silence the duplicate.
+                            continue;
+                        }
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "codex-app-server",
+                            pid,
+                            line,
+                            "codex stderr"
+                        );
+                        let _ = event_tx.send(AgentEvent::Stderr(line.to_string()));
                     }
                     Err(err) => {
                         tracing::warn!(
@@ -558,6 +814,14 @@ impl CodexAppServerSession {
         });
     }
 
+    /// True once the stderr reader has flagged the session as terminally
+    /// auth-broken. Caller can use this to skip a doomed `turn/start` RPC
+    /// or to decide whether to tear down the session and respawn after a
+    /// successful `codex login`.
+    pub fn is_auth_expired(&self) -> bool {
+        self.auth_expired.load(Ordering::SeqCst)
+    }
+
     fn spawn_exit_watcher(&self, mut child: tokio::process::Child) {
         let event_tx = self.event_tx.clone();
         let pending = self.pending.clone();
@@ -569,12 +833,15 @@ impl CodexAppServerSession {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn route_app_server_message(
     pid: u32,
     event_tx: &broadcast::Sender<AgentEvent>,
+    rate_limits_tx: &broadcast::Sender<CodexRateLimitSnapshot>,
     pending: &PendingRequests,
     stdin: Option<&CodexStdin>,
     active_turn_id: Option<&Arc<tokio::sync::Mutex<Option<String>>>>,
+    manual_compaction_in_flight: Option<&Arc<AtomicBool>>,
     turn_output: Option<&TurnOutputBuffer>,
     message: JsonRpcMessage,
 ) {
@@ -633,8 +900,24 @@ async fn route_app_server_message(
         }
         JsonRpcMessage::Notification(notification) => {
             let notification = decode_notification(notification);
+            // Rate-limit snapshots also go to a dedicated side-channel
+            // so the AppState cache writer can subscribe without
+            // walking every AgentEvent. `send` only fails when there
+            // are no subscribers, which is the expected steady state
+            // for non-chat sessions (discovery probe, model listing).
+            if let CodexNotificationEvent::RateLimitsUpdated { rate_limits } = &notification {
+                let _ = rate_limits_tx.send(rate_limits.clone());
+            }
+            // Any per-item drains triggered by this notification (item-id
+            // change inside a delta, or item/completed for an
+            // agentMessage/reasoning item) must be emitted BEFORE the
+            // delta events from `map_notification_to_agent_events_for_route`
+            // so the flushed assistant content stays chronologically
+            // ordered with the new item's first delta.
             if let Some(turn_output) = turn_output {
-                update_turn_output_buffer(turn_output, &notification).await;
+                for event in update_turn_output_buffer(turn_output, &notification).await {
+                    let _ = event_tx.send(event);
+                }
             }
             if notification_finishes_turn(&notification)
                 && let Some(active_turn_id) = active_turn_id
@@ -642,13 +925,23 @@ async fn route_app_server_message(
                 *active_turn_id.lock().await = None;
             }
             if notification_finishes_turn(&notification)
-                && let Some(turn_output) = turn_output
-                && let Some(event) = drain_turn_output_buffer(turn_output).await
+                && let Some(manual_compaction_in_flight) = manual_compaction_in_flight
             {
-                let _ = event_tx.send(event);
+                manual_compaction_in_flight.store(false, Ordering::SeqCst);
             }
-            let events =
-                map_notification_to_agent_events_for_route(notification, turn_output).await;
+            if notification_finishes_turn(&notification)
+                && let Some(turn_output) = turn_output
+            {
+                for event in drain_turn_output_buffer(turn_output).await {
+                    let _ = event_tx.send(event);
+                }
+            }
+            let events = map_notification_to_agent_events_for_route(
+                notification,
+                turn_output,
+                manual_compaction_in_flight,
+            )
+            .await;
             for event in events {
                 let _ = event_tx.send(event);
             }
@@ -690,8 +983,7 @@ async fn route_app_server_message(
                         }
                     }
                     let _ = event_tx.send(AgentEvent::Stderr(format!(
-                        "Codex app-server request `{}` is not handled yet.",
-                        method
+                        "Codex app-server request `{method}` is not handled yet."
                     )));
                 }
                 Err(err) => {
@@ -719,6 +1011,30 @@ async fn route_app_server_message(
             }
         }
     }
+}
+
+/// User-facing message shown in chat when the Codex app-server's refresh
+/// token has been rotated out from under us. The exact phrasing matches
+/// what the UI surfaces verbatim — keep it short and actionable.
+pub(crate) const CODEX_AUTH_EXPIRED_MESSAGE: &str = "Codex authentication expired. Run /login (or `codex login` in a terminal), then send the message again.";
+
+/// Recognise stderr lines emitted by Codex's `codex_login::auth::manager`
+/// and `codex_api::endpoint::responses_websocket` subsystems that indicate
+/// the cached OAuth credentials are dead and a re-login is required.
+/// Substring match because the lines are wrapped in ANSI escapes and a
+/// timestamp prefix that varies per call.
+pub(crate) fn codex_stderr_indicates_auth_expiry(line: &str) -> bool {
+    line.contains("Failed to refresh token")
+        || line.contains("Please log out and sign in again")
+        || (line.contains("401 Unauthorized")
+            && (line.contains("wss://chatgpt.com/backend-api/codex/responses")
+                || line.contains("wss://api.openai.com/v1/responses")))
+}
+
+fn codex_error_indicates_auth_expiry(message: &str) -> bool {
+    message
+        .to_ascii_lowercase()
+        .contains("codex account authentication required")
 }
 
 async fn fail_pending_requests(pending: &PendingRequests, reason: &str) {
@@ -939,6 +1255,7 @@ where
     R: AsyncBufRead + Unpin,
 {
     let mut line = String::new();
+    let mut skipped_preamble_lines = 0usize;
     loop {
         line.clear();
         let bytes = reader
@@ -952,9 +1269,44 @@ where
         if trimmed.is_empty() {
             continue;
         }
+        let Some(first_char) = trimmed.chars().next() else {
+            continue;
+        };
+        if first_char == '[' {
+            return Err(format!(
+                "Unsupported Codex app-server JSON-RPC message shape: expected object line, got {}",
+                truncate_protocol_line(trimmed)
+            ));
+        }
+        if first_char != '{' {
+            skipped_preamble_lines += 1;
+            if skipped_preamble_lines > MAX_CODEX_STDOUT_PREAMBLE_LINES {
+                return Err(format!(
+                    "Codex app-server stdout produced too many unexpected non-JSON-RPC lines; last line: {}",
+                    truncate_protocol_line(trimmed)
+                ));
+            }
+            tracing::debug!(
+                target: "claudette::agent",
+                line = %truncate_protocol_line(trimmed),
+                "skipping non-JSON Codex app-server stdout preamble"
+            );
+            continue;
+        }
         return parse_jsonrpc_line(trimmed)
             .map(Some)
             .map_err(|e| format!("Failed to parse Codex app-server JSON-RPC line: {e}"));
+    }
+}
+
+fn truncate_protocol_line(line: &str) -> String {
+    const MAX_LEN: usize = 160;
+    let mut chars = line.chars();
+    let truncated = chars.by_ref().take(MAX_LEN).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
     }
 }
 
@@ -1372,6 +1724,7 @@ pub struct CodexTurnStartRequest<'a> {
     pub cwd: &'a Path,
     pub model: Option<&'a str>,
     pub permission_level: CodexPermissionLevel,
+    pub plan_mode: bool,
     pub fast_mode: bool,
     pub reasoning_effort: Option<&'a str>,
     pub attachments: &'a [FileAttachment],
@@ -1380,6 +1733,8 @@ pub struct CodexTurnStartRequest<'a> {
 pub fn build_turn_start_request(params: CodexTurnStartRequest<'_>) -> JsonRpcRequest {
     let mapping = params.permission_level.mapping();
     let service_tier = params.fast_mode.then_some("priority");
+    let collaboration_mode =
+        codex_collaboration_mode(params.plan_mode, params.model, params.reasoning_effort);
     JsonRpcRequest {
         id: JsonRpcId::Integer(params.id),
         method: "turn/start".to_string(),
@@ -1393,8 +1748,25 @@ pub fn build_turn_start_request(params: CodexTurnStartRequest<'_>) -> JsonRpcReq
             "model": params.model,
             "serviceTier": service_tier,
             "effort": params.reasoning_effort,
+            "collaborationMode": collaboration_mode,
         })),
     }
+}
+
+fn codex_collaboration_mode(
+    plan_mode: bool,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Option<Value> {
+    let model = model?;
+    Some(json!({
+        "mode": if plan_mode { "plan" } else { "default" },
+        "settings": {
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "developer_instructions": Value::Null,
+        },
+    }))
 }
 
 pub fn normalize_codex_reasoning_effort(effort: Option<&str>) -> Option<String> {
@@ -1479,6 +1851,16 @@ pub fn build_turn_interrupt_request(id: i64, thread_id: &str, turn_id: &str) -> 
     }
 }
 
+pub fn build_thread_compact_start_request(id: i64, thread_id: &str) -> JsonRpcRequest {
+    JsonRpcRequest {
+        id: JsonRpcId::Integer(id),
+        method: "thread/compact/start".to_string(),
+        params: Some(json!({
+            "threadId": thread_id,
+        })),
+    }
+}
+
 pub fn build_account_read_request(id: i64, refresh_token: bool) -> JsonRpcRequest {
     JsonRpcRequest {
         id: JsonRpcId::Integer(id),
@@ -1522,6 +1904,93 @@ pub struct CodexAppServerModel {
 pub struct CodexAppServerModelPage {
     pub models: Vec<CodexAppServerModel>,
     pub next_cursor: Option<String>,
+}
+
+// -- v2 rate-limit snapshot -------------------------------------------------
+//
+// Mirror of Codex's `account/rateLimits/read` response (v2 protocol —
+// inspect via `codex app-server generate-json-schema --out <dir>`).
+// We strip the schema down to the fields the usage meter actually
+// renders: per-window utilization + reset time, optional credits
+// balance, plan label. `rate_limits_by_limit_id` is kept as a HashMap
+// so a future multi-meter UI (e.g. "Codex" + "openai" buckets side by
+// side) can grow without further protocol work.
+
+/// Per-window utilization snapshot. `used_percent` is on the 0-100
+/// scale Codex returns. `resets_at` is unix millis; absent means
+/// "no scheduled reset" (e.g. a credit bucket).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRateLimitWindow {
+    pub used_percent: i32,
+    #[serde(default)]
+    pub resets_at: Option<i64>,
+    /// Window length in minutes. 300 → "Session (5h)", 10080 → "Weekly",
+    /// 43200 → "Monthly". Absent for windowless credit-only buckets.
+    #[serde(default)]
+    pub window_duration_mins: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexCreditsSnapshot {
+    /// Stringified dollar balance (e.g. `"0.103"`). Codex returns this
+    /// as a string to avoid float precision loss for tiny balances.
+    #[serde(default)]
+    pub balance: Option<String>,
+    pub has_credits: bool,
+    /// `true` for plan tiers with no spend cap (e.g. enterprise).
+    pub unlimited: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRateLimitSnapshot {
+    #[serde(default)]
+    pub limit_id: Option<String>,
+    #[serde(default)]
+    pub limit_name: Option<String>,
+    #[serde(default)]
+    pub plan_type: Option<String>,
+    #[serde(default)]
+    pub primary: Option<CodexRateLimitWindow>,
+    #[serde(default)]
+    pub secondary: Option<CodexRateLimitWindow>,
+    #[serde(default)]
+    pub credits: Option<CodexCreditsSnapshot>,
+    /// Set when Codex has flagged the user as over a limit; consumers
+    /// can surface this as an "exhausted" indicator state.
+    #[serde(default)]
+    pub rate_limit_reached_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAccountRateLimitsResponse {
+    /// Backward-compatible single-bucket view that mirrors the
+    /// historical payload. Present even when `rate_limits_by_limit_id`
+    /// is populated.
+    pub rate_limits: CodexRateLimitSnapshot,
+    /// Multi-bucket view keyed by metered `limit_id` (typically
+    /// `"codex"`). `None` on older app-server builds that only emit
+    /// the single-bucket view.
+    #[serde(default)]
+    pub rate_limits_by_limit_id: Option<std::collections::HashMap<String, CodexRateLimitSnapshot>>,
+}
+
+pub fn build_account_rate_limits_read_request(id: i64) -> JsonRpcRequest {
+    JsonRpcRequest {
+        id: JsonRpcId::Integer(id),
+        method: "account/rateLimits/read".to_string(),
+        params: None,
+    }
+}
+
+pub fn rate_limits_from_response(
+    response: &JsonRpcResponse,
+) -> Result<GetAccountRateLimitsResponse, String> {
+    serde_json::from_value(response.result.clone())
+        .map_err(|e| format!("Failed to parse Codex rateLimits response: {e}"))
 }
 
 pub fn account_status_from_response(
@@ -1603,6 +2072,12 @@ pub fn model_list_from_response(
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CodexPlanStep {
+    pub step: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum CodexNotificationEvent {
     AgentMessageDelta {
         thread_id: String,
@@ -1645,6 +2120,12 @@ pub enum CodexNotificationEvent {
         turn_id: Option<String>,
         message: String,
     },
+    TurnPlanUpdated {
+        thread_id: String,
+        turn_id: String,
+        explanation: Option<String>,
+        plan: Vec<CodexPlanStep>,
+    },
     ItemStarted {
         thread_id: String,
         turn_id: String,
@@ -1660,6 +2141,16 @@ pub enum CodexNotificationEvent {
         turn_id: String,
         diff: String,
     },
+    /// Deprecated upstream — Codex now delivers compaction completion as a
+    /// `ContextCompaction` thread item via `item/completed`. Kept as a
+    /// transitional fallback so older Codex builds still produce the timeline
+    /// divider when a `thread/compact/start` lands.
+    ContextCompacted { thread_id: String, turn_id: String },
+    /// Pushed by Codex when the account's rate-limit snapshot changes
+    /// — typically after a turn lands or a window resets. The host
+    /// caches the latest snapshot so the composer's usage meter can
+    /// surface live quota data without polling.
+    RateLimitsUpdated { rate_limits: CodexRateLimitSnapshot },
     Unknown {
         method: String,
         params: Option<Value>,
@@ -1673,55 +2164,152 @@ fn notification_finishes_turn(event: &CodexNotificationEvent) -> bool {
     )
 }
 
-async fn update_turn_output_buffer(
-    buffer: &TurnOutputBuffer,
-    notification: &CodexNotificationEvent,
-) {
-    let mut buffer = buffer.lock().await;
-    match notification {
-        CodexNotificationEvent::AgentMessageDelta { delta, .. } => {
-            buffer.text.push_str(delta);
+fn notification_completes_context_compaction(event: &CodexNotificationEvent) -> bool {
+    match event {
+        CodexNotificationEvent::ItemCompleted { item, .. } => {
+            item.get("type").and_then(Value::as_str) == Some("contextCompaction")
         }
-        CodexNotificationEvent::ReasoningSummaryDelta { delta, .. }
-        | CodexNotificationEvent::ReasoningTextDelta { delta, .. } => {
-            buffer.thinking.push_str(delta);
-        }
-        _ => {}
+        CodexNotificationEvent::ContextCompacted { .. } => true,
+        _ => false,
     }
 }
 
-async fn drain_turn_output_buffer(buffer: &TurnOutputBuffer) -> Option<AgentEvent> {
-    let mut buffer = buffer.lock().await;
-    if buffer.text.trim().is_empty() && buffer.thinking.trim().is_empty() {
-        buffer.text.clear();
-        buffer.thinking.clear();
-        buffer.command_outputs.clear();
-        return None;
-    }
+fn notification_starts_context_compaction(event: &CodexNotificationEvent) -> bool {
+    matches!(
+        event,
+        CodexNotificationEvent::ItemStarted { item, .. }
+            if item.get("type").and_then(Value::as_str) == Some("contextCompaction")
+    )
+}
 
-    let mut content = Vec::new();
-    if !buffer.thinking.trim().is_empty() {
-        content.push(ContentBlock::Thinking {
-            thinking: std::mem::take(&mut buffer.thinking),
-        });
+/// Accumulate streaming text/thinking into the per-turn buffer, and
+/// return any `Assistant` events that should be flushed *before* the
+/// caller emits the delta events for this notification.
+///
+/// We flush on two boundaries:
+///   1. **Item-id change inside a delta.** A new `item_id` for the same
+///      kind means the previous item is logically complete even if its
+///      `item/completed` hasn't arrived yet.
+///   2. **`ItemCompleted` for an `agentMessage` / `reasoning` item.**
+///      The semantic end-of-item from Codex.
+///
+/// Each flush emits ONE `ContentBlock` of the matching kind, so the
+/// persisted chat row ends up with multiple `ContentBlock::Text` /
+/// `ContentBlock::Thinking` entries in chronological order — restoring
+/// item boundaries on reload (issue #865).
+async fn update_turn_output_buffer(
+    buffer: &TurnOutputBuffer,
+    notification: &CodexNotificationEvent,
+) -> Vec<AgentEvent> {
+    let mut buffer = buffer.lock().await;
+    let mut flushed = Vec::new();
+    match notification {
+        CodexNotificationEvent::AgentMessageDelta { item_id, delta, .. } => {
+            if buffer
+                .text_item_id
+                .as_deref()
+                .is_some_and(|prev| prev != item_id)
+                && let Some(event) = flush_text_buffer(&mut buffer)
+            {
+                flushed.push(event);
+            }
+            buffer.text_item_id = Some(item_id.clone());
+            buffer.text.push_str(delta);
+        }
+        CodexNotificationEvent::ReasoningSummaryDelta { item_id, delta, .. }
+        | CodexNotificationEvent::ReasoningTextDelta { item_id, delta, .. } => {
+            if buffer
+                .thinking_item_id
+                .as_deref()
+                .is_some_and(|prev| prev != item_id)
+                && let Some(event) = flush_thinking_buffer(&mut buffer)
+            {
+                flushed.push(event);
+            }
+            buffer.thinking_item_id = Some(item_id.clone());
+            buffer.thinking.push_str(delta);
+        }
+        CodexNotificationEvent::ItemCompleted { item, .. } => {
+            let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+            let item_id = string_field(item, "id");
+            match item_type {
+                "agentMessage" if buffer.text_item_id.as_deref() == Some(item_id.as_str()) => {
+                    if let Some(event) = flush_text_buffer(&mut buffer) {
+                        flushed.push(event);
+                    }
+                }
+                "reasoning" if buffer.thinking_item_id.as_deref() == Some(item_id.as_str()) => {
+                    if let Some(event) = flush_thinking_buffer(&mut buffer) {
+                        flushed.push(event);
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
     }
-    if !buffer.text.trim().is_empty() {
-        content.push(ContentBlock::Text {
-            text: std::mem::take(&mut buffer.text),
-        });
-    } else {
-        buffer.text.clear();
+    flushed
+}
+
+/// Drain whatever's left at turn end as a safety net. Per-item flushes
+/// above usually leave both buffers empty by the time TurnCompleted
+/// fires, but if Codex ever omits the trailing `item/completed` we
+/// don't want to lose the content.
+async fn drain_turn_output_buffer(buffer: &TurnOutputBuffer) -> Vec<AgentEvent> {
+    let mut buffer = buffer.lock().await;
+    let mut events = Vec::new();
+    if let Some(event) = flush_thinking_buffer(&mut buffer) {
+        events.push(event);
+    }
+    if let Some(event) = flush_text_buffer(&mut buffer) {
+        events.push(event);
     }
     buffer.command_outputs.clear();
+    events
+}
 
+/// Emit the buffered assistant text as its own `Assistant` event with a
+/// single `ContentBlock::Text`, then reset the text buffer + item_id.
+/// Returns `None` if the buffer is whitespace-only (no point persisting
+/// a blank message; we still clear the buffer so the next item starts
+/// fresh).
+fn flush_text_buffer(buffer: &mut CodexTurnOutput) -> Option<AgentEvent> {
+    if buffer.text.trim().is_empty() {
+        buffer.text.clear();
+        buffer.text_item_id = None;
+        return None;
+    }
+    let text = std::mem::take(&mut buffer.text);
+    buffer.text_item_id = None;
     Some(AgentEvent::Stream(StreamEvent::Assistant {
-        message: AssistantMessage { content },
+        message: AssistantMessage {
+            content: vec![ContentBlock::Text { text }],
+        },
+    }))
+}
+
+/// Same shape as `flush_text_buffer` but for reasoning — emits a single
+/// `ContentBlock::Thinking` so the UI's `Thinking…` collapsible gets a
+/// real per-item record instead of one giant late-arriving block.
+fn flush_thinking_buffer(buffer: &mut CodexTurnOutput) -> Option<AgentEvent> {
+    if buffer.thinking.trim().is_empty() {
+        buffer.thinking.clear();
+        buffer.thinking_item_id = None;
+        return None;
+    }
+    let thinking = std::mem::take(&mut buffer.thinking);
+    buffer.thinking_item_id = None;
+    Some(AgentEvent::Stream(StreamEvent::Assistant {
+        message: AssistantMessage {
+            content: vec![ContentBlock::Thinking { thinking }],
+        },
     }))
 }
 
 async fn map_notification_to_agent_events_for_route(
     event: CodexNotificationEvent,
     buffer: Option<&TurnOutputBuffer>,
+    manual_compaction_in_flight: Option<&Arc<AtomicBool>>,
 ) -> Vec<AgentEvent> {
     if let (CodexNotificationEvent::CommandOutputDelta { item_id, delta, .. }, Some(buffer)) =
         (&event, buffer)
@@ -1745,7 +2333,7 @@ async fn map_notification_to_agent_events_for_route(
         })];
     }
 
-    map_notification_to_agent_events(event)
+    map_notification_to_agent_events_with_compact_state(event, manual_compaction_in_flight)
 }
 
 pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificationEvent {
@@ -1792,6 +2380,26 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
             turn_id: string_field(params, "turnId"),
             usage: token_usage_from_params(params),
         },
+        ("account/rateLimits/updated", Some(params)) => {
+            // Notification body wraps the snapshot under a single
+            // `rateLimits` field — extract and parse. On a malformed
+            // payload we fall through to `Unknown` so the rest of the
+            // stream keeps working; the cache just stays stale until
+            // the next valid update.
+            let rate_limits = params
+                .get("rateLimits")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<CodexRateLimitSnapshot>(v).ok());
+            match rate_limits {
+                Some(snapshot) => CodexNotificationEvent::RateLimitsUpdated {
+                    rate_limits: snapshot,
+                },
+                None => CodexNotificationEvent::Unknown {
+                    method: "account/rateLimits/updated".to_string(),
+                    params: Some(params.clone()),
+                },
+            }
+        }
         ("turn/completed", Some(params)) => {
             let turn = params.get("turn").unwrap_or(&Value::Null);
             CodexNotificationEvent::TurnCompleted {
@@ -1817,6 +2425,37 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
                 },
             }
         }
+        ("turn/plan/updated", Some(params)) => CodexNotificationEvent::TurnPlanUpdated {
+            thread_id: string_field(params, "threadId"),
+            turn_id: string_field(params, "turnId"),
+            explanation: params
+                .get("explanation")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            plan: params
+                .get("plan")
+                .and_then(Value::as_array)
+                .map(|steps| {
+                    steps
+                        .iter()
+                        .filter_map(|step| {
+                            let label = string_field(step, "step");
+                            if label.is_empty() {
+                                return None;
+                            }
+                            let raw_status = step
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            Some(CodexPlanStep {
+                                step: label,
+                                status: normalize_codex_plan_status(raw_status),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
         ("item/started", Some(params)) => CodexNotificationEvent::ItemStarted {
             thread_id: string_field(params, "threadId"),
             turn_id: string_field(params, "turnId"),
@@ -1832,6 +2471,10 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
             turn_id: string_field(params, "turnId"),
             diff: string_field(params, "diff"),
         },
+        ("thread/compacted", Some(params)) => CodexNotificationEvent::ContextCompacted {
+            thread_id: string_field(params, "threadId"),
+            turn_id: string_field(params, "turnId"),
+        },
         (method, params) => CodexNotificationEvent::Unknown {
             method: method.to_string(),
             params: params.cloned(),
@@ -1840,6 +2483,30 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
 }
 
 pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<AgentEvent> {
+    map_notification_to_agent_events_with_context(event, false, true)
+}
+
+fn map_notification_to_agent_events_with_compact_state(
+    event: CodexNotificationEvent,
+    manual_compaction_in_flight: Option<&Arc<AtomicBool>>,
+) -> Vec<AgentEvent> {
+    let finish_compaction_turn = notification_completes_context_compaction(&event)
+        && manual_compaction_in_flight.is_some_and(|flag| flag.swap(false, Ordering::SeqCst));
+    let emit_context_compacting_status = notification_starts_context_compaction(&event)
+        && !manual_compaction_in_flight.is_some_and(|flag| flag.load(Ordering::SeqCst));
+
+    map_notification_to_agent_events_with_context(
+        event,
+        finish_compaction_turn,
+        emit_context_compacting_status,
+    )
+}
+
+fn map_notification_to_agent_events_with_context(
+    event: CodexNotificationEvent,
+    finish_compaction_turn: bool,
+    emit_context_compacting_status: bool,
+) -> Vec<AgentEvent> {
     match event {
         CodexNotificationEvent::AgentMessageDelta { delta, .. } if !delta.is_empty() => {
             vec![AgentEvent::Stream(StreamEvent::Stream {
@@ -1898,22 +2565,120 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
                 usage: None,
             })]
         }
+        CodexNotificationEvent::TurnPlanUpdated {
+            explanation, plan, ..
+        } => map_codex_plan_updated_to_agent_events(explanation, plan),
         CodexNotificationEvent::ItemStarted { item, .. } => {
-            map_codex_item_started_to_agent_events(&item)
+            map_codex_item_started_to_agent_events(&item, emit_context_compacting_status)
         }
         CodexNotificationEvent::ItemCompleted { item, .. } => {
-            map_codex_item_completed_to_agent_events(&item)
+            map_codex_item_completed_to_agent_events(&item, finish_compaction_turn)
+        }
+        // Transitional fallback: older Codex builds emit `thread/compacted`
+        // as a notification rather than a `ContextCompaction` thread item.
+        // Route it through the same manual-vs-auto decision as the item path.
+        CodexNotificationEvent::ContextCompacted { .. } => {
+            let mut events = vec![codex_context_compaction_event()];
+            if finish_compaction_turn {
+                events.push(codex_compaction_finish_event());
+            }
+            events
         }
         CodexNotificationEvent::AgentMessageDelta { .. }
         | CodexNotificationEvent::ReasoningSummaryDelta { .. }
         | CodexNotificationEvent::ReasoningTextDelta { .. }
         | CodexNotificationEvent::CommandOutputDelta { .. }
         | CodexNotificationEvent::TurnDiffUpdated { .. }
-        | CodexNotificationEvent::Unknown { .. } => Vec::new(),
+        // Rate-limit updates flow through `rate_limits_tx` (a dedicated
+        // side-channel consumed by the AppState usage cache) — they
+        // don't translate to AgentEvents in the chat stream.
+        | CodexNotificationEvent::RateLimitsUpdated { .. }
+            | CodexNotificationEvent::Unknown { .. } => Vec::new(),
     }
 }
 
-fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+fn normalize_codex_plan_status(status: &str) -> String {
+    match status {
+        "pending" | "Pending" => "pending".to_string(),
+        "completed" | "Completed" => "completed".to_string(),
+        "in_progress" | "inProgress" | "InProgress" => "in_progress".to_string(),
+        other => {
+            tracing::warn!(
+                target: "claudette::codex",
+                status = %other,
+                "unknown Codex plan step status"
+            );
+            other.to_string()
+        }
+    }
+}
+
+fn map_codex_plan_updated_to_agent_events(
+    explanation: Option<String>,
+    plan: Vec<CodexPlanStep>,
+) -> Vec<AgentEvent> {
+    let tool_use_id = format!("update_plan-{}", uuid::Uuid::new_v4());
+    let input = json!({
+        "explanation": explanation,
+        "plan": plan
+            .iter()
+            .map(|step| json!({
+                "step": step.step,
+                "status": step.status,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let index = codex_item_index(&tool_use_id);
+
+    vec![
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index,
+                content_block: Some(StartContentBlock::ToolUse {
+                    id: tool_use_id.clone(),
+                    name: "update_plan".to_string(),
+                    input: None,
+                }),
+            },
+        }),
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockDelta {
+                index,
+                delta: Delta::ToolUse {
+                    partial_json: Some(input.to_string()),
+                },
+            },
+        }),
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStop { index },
+        }),
+        AgentEvent::Stream(StreamEvent::User {
+            message: super::UserEventMessage {
+                content: super::UserMessageContent::Blocks(vec![
+                    super::UserContentBlock::ToolResult {
+                        tool_use_id,
+                        content: Value::String("Plan updated".to_string()),
+                    },
+                ]),
+            },
+            uuid: None,
+            is_replay: false,
+            is_synthetic: true,
+        }),
+    ]
+}
+
+fn map_codex_item_started_to_agent_events(
+    item: &Value,
+    emit_context_compacting_status: bool,
+) -> Vec<AgentEvent> {
+    if item.get("type").and_then(Value::as_str) == Some("contextCompaction") {
+        return if emit_context_compacting_status {
+            vec![codex_compacting_status_event()]
+        } else {
+            Vec::new()
+        };
+    }
     let Some((item_id, tool_name, input)) = codex_item_tool_use(item) else {
         return Vec::new();
     };
@@ -1925,6 +2690,7 @@ fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
             content_block: Some(StartContentBlock::ToolUse {
                 id: item_id,
                 name: tool_name,
+                input: None,
             }),
         },
     })];
@@ -1938,15 +2704,51 @@ fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
             },
         }));
     }
+    if item_type == Some("commandExecution") {
+        events.push(codex_command_execution_status_event(
+            item,
+            item.get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("running"),
+        ));
+    }
     events
 }
 
-fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+fn map_codex_item_completed_to_agent_events(
+    item: &Value,
+    finish_compaction_turn: bool,
+) -> Vec<AgentEvent> {
+    // ContextCompaction items don't map to a tool use — Codex emits them as
+    // the canonical signal that compaction landed. Translate into the existing
+    // `compact_boundary` system event shape so `send.rs` persists the
+    // `COMPACTION:...` sentinel via `build_compaction_sentinel`, and the
+    // timeline divider renders. Only append the synthetic `Result` for an
+    // explicit `/compact` turn; Codex's auto-compaction happens mid-turn and
+    // must not terminate the live event pump.
+    if item.get("type").and_then(Value::as_str) == Some("contextCompaction") {
+        let mut events = vec![codex_context_compaction_event()];
+        if finish_compaction_turn {
+            events.push(codex_compaction_finish_event());
+        }
+        return events;
+    }
+    if item.get("type").and_then(Value::as_str) == Some("plan") {
+        return map_codex_plan_item_to_agent_events(item);
+    }
     let Some((item_id, _tool_name, input)) = codex_item_tool_use(item) else {
         return Vec::new();
     };
     let index = codex_item_index(&item_id);
     let mut events = Vec::new();
+    if item.get("type").and_then(Value::as_str) == Some("commandExecution") {
+        events.push(codex_command_execution_status_event(
+            item,
+            item.get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("completed"),
+        ));
+    }
     if item.get("type").and_then(Value::as_str) == Some("fileChange") {
         events.push(AgentEvent::Stream(StreamEvent::Stream {
             event: InnerStreamEvent::ContentBlockDelta {
@@ -1976,6 +2778,158 @@ fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
         }),
     ]);
     events
+}
+
+fn map_codex_plan_item_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+    let plan_text = string_field(item, "text");
+    if plan_text.trim().is_empty() {
+        return Vec::new();
+    }
+    let item_id = string_field(item, "id");
+    let tool_use_id = if item_id.is_empty() {
+        format!("codex-plan-{}", uuid::Uuid::new_v4())
+    } else {
+        format!("codex-plan-{item_id}")
+    };
+    vec![
+        AgentEvent::Stream(StreamEvent::Assistant {
+            message: AssistantMessage {
+                content: vec![ContentBlock::Text {
+                    text: plan_text.clone(),
+                }],
+            },
+        }),
+        AgentEvent::Stream(StreamEvent::ControlRequest {
+            request_id: format!("synthetic-codex-plan-{tool_use_id}"),
+            request: ControlRequestInner::CanUseTool {
+                tool_name: "ExitPlanMode".to_string(),
+                tool_use_id,
+                input: json!({
+                    "codexSyntheticPlan": true,
+                    "codexPlanContent": plan_text,
+                    "allowedPrompts": [],
+                }),
+            },
+        }),
+    ]
+}
+
+/// Build the in-flight indicator for a Codex compaction. The frontend
+/// `useAgentStream` listener flips `workspace.agent_status` to `"Compacting"`
+/// when it sees this event, mirroring the Claude CLI's native
+/// `subtype: "status", status: "compacting"` emission.
+fn codex_compacting_status_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "status".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: Some("compacting".to_string()),
+        compact_result: None,
+        compact_metadata: None,
+        command_line: None,
+    })
+}
+
+/// Build the `compact_boundary` system event for a Codex `contextCompaction`
+/// item. Codex's item carries only an `id`, not pre/post token counts or a
+/// duration, so we synthesize a metadata stub with `trigger="codex"` and
+/// zeros. The `CompactionDivider` recognizes the `codex` trigger and renders
+/// without the misleading `0 → 0` token arrow.
+///
+/// `compact_result` stays `None` here: the established `StreamEvent::System`
+/// contract reserves that field for an end-of-compaction *status* event
+/// (Claude CLI's emission pattern). The `subtype: "compact_boundary"` event
+/// carries its payload in `compact_metadata` only.
+fn codex_context_compaction_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "compact_boundary".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: None,
+        compact_result: None,
+        compact_metadata: Some(crate::agent::types::CompactMetadata {
+            trigger: "codex".to_string(),
+            pre_tokens: 0,
+            post_tokens: 0,
+            duration_ms: 0,
+        }),
+        command_line: None,
+    })
+}
+
+/// Synthetic terminal event emitted after `codex_context_compaction_event()`
+/// so the per-turn pump that `start_compact()` set up (subscribed via
+/// `event_tx`, consumed by `send_chat_message`'s stream loop) terminates and
+/// flips `session.agent_status` back to `"Idle"`. Mirrors the
+/// `subtype: "success"` Result that Claude's CLI emits at the end of its
+/// `/compact` turn — without it, the UI would stay stuck in the Compacting
+/// state indefinitely.
+fn codex_compaction_finish_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::Result {
+        subtype: "success".to_string(),
+        result: None,
+        total_cost_usd: None,
+        duration_ms: None,
+        usage: None,
+    })
+}
+
+fn codex_command_execution_status_event(item: &Value, status: &str) -> AgentEvent {
+    let item_id = string_field(item, "id");
+    let terminal_status = match status {
+        "inProgress" | "starting" | "running" => "running",
+        "failed" => "failed",
+        "cancelled" | "canceled" => "cancelled",
+        "completed" => "completed",
+        other => other,
+    };
+    let command = item
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|command| !command.trim().is_empty());
+    let exit_code = item.get("exitCode").and_then(Value::as_i64);
+    let summary = match (terminal_status, exit_code, command) {
+        ("completed", Some(0), _) => Some("Command completed".to_string()),
+        ("completed", Some(code), _) => Some(format!("Command failed ({code})")),
+        ("failed", Some(code), _) => Some(format!("Command failed ({code})")),
+        ("failed", None, _) => Some("Command failed".to_string()),
+        (_, _, Some(command)) => Some(command.to_string()),
+        _ => None,
+    };
+
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "task_notification".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: Some(item_id.clone()),
+        tool_use_id: Some(item_id),
+        output_file: None,
+        summary,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: Some(terminal_status.to_string()),
+        compact_result: None,
+        compact_metadata: None,
+        command_line: None,
+    })
 }
 
 fn codex_item_tool_use(item: &Value) -> Option<(String, String, Value)> {
@@ -2471,6 +3425,58 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn skips_devshell_stdout_preamble_before_jsonrpc() {
+        let input =
+            b"\x1b[33m[devshell] lib/agent_sdk/dist is missing -- run `agent-sdk-build`.\x1b[0m\n\
+\n\
+\x1b[1m[[general commands]]\x1b[0m\n\
+\n\
+  fix                   - Auto-fix code (standardrb --fix)\n\
+  menu                  - prints this menu\n\
+{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n";
+        let mut reader = tokio::io::BufReader::new(&input[..]);
+
+        let message = read_jsonrpc_message(&mut reader)
+            .await
+            .expect("devshell preamble is skipped")
+            .expect("json-rpc response");
+
+        assert!(matches!(
+            message,
+            JsonRpcMessage::Response(JsonRpcResponse {
+                id: Some(JsonRpcId::Integer(1)),
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_jsonrpc_object_still_errors() {
+        let input = br#"{"jsonrpc":"2.0","id":1,"result":
+"#;
+        let mut reader = tokio::io::BufReader::new(&input[..]);
+
+        let err = read_jsonrpc_message(&mut reader)
+            .await
+            .expect_err("object-shaped protocol corruption must not be skipped");
+
+        assert!(err.contains("Failed to parse Codex app-server JSON-RPC line"));
+    }
+
+    #[tokio::test]
+    async fn unsupported_jsonrpc_batch_shape_errors() {
+        let input = br#"[{"jsonrpc":"2.0","id":1,"result":{"ok":true}}]
+"#;
+        let mut reader = tokio::io::BufReader::new(&input[..]);
+
+        let err = read_jsonrpc_message(&mut reader)
+            .await
+            .expect_err("batch-shaped protocol lines must not be skipped");
+
+        assert!(err.contains("Unsupported Codex app-server JSON-RPC message shape"));
+    }
+
     #[test]
     fn router_correlates_responses_to_tracked_requests() {
         let mut router = CodexResponseRouter::default();
@@ -2481,6 +3487,7 @@ mod tests {
             cwd: Path::new("/tmp/work"),
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             attachments: &[],
@@ -2647,6 +3654,7 @@ mod tests {
             cwd: Path::new("/tmp/work"),
             model: Some("gpt-5.1-codex"),
             permission_level: CodexPermissionLevel::Standard,
+            plan_mode: true,
             fast_mode: true,
             reasoning_effort: Some("xhigh"),
             attachments: &[],
@@ -2660,6 +3668,19 @@ mod tests {
         assert_eq!(value["params"]["model"], "gpt-5.1-codex");
         assert_eq!(value["params"]["serviceTier"], "priority");
         assert_eq!(value["params"]["effort"], "xhigh");
+        assert_eq!(value["params"]["collaborationMode"]["mode"], "plan");
+        assert_eq!(
+            value["params"]["collaborationMode"]["settings"]["model"],
+            "gpt-5.1-codex"
+        );
+        assert_eq!(
+            value["params"]["collaborationMode"]["settings"]["reasoning_effort"],
+            "xhigh"
+        );
+        assert_eq!(
+            value["params"]["collaborationMode"]["settings"]["developer_instructions"],
+            serde_json::Value::Null
+        );
         assert_eq!(value["params"]["approvalPolicy"], "on-request");
         assert_eq!(value["params"]["sandboxPolicy"]["type"], "workspaceWrite");
         assert_eq!(value["params"]["sandboxPolicy"]["networkAccess"], false);
@@ -2688,6 +3709,7 @@ mod tests {
             cwd: Path::new("/tmp/work"),
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             attachments: &attachments,
@@ -2753,8 +3775,9 @@ mod tests {
             thread_id: "thread-1",
             prompt: "ship it",
             cwd: Path::new("/tmp/work"),
-            model: None,
+            model: Some("gpt-5.1-codex"),
             permission_level: CodexPermissionLevel::Full,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             attachments: &[],
@@ -2768,6 +3791,7 @@ mod tests {
         );
         assert_eq!(value["params"]["serviceTier"], serde_json::Value::Null);
         assert_eq!(value["params"]["effort"], serde_json::Value::Null);
+        assert_eq!(value["params"]["collaborationMode"]["mode"], "default");
     }
 
     #[test]
@@ -2880,6 +3904,168 @@ mod tests {
         assert_eq!(value["method"], "turn/interrupt");
         assert_eq!(value["params"]["threadId"], "thread-1");
         assert_eq!(value["params"]["turnId"], "turn-1");
+    }
+
+    #[test]
+    fn thread_compact_start_request_carries_thread_id() {
+        let request = build_thread_compact_start_request(11, "thread-9");
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["method"], "thread/compact/start");
+        assert_eq!(value["params"]["threadId"], "thread-9");
+        assert!(value["params"].get("turnId").is_none());
+    }
+
+    #[test]
+    fn auto_context_compaction_item_completed_emits_boundary_without_finish() {
+        // Regression for issue #881: Codex delivers compaction completion as
+        // an `item/completed` with `type: "contextCompaction"`. Make sure we
+        // translate it into a `compact_boundary` system event. For automatic
+        // mid-turn compaction, issue #909 requires that we do NOT append a
+        // synthetic `Result`, because that would terminate the live turn pump.
+        let item = json!({
+            "id": "item-1",
+            "type": "contextCompaction",
+        });
+        let events = map_codex_item_completed_to_agent_events(&item, false);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                compact_metadata,
+                compact_result,
+                ..
+            }) => {
+                assert_eq!(subtype, "compact_boundary");
+                // compact_result is reserved for the end-of-compaction
+                // status event in the StreamEvent::System contract — the
+                // boundary event carries its payload in compact_metadata.
+                assert!(compact_result.is_none());
+                let meta = compact_metadata.as_ref().expect("compact_metadata set");
+                // Codex's ContextCompaction item carries only an id, so we
+                // synthesize zeros + a `codex` trigger; the CompactionDivider
+                // recognizes that and renders without the misleading 0→0
+                // token arrow.
+                assert_eq!(meta.trigger, "codex");
+                assert_eq!(meta.pre_tokens, 0);
+                assert_eq!(meta.post_tokens, 0);
+                assert_eq!(meta.duration_ms, 0);
+            }
+            other => panic!("expected compact_boundary System event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn manual_context_compaction_item_completed_emits_boundary_and_finish() {
+        // Manual `/compact` still runs as a standalone compaction turn. The
+        // synthetic Result is correct there: it lets the start_compact pump
+        // return the UI to Idle after the divider lands.
+        let item = json!({
+            "id": "item-1",
+            "type": "contextCompaction",
+        });
+        let events = map_codex_item_completed_to_agent_events(&item, true);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
+        ));
+        match &events[1] {
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) => {
+                assert_eq!(subtype, "success");
+            }
+            other => panic!("expected synthetic Result event after boundary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn codex_compacting_status_event_carries_in_flight_marker() {
+        // The frontend `useAgentStream` listener flips `workspace.agent_status`
+        // to "Compacting" when it sees this exact shape — `subtype: "status"`
+        // + `status: Some("compacting")`. Pin both so a future rename doesn't
+        // silently break the UI affordance.
+        match codex_compacting_status_event() {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected status System event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn context_compaction_item_started_emits_compacting_status() {
+        let item = json!({
+            "id": "item-1",
+            "type": "contextCompaction",
+        });
+
+        let events = map_codex_item_started_to_agent_events(&item, true);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected compacting status System event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deprecated_thread_compacted_notification_emits_auto_boundary_without_finish() {
+        // Older Codex builds emit `thread/compacted` as a top-level
+        // notification rather than embedding the boundary in a thread item.
+        // Keep the transitional decode path until we can rely on the new
+        // item shape across all supported Codex versions — and make sure
+        // Auto-compaction must not synthesize a Result, even on this fallback
+        // path, because Codex continues the original turn after compacting.
+        let notification = JsonRpcNotification {
+            method: "thread/compacted".to_string(),
+            params: Some(json!({
+                "threadId": "thread-x",
+                "turnId": "turn-y",
+            })),
+        };
+        let decoded = decode_notification(notification);
+        assert!(matches!(
+            decoded,
+            CodexNotificationEvent::ContextCompacted { .. }
+        ));
+        let events = map_notification_to_agent_events(decoded);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
+        ));
+    }
+
+    #[tokio::test]
+    async fn normal_turn_flush_stays_as_assistant_block() {
+        // Regression guard: a regular turn emits Assistant blocks (Codex
+        // never streams text during compact — see start_compact rustdoc).
+        let buffer = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let delta = CodexNotificationEvent::AgentMessageDelta {
+            thread_id: "t".to_string(),
+            turn_id: "u".to_string(),
+            item_id: "item-1".to_string(),
+            delta: "Hi there.".to_string(),
+        };
+        let _ = update_turn_output_buffer(&buffer, &delta).await;
+        let completed = CodexNotificationEvent::ItemCompleted {
+            thread_id: "t".to_string(),
+            turn_id: "u".to_string(),
+            item: json!({"id": "item-1", "type": "agentMessage"}),
+        };
+        let flushed = update_turn_output_buffer(&buffer, &completed).await;
+        assert_eq!(flushed.len(), 1);
+        assert!(matches!(
+            &flushed[0],
+            AgentEvent::Stream(StreamEvent::Assistant { .. })
+        ));
     }
 
     #[test]
@@ -3038,6 +4224,51 @@ mod tests {
                 turn_id: "u".to_string(),
                 item_id: "i".to_string(),
                 delta: "hi".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_turn_plan_updated_notification() {
+        let event = decode_notification(JsonRpcNotification {
+            method: "turn/plan/updated".to_string(),
+            params: Some(json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "explanation": "Working in phases.",
+                "plan": [
+                    {"step": "Read the issue", "status": "completed"},
+                    {"step": "Patch the bridge", "status": "inProgress"},
+                    {"step": "Validate", "status": "pending"},
+                    {"step": "Handle drift", "status": "cancelled"}
+                ]
+            })),
+        });
+
+        assert_eq!(
+            event,
+            CodexNotificationEvent::TurnPlanUpdated {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                explanation: Some("Working in phases.".to_string()),
+                plan: vec![
+                    CodexPlanStep {
+                        step: "Read the issue".to_string(),
+                        status: "completed".to_string(),
+                    },
+                    CodexPlanStep {
+                        step: "Patch the bridge".to_string(),
+                        status: "in_progress".to_string(),
+                    },
+                    CodexPlanStep {
+                        step: "Validate".to_string(),
+                        status: "pending".to_string(),
+                    },
+                    CodexPlanStep {
+                        step: "Handle drift".to_string(),
+                        status: "cancelled".to_string(),
+                    },
+                ],
             }
         );
     }
@@ -3238,7 +4469,7 @@ mod tests {
         let AgentEvent::Stream(StreamEvent::Stream {
             event:
                 InnerStreamEvent::ContentBlockStart {
-                    content_block: Some(StartContentBlock::ToolUse { id, name }),
+                    content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
                     ..
                 },
         }) = &events[0]
@@ -3247,6 +4478,70 @@ mod tests {
         };
         assert_eq!(id, "mcp-1");
         assert_eq!(name, "mcp__github__search_issues");
+    }
+
+    #[test]
+    fn maps_command_execution_started_to_running_task_notification() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ItemStarted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: json!({
+                "type": "commandExecution",
+                "id": "cmd-1",
+                "status": "inProgress",
+                "command": "rg completed src",
+                "cwd": "/repo"
+            }),
+        });
+
+        assert_eq!(events.len(), 3);
+        let AgentEvent::Stream(StreamEvent::System {
+            subtype,
+            task_id,
+            tool_use_id,
+            status,
+            summary,
+            ..
+        }) = &events[2]
+        else {
+            panic!("expected task notification");
+        };
+        assert_eq!(subtype, "task_notification");
+        assert_eq!(task_id.as_deref(), Some("cmd-1"));
+        assert_eq!(tool_use_id.as_deref(), Some("cmd-1"));
+        assert_eq!(status.as_deref(), Some("running"));
+        assert_eq!(summary.as_deref(), Some("rg completed src"));
+    }
+
+    #[test]
+    fn maps_command_execution_completed_to_completed_task_notification() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ItemCompleted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: json!({
+                "type": "commandExecution",
+                "id": "cmd-1",
+                "status": "completed",
+                "exitCode": 0,
+                "aggregatedOutput": "done\n"
+            }),
+        });
+
+        assert_eq!(events.len(), 3);
+        let AgentEvent::Stream(StreamEvent::System {
+            subtype,
+            task_id,
+            status,
+            summary,
+            ..
+        }) = &events[0]
+        else {
+            panic!("expected task notification");
+        };
+        assert_eq!(subtype, "task_notification");
+        assert_eq!(task_id.as_deref(), Some("cmd-1"));
+        assert_eq!(status.as_deref(), Some("completed"));
+        assert_eq!(summary.as_deref(), Some("Command completed"));
     }
 
     #[test]
@@ -3263,6 +4558,14 @@ mod tests {
         });
 
         assert_eq!(events.len(), 3);
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Stream(StreamEvent::System { subtype, .. })
+                    if subtype == "task_notification"
+            )),
+            "file changes must not drive the terminal task badge"
+        );
         let AgentEvent::Stream(StreamEvent::Stream {
             event:
                 InnerStreamEvent::ContentBlockDelta {
@@ -3375,6 +4678,115 @@ mod tests {
         );
     }
 
+    #[test]
+    fn maps_turn_plan_updated_to_update_plan_tool_activity() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::TurnPlanUpdated {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            explanation: Some("Working in phases.".to_string()),
+            plan: vec![
+                CodexPlanStep {
+                    step: "Read the issue".to_string(),
+                    status: "completed".to_string(),
+                },
+                CodexPlanStep {
+                    step: "Patch the bridge".to_string(),
+                    status: "in_progress".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(events.len(), 4);
+        let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockStart {
+                    content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
+                    ..
+                },
+        }) = &events[0]
+        else {
+            panic!("expected tool-use start");
+        };
+        assert!(id.starts_with("update_plan-"));
+        assert_eq!(name, "update_plan");
+
+        let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockDelta {
+                    delta: Delta::ToolUse { partial_json },
+                    ..
+                },
+        }) = &events[1]
+        else {
+            panic!("expected tool-use input");
+        };
+        let input: Value =
+            serde_json::from_str(partial_json.as_deref().expect("plan input")).unwrap();
+        assert_eq!(input["explanation"], "Working in phases.");
+        assert_eq!(input["plan"][0]["step"], "Read the issue");
+        assert_eq!(input["plan"][0]["status"], "completed");
+        assert_eq!(input["plan"][1]["status"], "in_progress");
+
+        let AgentEvent::Stream(StreamEvent::User { message, .. }) = &events[3] else {
+            panic!("expected synthetic tool result");
+        };
+        let crate::agent::UserMessageContent::Blocks(blocks) = &message.content else {
+            panic!("expected tool-result block");
+        };
+        let crate::agent::UserContentBlock::ToolResult {
+            tool_use_id,
+            content,
+        } = &blocks[0]
+        else {
+            panic!("expected tool-result block");
+        };
+        assert_eq!(tool_use_id, id);
+        assert_eq!(content, &Value::String("Plan updated".to_string()));
+    }
+
+    #[test]
+    fn maps_codex_plan_item_to_plan_approval_prompt() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ItemCompleted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: json!({
+                "type": "plan",
+                "id": "plan-1",
+                "text": "# Plan\n\n- Rename the README title.",
+            }),
+        });
+
+        assert_eq!(events.len(), 2);
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) = &events[0] else {
+            panic!("expected assistant plan message");
+        };
+        let [ContentBlock::Text { text }] = message.content.as_slice() else {
+            panic!("expected text-only assistant plan message");
+        };
+        assert_eq!(text, "# Plan\n\n- Rename the README title.");
+
+        let AgentEvent::Stream(StreamEvent::ControlRequest {
+            request_id,
+            request:
+                ControlRequestInner::CanUseTool {
+                    tool_name,
+                    tool_use_id,
+                    input,
+                },
+        }) = &events[1]
+        else {
+            panic!("expected synthetic plan approval request");
+        };
+        assert!(request_id.starts_with("synthetic-codex-plan-"));
+        assert_eq!(tool_name, "ExitPlanMode");
+        assert_eq!(tool_use_id, "codex-plan-plan-1");
+        assert_eq!(input["codexSyntheticPlan"], true);
+        assert_eq!(
+            input["codexPlanContent"],
+            "# Plan\n\n- Rename the README title."
+        );
+    }
+
     #[tokio::test]
     async fn send_turn_failure_does_not_publish_start_events() {
         let session = CodexAppServerSession::new_for_test(4321);
@@ -3405,11 +4817,14 @@ mod tests {
             },
         )])));
         let (event_tx, _) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             None,
@@ -3432,11 +4847,14 @@ mod tests {
     async fn app_server_router_emits_notification_events() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             None,
@@ -3471,13 +4889,16 @@ mod tests {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let active_turn_id = Arc::new(tokio::sync::Mutex::new(Some("turn-1".to_string())));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
             None,
             Some(&active_turn_id),
+            None,
             None,
             JsonRpcMessage::Notification(JsonRpcNotification {
                 method: "turn/completed".to_string(),
@@ -3498,15 +4919,125 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn app_server_router_synthesizes_assistant_message_on_turn_completion() {
+    async fn app_server_router_keeps_auto_compaction_inside_active_turn() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
-        let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let active_turn_id = Arc::new(tokio::sync::Mutex::new(Some("turn-1".to_string())));
+        let manual_compaction_in_flight = Arc::new(AtomicBool::new(false));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
+            None,
+            Some(&active_turn_id),
+            Some(&manual_compaction_in_flight),
+            None,
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/started".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"id": "compact-1", "type": "contextCompaction"},
+                })),
+            }),
+        )
+        .await;
+        route_app_server_message(
+            1,
+            &event_tx,
+            &rate_limits_tx,
+            &pending,
+            None,
+            Some(&active_turn_id),
+            Some(&manual_compaction_in_flight),
+            None,
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"id": "compact-1", "type": "contextCompaction"},
+                })),
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            active_turn_id.lock().await.as_deref(),
+            Some("turn-1"),
+            "auto-compaction must not clear the live turn"
+        );
+        assert!(matches!(
+            rx.recv().await.expect("compacting status"),
+            AgentEvent::Stream(StreamEvent::System { subtype, status, .. })
+                if subtype == "status" && status.as_deref() == Some("compacting")
+        ));
+        assert!(matches!(
+            rx.recv().await.expect("compact boundary"),
+            AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), rx.recv())
+                .await
+                .is_err(),
+            "auto-compaction must not synthesize a terminal Result"
+        );
+    }
+
+    #[tokio::test]
+    async fn app_server_router_finishes_manual_compaction_turn_once() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let manual_compaction_in_flight = Arc::new(AtomicBool::new(true));
+        let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &rate_limits_tx,
+            &pending,
+            None,
+            None,
+            Some(&manual_compaction_in_flight),
+            None,
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "compact-turn",
+                    "item": {"id": "compact-1", "type": "contextCompaction"},
+                })),
+            }),
+        )
+        .await;
+
+        assert!(!manual_compaction_in_flight.load(Ordering::SeqCst));
+        assert!(matches!(
+            rx.recv().await.expect("compact boundary"),
+            AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
+        ));
+        assert!(matches!(
+            rx.recv().await.expect("manual finish"),
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
+        ));
+    }
+
+    #[tokio::test]
+    async fn app_server_router_synthesizes_assistant_message_on_turn_completion() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &rate_limits_tx,
+            &pending,
+            None,
             None,
             None,
             Some(&turn_output),
@@ -3524,7 +5055,9 @@ mod tests {
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             Some(&turn_output),
@@ -3542,7 +5075,9 @@ mod tests {
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             Some(&turn_output),
@@ -3558,17 +5093,26 @@ mod tests {
 
         let _thinking_delta = rx.recv().await.expect("thinking delta");
         let _text_delta = rx.recv().await.expect("text delta");
+        // Neither item ever sent `item/completed`, so the turn-end
+        // safety drain fires: one Assistant event per kind in
+        // thinking-then-text order, each carrying a single ContentBlock.
         let AgentEvent::Stream(StreamEvent::Assistant { message }) =
-            rx.recv().await.expect("assistant event")
+            rx.recv().await.expect("thinking assistant event")
         else {
-            panic!("expected synthesized assistant event");
+            panic!("expected synthesized thinking assistant event");
         };
         assert!(matches!(
             &message.content[..],
-            [
-                ContentBlock::Thinking { thinking },
-                ContentBlock::Text { text },
-            ] if thinking == "thinking" && text == "hello"
+            [ContentBlock::Thinking { thinking }] if thinking == "thinking"
+        ));
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) =
+            rx.recv().await.expect("text assistant event")
+        else {
+            panic!("expected synthesized text assistant event");
+        };
+        assert!(matches!(
+            &message.content[..],
+            [ContentBlock::Text { text }] if text == "hello"
         ));
         assert!(matches!(
             rx.recv().await.expect("result event"),
@@ -3576,17 +5120,369 @@ mod tests {
         ));
     }
 
+    /// Regression for issue #865: two `agentMessage` items in one turn
+    /// must produce TWO separate `ContentBlock::Text` blocks, not a
+    /// single concatenated wall of prose like "shell.Perfect…".
+    #[tokio::test]
+    async fn app_server_router_separates_agent_messages_per_item_id() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let (event_tx, mut rx) = broadcast::channel(16);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
+
+        let agent_message_delta = |item_id: &str, delta: &str| {
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/agentMessage/delta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": item_id,
+                    "delta": delta,
+                })),
+            })
+        };
+
+        for message in [
+            agent_message_delta("message-1", "first sentence."),
+            // Item-id change must flush the previous item before any of
+            // the new item's deltas land.
+            agent_message_delta("message-2", "Second sentence."),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "turn/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                })),
+            }),
+        ] {
+            route_app_server_message(
+                1,
+                &event_tx,
+                &rate_limits_tx,
+                &pending,
+                None,
+                None,
+                None,
+                Some(&turn_output),
+                message,
+            )
+            .await;
+        }
+
+        // first delta event (mapped from the first AgentMessageDelta)
+        let _first_delta = rx.recv().await.expect("first text delta");
+        // item-id change flushes message-1 as its own Assistant event
+        // BEFORE the second delta event lands, so chronological order
+        // is: [delta-1, assistant(message-1), delta-2, assistant(message-2)]
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) =
+            rx.recv().await.expect("first assistant event")
+        else {
+            panic!("expected per-item assistant flush after item-id change");
+        };
+        assert!(matches!(
+            &message.content[..],
+            [ContentBlock::Text { text }] if text == "first sentence."
+        ));
+        let _second_delta = rx.recv().await.expect("second text delta");
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) =
+            rx.recv().await.expect("second assistant event")
+        else {
+            panic!("expected turn-end flush of message-2");
+        };
+        assert!(matches!(
+            &message.content[..],
+            [ContentBlock::Text { text }] if text == "Second sentence."
+        ));
+        assert!(matches!(
+            rx.recv().await.expect("result event"),
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
+        ));
+    }
+
+    /// Regression for issue #865: `item/completed` for an `agentMessage`
+    /// item flushes its buffered text as its own Assistant event,
+    /// without waiting for turn end. This is what lets multi-paragraph
+    /// Codex turns render with item boundaries even when re-loaded from
+    /// the chat_messages row.
+    #[tokio::test]
+    async fn app_server_router_flushes_agent_message_on_item_completed() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
+
+        for message in [
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/agentMessage/delta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "message-1",
+                    "delta": "complete utterance",
+                })),
+            }),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {
+                        "type": "agentMessage",
+                        "id": "message-1",
+                        "text": "complete utterance",
+                    },
+                })),
+            }),
+        ] {
+            route_app_server_message(
+                1,
+                &event_tx,
+                &rate_limits_tx,
+                &pending,
+                None,
+                None,
+                None,
+                Some(&turn_output),
+                message,
+            )
+            .await;
+        }
+
+        let _delta = rx.recv().await.expect("text delta");
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) =
+            rx.recv().await.expect("assistant flush on item/completed")
+        else {
+            panic!("expected per-item assistant flush on item/completed");
+        };
+        assert!(matches!(
+            &message.content[..],
+            [ContentBlock::Text { text }] if text == "complete utterance"
+        ));
+    }
+
+    /// Regression for issue #865: reasoning items must be flushed
+    /// progressively during the turn so the `Thinking…` UI streams in
+    /// real time rather than getting one giant late-arriving block.
+    #[tokio::test]
+    async fn app_server_router_streams_thinking_per_reasoning_item() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let (event_tx, mut rx) = broadcast::channel(16);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
+
+        let reasoning_delta = |item_id: &str, delta: &str| {
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/reasoning/textDelta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": item_id,
+                    "delta": delta,
+                    "contentIndex": 0,
+                })),
+            })
+        };
+        let reasoning_completed = |item_id: &str| {
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {
+                        "type": "reasoning",
+                        "id": item_id,
+                    },
+                })),
+            })
+        };
+
+        for message in [
+            reasoning_delta("reasoning-1", "thinking about A"),
+            reasoning_completed("reasoning-1"),
+            reasoning_delta("reasoning-2", "now thinking about B"),
+            reasoning_completed("reasoning-2"),
+        ] {
+            route_app_server_message(
+                1,
+                &event_tx,
+                &rate_limits_tx,
+                &pending,
+                None,
+                None,
+                None,
+                Some(&turn_output),
+                message,
+            )
+            .await;
+        }
+
+        let _first_delta = rx.recv().await.expect("first thinking delta");
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) =
+            rx.recv().await.expect("first thinking flush")
+        else {
+            panic!("expected per-item thinking flush after first item/completed");
+        };
+        assert!(matches!(
+            &message.content[..],
+            [ContentBlock::Thinking { thinking }] if thinking == "thinking about A"
+        ));
+        let _second_delta = rx.recv().await.expect("second thinking delta");
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) =
+            rx.recv().await.expect("second thinking flush")
+        else {
+            panic!("expected per-item thinking flush after second item/completed");
+        };
+        assert!(matches!(
+            &message.content[..],
+            [ContentBlock::Thinking { thinking }] if thinking == "now thinking about B"
+        ));
+    }
+
+    /// Regression for issue #865: when reasoning and agentMessage items
+    /// interleave (reason → answer → reason → answer), the assistant
+    /// events must be emitted in chronological order so the chat
+    /// surface renders them with the same ordering Codex produced.
+    #[tokio::test]
+    async fn app_server_router_preserves_interleaved_reasoning_and_message_order() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let (event_tx, mut rx) = broadcast::channel(32);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
+
+        let messages = [
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/reasoning/textDelta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "reasoning-1",
+                    "delta": "reason one",
+                    "contentIndex": 0,
+                })),
+            }),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"type": "reasoning", "id": "reasoning-1"},
+                })),
+            }),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/agentMessage/delta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "message-1",
+                    "delta": "answer one",
+                })),
+            }),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"type": "agentMessage", "id": "message-1"},
+                })),
+            }),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/reasoning/textDelta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "reasoning-2",
+                    "delta": "reason two",
+                    "contentIndex": 0,
+                })),
+            }),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"type": "reasoning", "id": "reasoning-2"},
+                })),
+            }),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/agentMessage/delta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "message-2",
+                    "delta": "answer two",
+                })),
+            }),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"type": "agentMessage", "id": "message-2"},
+                })),
+            }),
+        ];
+
+        for message in messages {
+            route_app_server_message(
+                1,
+                &event_tx,
+                &rate_limits_tx,
+                &pending,
+                None,
+                None,
+                None,
+                Some(&turn_output),
+                message,
+            )
+            .await;
+        }
+
+        // Drain Assistant events only — ignore the per-delta stream
+        // events (which test their own contract elsewhere).
+        let mut assistants = Vec::new();
+        while assistants.len() < 4 {
+            match rx.recv().await.expect("assistant event") {
+                AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                    assistants.push(message);
+                }
+                _ => continue,
+            }
+        }
+
+        let payloads: Vec<(&'static str, String)> = assistants
+            .iter()
+            .map(|message| match &message.content[..] {
+                [ContentBlock::Thinking { thinking }] => ("thinking", thinking.clone()),
+                [ContentBlock::Text { text }] => ("text", text.clone()),
+                other => panic!("unexpected assistant content: {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(
+            payloads,
+            vec![
+                ("thinking", "reason one".to_string()),
+                ("text", "answer one".to_string()),
+                ("thinking", "reason two".to_string()),
+                ("text", "answer two".to_string()),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn app_server_router_emits_cumulative_command_output_deltas() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         for delta in ["hello ", "world"] {
             route_app_server_message(
                 1,
                 &event_tx,
+                &rate_limits_tx,
                 &pending,
+                None,
                 None,
                 None,
                 Some(&turn_output),
@@ -3613,11 +5509,14 @@ mod tests {
     async fn app_server_router_surfaces_unknown_server_request() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             None,
@@ -3639,11 +5538,14 @@ mod tests {
     async fn app_server_router_routes_command_approval_requests_to_control_prompt() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             None,
@@ -3701,5 +5603,82 @@ mod tests {
         assert_eq!(error.id, Some(JsonRpcId::Integer(99)));
         assert_eq!(error.error.message, "gone");
         assert!(pending.lock().await.is_empty());
+    }
+
+    #[test]
+    fn detects_codex_refresh_token_failure_line() {
+        let line = "\u{1b}[2m2026-05-19T18:52:20Z\u{1b}[0m \u{1b}[31mERROR\u{1b}[0m \
+                    \u{1b}[2mcodex_login::auth::manager\u{1b}[0m: Failed to refresh token: \
+                    Your access token could not be refreshed because your refresh token \
+                    was already used. Please log out and sign in again.";
+        assert!(codex_stderr_indicates_auth_expiry(line));
+    }
+
+    #[test]
+    fn detects_responses_websocket_401() {
+        let line = "ERROR codex_api::endpoint::responses_websocket: failed to connect to \
+                    websocket: HTTP error: 401 Unauthorized, url: \
+                    wss://chatgpt.com/backend-api/codex/responses";
+        assert!(codex_stderr_indicates_auth_expiry(line));
+    }
+
+    #[test]
+    fn detects_openai_responses_websocket_401() {
+        let line = "\u{1b}[2m2026-05-22T02:12:39.001347Z\u{1b}[0m \
+                    \u{1b}[31mERROR\u{1b}[0m \
+                    \u{1b}[2mcodex_api::endpoint::responses_websocket\u{1b}[0m: \
+                    failed to connect to websocket: HTTP error: 401 Unauthorized, \
+                    url: wss://api.openai.com/v1/responses";
+        assert!(codex_stderr_indicates_auth_expiry(line));
+    }
+
+    #[test]
+    fn detects_rate_limit_read_auth_required_error() {
+        assert!(codex_error_indicates_auth_expiry(
+            "codex account authentication required to read rate limits"
+        ));
+    }
+
+    #[test]
+    fn ignores_unrelated_rate_limit_errors() {
+        assert!(!codex_error_indicates_auth_expiry(
+            "account/rateLimits/read failed because the network is unavailable"
+        ));
+    }
+
+    #[test]
+    fn ignores_unrelated_401_lines() {
+        // 401 against a different host (e.g. an MCP server) must not be
+        // classified as Codex auth-expiry — it would tear down healthy
+        // sessions over an unrelated upstream failure.
+        let line = "HTTP error: 401 Unauthorized, url: https://example.com/api";
+        assert!(!codex_stderr_indicates_auth_expiry(line));
+    }
+
+    #[test]
+    fn ignores_routine_stderr_lines() {
+        for line in [
+            "INFO codex starting up",
+            "tool exec started",
+            "thread/started: thread-1",
+        ] {
+            assert!(
+                !codex_stderr_indicates_auth_expiry(line),
+                "false positive on routine line: {line}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn send_turn_short_circuits_when_auth_expired() {
+        let session = CodexAppServerSession::new_for_test(7777);
+        session.auth_expired.store(true, Ordering::SeqCst);
+        match session.send_turn("hello", &[]).await {
+            Ok(_) => panic!("auth-expired must fail send_turn"),
+            Err(err) => assert!(
+                err.contains("Codex authentication expired"),
+                "expected user-facing re-auth message, got: {err}"
+            ),
+        }
     }
 }

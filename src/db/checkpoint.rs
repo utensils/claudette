@@ -5,13 +5,38 @@
 //! are idiomatic Rust; the public method paths resolve identically to a
 //! single-block layout.
 
-use rusqlite::{OptionalExtension, params};
+use std::fmt;
+
+use rusqlite::{OptionalExtension, params, params_from_iter, types::Type};
+use sha2::{Digest, Sha256};
 
 use crate::model::{
     ChatMessage, CheckpointFile, CompletedTurnData, ConversationCheckpoint, TurnToolActivity,
 };
 
 use super::Database;
+
+#[derive(Debug)]
+struct MissingCheckpointBlob {
+    sha: String,
+}
+
+impl fmt::Display for MissingCheckpointBlob {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "checkpoint file references missing blob {}", self.sha)
+    }
+}
+
+impl std::error::Error for MissingCheckpointBlob {}
+
+/// Hex sha256 digest of `bytes`. The blob store keys on this string — it's
+/// hex-not-binary because SQLite's TEXT primary key behaves more predictably
+/// across collations and dumps than a BLOB primary key would.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
 
 impl Database {
     // --- Conversation Checkpoints ---
@@ -86,18 +111,25 @@ impl Database {
         chat_session_id: &str,
         turn_index: i32,
     ) -> Result<usize, rusqlite::Error> {
+        let file_rows =
+            self.count_checkpoint_file_rows_for_session_after(chat_session_id, turn_index)?;
         let deleted = self.conn.execute(
             "DELETE FROM conversation_checkpoints WHERE chat_session_id = ?1 AND turn_index > ?2",
             params![chat_session_id, turn_index],
         )?;
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(deleted)
     }
 
     pub fn delete_checkpoint(&self, checkpoint_id: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let file_rows = self.count_checkpoint_file_rows(checkpoint_id)?;
+        let deleted = self.conn.execute(
             "DELETE FROM conversation_checkpoints WHERE id = ?1",
             params![checkpoint_id],
         )?;
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(())
     }
 
@@ -133,10 +165,14 @@ impl Database {
         workspace_id: &str,
         turn_index: i32,
     ) -> Result<usize, rusqlite::Error> {
+        let file_rows =
+            self.count_checkpoint_file_rows_for_workspace_after(workspace_id, turn_index)?;
         let deleted = self.conn.execute(
             "DELETE FROM conversation_checkpoints WHERE workspace_id = ?1 AND turn_index > ?2",
             params![workspace_id, turn_index],
         )?;
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(deleted)
     }
 
@@ -201,42 +237,310 @@ impl Database {
 
     // --- Checkpoint Files ---
 
+    /// Insert a batch of snapshot rows. Each row's bytes are deduplicated
+    /// into `checkpoint_blobs` keyed by sha256; the row itself stores only
+    /// the hash reference. Callers may pass either pre-hashed rows
+    /// (`blob_sha256: Some(..)`, `content: Some(bytes)`) — the typical
+    /// snapshot path — or legacy-style rows with only `content`, in which
+    /// case the hash is computed here.
+    ///
+    /// New callers should prefer [`Self::insert_checkpoint_files_and_prune`]
+    /// which additionally enforces the per-workspace retention cap and runs
+    /// orphan blob GC in the same transaction. This bare variant is kept for
+    /// the fork code path, which copies references rather than fresh bytes.
     pub fn insert_checkpoint_files(&self, files: &[CheckpointFile]) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                "INSERT INTO checkpoint_files (id, checkpoint_id, file_path, content, file_mode)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-            )?;
-            for f in files {
-                stmt.execute(params![
-                    f.id,
-                    f.checkpoint_id,
-                    f.file_path,
-                    f.content,
-                    f.file_mode,
-                ])?;
-            }
-        }
+        Self::insert_checkpoint_files_tx(&tx, files)?;
         tx.commit()?;
         Ok(())
     }
 
+    /// Insert snapshot rows, prune `checkpoint_files` for any checkpoint
+    /// beyond `retention_count` most-recent for the workspace, and orphan-GC
+    /// `checkpoint_blobs` — all in a single transaction.
+    ///
+    /// Pruning targets `checkpoint_files` rows only; the
+    /// `conversation_checkpoints` and `turn_tool_activities` rows for older
+    /// checkpoints survive so chat history stays intact. `has_file_state` is
+    /// a derived `EXISTS(...)` column over `checkpoint_files`, so it
+    /// auto-flips to `false` for pruned checkpoints and the restore path's
+    /// existing guard (`src-tauri/src/commands/chat/checkpoint.rs`)
+    /// short-circuits as a safe no-op.
+    pub fn insert_checkpoint_files_and_prune(
+        &self,
+        workspace_id: &str,
+        files: &[CheckpointFile],
+        retention_count: usize,
+    ) -> Result<(), rusqlite::Error> {
+        let keep = retention_count.max(1);
+        let tx = self.conn.unchecked_transaction()?;
+        Self::insert_checkpoint_files_tx(&tx, files)?;
+        let pruned = Self::prune_checkpoint_files_tx(&tx, workspace_id, keep)?;
+        let gc_count = if pruned > 0 {
+            Self::gc_orphan_blobs_tx(&tx)?
+        } else {
+            0
+        };
+        tx.commit()?;
+        // Drain freelist pages the prune + orphan GC just freed. The
+        // `_after_delete` helper short-circuits when nothing was deleted,
+        // so this is a no-op on the steady-state path where every batch
+        // sits comfortably inside the retention window.
+        self.best_effort_incremental_vacuum_after_delete(pruned + gc_count);
+        Ok(())
+    }
+
+    fn insert_checkpoint_files_tx(
+        tx: &rusqlite::Transaction<'_>,
+        files: &[CheckpointFile],
+    ) -> Result<(), rusqlite::Error> {
+        let mut upsert_blob = tx.prepare(
+            "INSERT INTO checkpoint_blobs (sha256, bytes, byte_size, compression)
+             VALUES (?1, ?2, ?3, 'none')
+             ON CONFLICT(sha256) DO NOTHING",
+        )?;
+        let mut insert_file = tx.prepare(
+            "INSERT INTO checkpoint_files (id, checkpoint_id, file_path, blob_sha256, file_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for f in files {
+            let sha = match (&f.blob_sha256, &f.content) {
+                (Some(sha), _) => sha.clone(),
+                (None, Some(bytes)) => sha256_hex(bytes),
+                (None, None) => {
+                    // Tombstone-style row with no content and no hash —
+                    // historically unused, preserved here as a no-bytes row.
+                    insert_file.execute(params![
+                        f.id,
+                        f.checkpoint_id,
+                        f.file_path,
+                        Option::<String>::None,
+                        f.file_mode,
+                    ])?;
+                    continue;
+                }
+            };
+            if let Some(bytes) = &f.content {
+                upsert_blob.execute(params![sha, bytes, bytes.len() as i64])?;
+            }
+            insert_file.execute(params![
+                f.id,
+                f.checkpoint_id,
+                f.file_path,
+                sha,
+                f.file_mode,
+            ])?;
+        }
+        Ok(())
+    }
+
+    fn prune_checkpoint_files_tx(
+        tx: &rusqlite::Transaction<'_>,
+        workspace_id: &str,
+        keep: usize,
+    ) -> Result<usize, rusqlite::Error> {
+        // `created_at DESC, turn_index DESC, id DESC` matches the ordering
+        // documented in #582: created_at is unambiguous wall-clock recency at
+        // the workspace scope (turn_index is per-session so it collides
+        // across sessions), id is the deterministic final tiebreaker.
+        //
+        // The `EXISTS(...)` filter scopes the subquery to checkpoints that
+        // still hold file rows. Without it, a workspace with thousands of
+        // historical turns re-scans every old checkpoint on every
+        // snapshot even though their `checkpoint_files` rows were already
+        // pruned earlier and there is no work to do for them — making
+        // snapshot cost O(total history) rather than O(retained-with-files).
+        let deleted = tx.execute(
+            "DELETE FROM checkpoint_files
+             WHERE checkpoint_id IN (
+                 SELECT id FROM conversation_checkpoints
+                  WHERE workspace_id = ?1
+                    AND EXISTS(
+                        SELECT 1 FROM checkpoint_files
+                         WHERE checkpoint_id = conversation_checkpoints.id
+                    )
+                  ORDER BY created_at DESC, turn_index DESC, id DESC
+                  LIMIT -1 OFFSET ?2
+             )",
+            params![workspace_id, keep as i64],
+        )?;
+        Ok(deleted)
+    }
+
+    fn gc_orphan_blobs_tx(tx: &rusqlite::Transaction<'_>) -> Result<usize, rusqlite::Error> {
+        // Correlated `NOT EXISTS` lets SQLite drive each candidate blob row
+        // through `idx_checkpoint_files_blob_sha256` directly, without
+        // materializing a DISTINCT set of every referenced sha. The form
+        // also naturally tolerates `checkpoint_files` rows with NULL
+        // `blob_sha256` (legacy un-backfilled rows): such rows simply
+        // don't satisfy the `=` predicate, so they neither protect a
+        // blob from GC nor poison the outer match the way they would
+        // under `NOT IN`'s three-valued logic.
+        let deleted = tx.execute(
+            "DELETE FROM checkpoint_blobs
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM checkpoint_files
+                  WHERE blob_sha256 = checkpoint_blobs.sha256
+             )",
+            [],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Bytes that deleting this workspace would actually reclaim from the
+    /// checkpoint store: sole-owned `checkpoint_blobs` plus inline legacy
+    /// `checkpoint_files.content`. Cross-workspace shared blobs are
+    /// excluded — they would survive the delete via the
+    /// `gc_orphan_blobs_tx` `NOT EXISTS` predicate.
+    ///
+    /// This is what the Storage / cleanup UI uses to show a meaningful
+    /// size for archived workspaces, which have no worktree on disk left
+    /// to walk.
+    pub fn reclaimable_checkpoint_bytes(&self, workspace_id: &str) -> rusqlite::Result<u64> {
+        // Sole-owned blobs: referenced by this workspace's checkpoints AND
+        // by no other workspace's. Mirrors the `NOT EXISTS` shape that
+        // `gc_orphan_blobs_tx` uses so SQLite drives both correlated
+        // subqueries through `idx_checkpoint_files_blob_sha256`.
+        let sole_owned: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(cb.byte_size), 0)
+             FROM checkpoint_blobs cb
+             WHERE EXISTS (
+                 SELECT 1 FROM checkpoint_files cf
+                 JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+                 WHERE cc.workspace_id = ?1 AND cf.blob_sha256 = cb.sha256
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM checkpoint_files cf
+                 JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+                 WHERE cc.workspace_id <> ?1 AND cf.blob_sha256 = cb.sha256
+             )",
+            params![workspace_id],
+            |row| row.get(0),
+        )?;
+
+        // Legacy un-backfilled rows still keep their bytes inline in
+        // `checkpoint_files.content`. Those reclaim 1:1 on workspace
+        // delete since no other row can reference them.
+        let legacy_inline: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(cf.content)), 0)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.workspace_id = ?1
+               AND cf.blob_sha256 IS NULL
+               AND cf.content IS NOT NULL",
+            params![workspace_id],
+            |row| row.get(0),
+        )?;
+
+        let sole = u64::try_from(sole_owned).unwrap_or(0);
+        let legacy = u64::try_from(legacy_inline).unwrap_or(0);
+        Ok(sole.saturating_add(legacy))
+    }
+
+    /// Set-based generalization of [`Self::reclaimable_checkpoint_bytes`]:
+    /// bytes that would actually free if **all** workspaces in `ids` were
+    /// deleted together. A blob shared between two workspaces in the
+    /// set still counts once here (because both references go away),
+    /// even though it would correctly be excluded from each workspace's
+    /// per-row sole-owned count.
+    ///
+    /// Used by the cleanup dialog's "Delete selected (N · X MB)" total
+    /// so the headline figure stays accurate under dedup, while each
+    /// row's per-workspace figure remains the honest single-delete
+    /// number.
+    pub fn reclaimable_checkpoint_bytes_for_workspaces(
+        &self,
+        ids: &[&str],
+    ) -> rusqlite::Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        // Build `?,?,?` placeholders for both the IN (this set) and
+        // NOT IN (everything else) clauses. Bind `ids` twice via chain.
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let sole_sql = format!(
+            "SELECT COALESCE(SUM(cb.byte_size), 0)
+             FROM checkpoint_blobs cb
+             WHERE EXISTS (
+                 SELECT 1 FROM checkpoint_files cf
+                 JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+                 WHERE cc.workspace_id IN ({placeholders})
+                   AND cf.blob_sha256 = cb.sha256
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM checkpoint_files cf
+                 JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+                 WHERE cc.workspace_id NOT IN ({placeholders})
+                   AND cf.blob_sha256 = cb.sha256
+             )"
+        );
+        let sole_owned: i64 = self.conn.query_row(
+            &sole_sql,
+            params_from_iter(ids.iter().chain(ids.iter())),
+            |row| row.get(0),
+        )?;
+
+        let legacy_sql = format!(
+            "SELECT COALESCE(SUM(LENGTH(cf.content)), 0)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.workspace_id IN ({placeholders})
+               AND cf.blob_sha256 IS NULL
+               AND cf.content IS NOT NULL"
+        );
+        let legacy_inline: i64 =
+            self.conn
+                .query_row(&legacy_sql, params_from_iter(ids.iter()), |row| row.get(0))?;
+
+        let sole = u64::try_from(sole_owned).unwrap_or(0);
+        let legacy = u64::try_from(legacy_inline).unwrap_or(0);
+        Ok(sole.saturating_add(legacy))
+    }
+
+    /// Read snapshot rows for a checkpoint, materializing bytes from
+    /// `checkpoint_blobs` via the `blob_sha256` reference. Legacy rows
+    /// where `blob_sha256 IS NULL` fall back to the row's own `content`
+    /// column (un-backfilled writes from before #940 / #942 dedupe).
     pub fn get_checkpoint_files(
         &self,
         checkpoint_id: &str,
     ) -> Result<Vec<CheckpointFile>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, checkpoint_id, file_path, content, file_mode
-             FROM checkpoint_files WHERE checkpoint_id = ?1",
+            "SELECT cf.id, cf.checkpoint_id, cf.file_path, cf.file_mode,
+                    cf.blob_sha256, cf.content, b.bytes
+             FROM checkpoint_files cf
+             LEFT JOIN checkpoint_blobs b ON b.sha256 = cf.blob_sha256
+             WHERE cf.checkpoint_id = ?1",
         )?;
         let rows = stmt.query_map(params![checkpoint_id], |row| {
+            let blob_sha256: Option<String> = row.get(4)?;
+            let legacy_content: Option<Vec<u8>> = row.get(5)?;
+            let blob_bytes: Option<Vec<u8>> = row.get(6)?;
+            // Prefer blob bytes when the row has been deduped/backfilled;
+            // fall back to the row's own column for legacy un-backfilled rows.
+            let content = match (blob_sha256.as_ref(), blob_bytes, legacy_content) {
+                (Some(_), Some(bytes), _) => Some(bytes),
+                (Some(_), None, Some(bytes)) => Some(bytes),
+                (Some(sha), None, None) => {
+                    return Err(rusqlite::Error::FromSqlConversionFailure(
+                        6,
+                        Type::Null,
+                        Box::new(MissingCheckpointBlob { sha: sha.clone() }),
+                    ));
+                }
+                (None, _, content) => content,
+            };
             Ok(CheckpointFile {
                 id: row.get(0)?,
                 checkpoint_id: row.get(1)?,
                 file_path: row.get(2)?,
-                content: row.get(3)?,
-                file_mode: row.get(4)?,
+                file_mode: row.get(3)?,
+                blob_sha256,
+                content,
             })
         })?;
         rows.collect()
@@ -248,6 +552,147 @@ impl Database {
             params![checkpoint_id],
             |row| row.get(0),
         )
+    }
+
+    fn count_checkpoint_file_rows(&self, checkpoint_id: &str) -> Result<usize, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM checkpoint_files WHERE checkpoint_id = ?1",
+            params![checkpoint_id],
+            |row| row.get(0),
+        )
+    }
+
+    fn count_checkpoint_file_rows_for_session_after(
+        &self,
+        chat_session_id: &str,
+        turn_index: i32,
+    ) -> Result<usize, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.chat_session_id = ?1 AND cc.turn_index > ?2",
+            params![chat_session_id, turn_index],
+            |row| row.get(0),
+        )
+    }
+
+    fn count_checkpoint_file_rows_for_workspace_after(
+        &self,
+        workspace_id: &str,
+        turn_index: i32,
+    ) -> Result<usize, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.workspace_id = ?1 AND cc.turn_index > ?2",
+            params![workspace_id, turn_index],
+            |row| row.get(0),
+        )
+    }
+
+    /// Count `checkpoint_files` rows that will cascade away if the given
+    /// workspace is hard-deleted. The workspace delete path uses this as
+    /// the short-circuit signal for `gc_orphan_blobs_after_delete`: if
+    /// the workspace has no checkpoint files, the GC's full-table
+    /// `NOT EXISTS` scan is skipped.
+    pub(super) fn count_workspace_checkpoint_files(
+        &self,
+        workspace_id: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.workspace_id = ?1",
+            params![workspace_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Count legacy `checkpoint_files` rows that still hold raw bytes in
+    /// the `content` column and haven't been migrated to the
+    /// content-addressed `checkpoint_blobs` store yet. Used by the startup
+    /// backfill to decide whether work is needed at all.
+    pub fn count_legacy_checkpoint_file_rows(&self) -> Result<i64, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM checkpoint_files
+             WHERE content IS NOT NULL AND blob_sha256 IS NULL",
+            [],
+            |r| r.get(0),
+        )
+    }
+
+    /// Migrate a bounded batch of legacy rows into `checkpoint_blobs`.
+    /// Picks up to `max_rows` rows (or as many as fit within `max_bytes`
+    /// of total content, whichever budget is hit first), hashes each one,
+    /// upserts the bytes into `checkpoint_blobs`, then rewrites the
+    /// `checkpoint_files` row to reference the hash and null its `content`.
+    /// Returns the number of rows migrated; 0 means the work is done.
+    ///
+    /// Each call is its own transaction so a long-running backfill can't
+    /// lose progress on shutdown.
+    pub fn migrate_legacy_checkpoint_file_batch(
+        &self,
+        max_rows: usize,
+        max_bytes: usize,
+    ) -> Result<usize, rusqlite::Error> {
+        let rows: Vec<(String, Vec<u8>)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, content FROM checkpoint_files
+                 WHERE content IS NOT NULL AND blob_sha256 IS NULL
+                 ORDER BY rowid
+                 LIMIT ?1",
+            )?;
+            let mut acc: Vec<(String, Vec<u8>)> = Vec::new();
+            let mut bytes_so_far: usize = 0;
+            let iter = stmt.query_map(params![max_rows as i64], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in iter {
+                let (id, content) = row?;
+                bytes_so_far = bytes_so_far.saturating_add(content.len());
+                acc.push((id, content));
+                if bytes_so_far >= max_bytes {
+                    break;
+                }
+            }
+            acc
+        };
+
+        if rows.is_empty() {
+            return Ok(0);
+        }
+
+        let migrated = rows.len();
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut upsert_blob = tx.prepare(
+                "INSERT INTO checkpoint_blobs (sha256, bytes, byte_size, compression)
+                 VALUES (?1, ?2, ?3, 'none')
+                 ON CONFLICT(sha256) DO NOTHING",
+            )?;
+            let mut update_file = tx.prepare(
+                "UPDATE checkpoint_files
+                    SET blob_sha256 = ?1, content = NULL
+                  WHERE id = ?2",
+            )?;
+            for (id, content) in &rows {
+                let sha = sha256_hex(content);
+                upsert_blob.execute(params![sha, content, content.len() as i64])?;
+                update_file.execute(params![sha, id])?;
+            }
+        }
+        tx.commit()?;
+        // Each migrated row nulled out a `content` BLOB whose overflow
+        // pages were just freed. Draining the freelist incrementally as
+        // we go means the DB file actually shrinks during a long
+        // backfill rather than ballooning until something else triggers
+        // a vacuum. `best_effort_*` short-circuits on FULL auto-vacuum
+        // mode, so this is safe to call unconditionally.
+        self.best_effort_incremental_vacuum_after_delete(migrated);
+        Ok(migrated)
     }
 
     // --- Turn Tool Activities ---
@@ -445,6 +890,7 @@ impl Database {
                AND rowid > (SELECT rowid FROM chat_messages WHERE id = ?2)",
             params![workspace_id, after_message_id],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(deleted)
     }
 
@@ -462,6 +908,7 @@ impl Database {
                AND rowid > (SELECT rowid FROM chat_messages WHERE id = ?2)",
             params![chat_session_id, after_message_id],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(deleted)
     }
 
@@ -541,7 +988,7 @@ impl Database {
 mod tests {
     use super::*;
     use crate::db::test_support::*;
-    use crate::model::ChatRole;
+    use crate::model::{ChatRole, CheckpointFile};
 
     /// Build a `ConversationCheckpoint` anchored to the workspace's default
     /// active session.
@@ -775,6 +1222,64 @@ mod tests {
         assert_eq!(turns[0].activities[0].id, "a2");
     }
 
+    /// Regression pin for #908: deleting a checkpoint via the application
+    /// path must actually reclaim the BLOB pages, not just the (now small)
+    /// reference rows. With dedupe in place, bytes live in `checkpoint_blobs`
+    /// — so the invariant we care about is that the blob row goes away
+    /// and the DB file shrinks below its pre-delete size after vacuum
+    /// reclaims the tail pages.
+    #[test]
+    fn test_delete_checkpoint_reclaims_checkpoint_blob_pages() {
+        fn setup_checkpoint_file_db() -> (tempfile::TempDir, Database) {
+            let dir = tempfile::tempdir().unwrap();
+            let db = Database::open(&dir.path().join("claudette.db")).unwrap();
+            db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+                .unwrap();
+            db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+                .unwrap();
+            db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+                .unwrap();
+            db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+                .unwrap();
+            db.insert_checkpoint_files(&[CheckpointFile {
+                id: "cf1".into(),
+                checkpoint_id: "cp1".into(),
+                file_path: "large.bin".into(),
+                content: Some(vec![7; 1024 * 1024]),
+                blob_sha256: None,
+                file_mode: 0o100644,
+            }])
+            .unwrap();
+            (dir, db)
+        }
+
+        // Raw cascade deletion (no application-level GC) leaves the blob
+        // row alive — the FK cascade only touches `checkpoint_files`.
+        let (_raw_dir, raw_db) = setup_checkpoint_file_db();
+        raw_db
+            .conn()
+            .execute("DELETE FROM conversation_checkpoints WHERE id = 'cp1'", [])
+            .unwrap();
+        let raw_blob_count = blob_count(&raw_db);
+        assert_eq!(
+            raw_blob_count, 1,
+            "raw cascade must leave the blob row alive — only application-level GC reclaims it"
+        );
+
+        // Application-level delete chains through orphan-blob GC, dropping
+        // the bytes for real. `incremental_vacuum` only reclaims pages at
+        // the tail of the database file (a SQLite policy), so the freelist
+        // count is not a reliable signal under WAL mode — what we pin here
+        // is the durable invariant: the blob row is gone.
+        let (_vacuum_dir, vacuum_db) = setup_checkpoint_file_db();
+        vacuum_db.delete_checkpoint("cp1").unwrap();
+        assert_eq!(
+            blob_count(&vacuum_db),
+            0,
+            "delete_checkpoint must orphan-GC unreferenced blobs"
+        );
+    }
+
     #[test]
     fn test_list_completed_turns_groups_by_checkpoint() {
         let db = setup_db_with_workspace();
@@ -862,5 +1367,609 @@ mod tests {
 
         let cp = db.get_checkpoint("cp1").unwrap().unwrap();
         assert_eq!(cp.message_count, 3);
+    }
+
+    // --- Dedupe + retention regression pins (#940 / #942) ---
+
+    fn raw_file(id: &str, cp: &str, path: &str, bytes: &[u8]) -> CheckpointFile {
+        CheckpointFile {
+            id: id.into(),
+            checkpoint_id: cp.into(),
+            file_path: path.into(),
+            content: Some(bytes.to_vec()),
+            blob_sha256: None,
+            file_mode: 0o100644,
+        }
+    }
+
+    fn blob_count(db: &Database) -> i64 {
+        db.conn()
+            .query_row("SELECT COUNT(*) FROM checkpoint_blobs", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn checkpoint_files_count(db: &Database) -> i64 {
+        db.conn()
+            .query_row("SELECT COUNT(*) FROM checkpoint_files", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Regression pin for #940 / #942: the same bytes written into N different
+    /// checkpoints must collapse to ONE row in `checkpoint_blobs`, with each
+    /// `checkpoint_files` row pointing at the shared hash.
+    #[test]
+    fn dedupe_collapses_identical_blobs_across_checkpoints() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "b"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::Assistant, "c"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w1", "m2", 1))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp3", "w1", "m3", 2))
+            .unwrap();
+
+        // Same 1 MB blob written into three checkpoints under both
+        // `image.png` and `image-copy.png` (6 reference rows total).
+        let bytes = vec![42u8; 1024 * 1024];
+        for cp in ["cp1", "cp2", "cp3"] {
+            for (suffix, path) in [("a", "image.png"), ("b", "image-copy.png")] {
+                let id = format!("f-{cp}-{suffix}");
+                db.insert_checkpoint_files(&[raw_file(&id, cp, path, &bytes)])
+                    .unwrap();
+            }
+        }
+
+        assert_eq!(blob_count(&db), 1, "identical bytes must dedupe to 1 blob");
+        // 6 file rows (3 checkpoints × 2 paths) all reference that blob.
+        let referencing: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM checkpoint_files WHERE blob_sha256 IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(referencing, 6);
+    }
+
+    /// The read path must materialize bytes from `checkpoint_blobs` even
+    /// though `checkpoint_files.content` is NULL — this is what rollback /
+    /// restore relies on.
+    #[test]
+    fn read_path_materializes_bytes_via_blob_join() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "x.txt", b"hello world")])
+            .unwrap();
+
+        // Sanity: the row itself doesn't carry bytes anymore.
+        let raw_content: Option<Vec<u8>> = db
+            .conn()
+            .query_row(
+                "SELECT content FROM checkpoint_files WHERE id = 'f1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            raw_content.is_none(),
+            "dedupe path must null the legacy content column"
+        );
+
+        // Read path joins back through checkpoint_blobs.
+        let files = db.get_checkpoint_files("cp1").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].content.as_deref(), Some(b"hello world".as_ref()));
+        assert!(files[0].blob_sha256.is_some());
+    }
+
+    /// Legacy un-backfilled rows (content present, blob_sha256 NULL) must
+    /// still be readable so a partially-migrated DB doesn't lose restore.
+    #[test]
+    fn read_path_falls_back_to_legacy_content_column() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        // Backdoor a legacy-style row: bytes in `content`, no blob ref. This
+        // is what an un-backfilled pre-dedupe DB looks like.
+        db.execute_batch(
+            "INSERT INTO checkpoint_files
+                (id, checkpoint_id, file_path, content, blob_sha256, file_mode)
+             VALUES ('legacy', 'cp1', 'legacy.txt', x'6c6567616379', NULL, 33188);",
+        )
+        .unwrap();
+
+        let files = db.get_checkpoint_files("cp1").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].content.as_deref(), Some(b"legacy".as_ref()));
+        assert!(files[0].blob_sha256.is_none());
+    }
+
+    /// A corrupt row with a blob reference but no blob bytes must fail closed:
+    /// returning `content=None` would be interpreted by restore as a tombstone.
+    #[test]
+    fn read_path_errors_when_blob_reference_is_missing() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        db.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             INSERT INTO checkpoint_files
+                (id, checkpoint_id, file_path, content, blob_sha256, file_mode)
+             VALUES ('corrupt', 'cp1', 'corrupt.txt', NULL, 'missing-sha', 33188);
+             PRAGMA foreign_keys=ON;",
+        )
+        .unwrap();
+
+        let err = db.get_checkpoint_files("cp1").unwrap_err();
+        assert!(
+            err.to_string().contains("missing blob"),
+            "missing blob reference should surface as an error, got {err}"
+        );
+    }
+
+    /// `insert_checkpoint_files_and_prune` keeps the N most-recent
+    /// checkpoints' files for the workspace and drops file rows from older
+    /// ones. The `conversation_checkpoints` and `turn_tool_activities` rows
+    /// must survive so chat history isn't lost.
+    #[test]
+    fn retention_prunes_old_file_rows_but_keeps_history() {
+        let db = setup_db_with_workspace();
+        for i in 0..5 {
+            let mid = format!("m{i}");
+            let cpid = format!("cp{i}");
+            db.insert_chat_message(&make_chat_msg(&db, &mid, "w1", ChatRole::Assistant, "x"))
+                .unwrap();
+            db.insert_checkpoint(&make_checkpoint(&db, &cpid, "w1", &mid, i))
+                .unwrap();
+            db.insert_turn_tool_activities(&[make_tool_activity(
+                &format!("a{i}"),
+                &cpid,
+                "Read",
+                0,
+            )])
+            .unwrap();
+        }
+
+        // Snapshot some files into each checkpoint via the retention path,
+        // keep=2. After all five inserts, only cp3 + cp4 should retain file
+        // rows. cp0–cp2 keep their checkpoint + activity rows but lose
+        // file restoreability.
+        for i in 0..5 {
+            let cpid = format!("cp{i}");
+            let fid = format!("f-{i}");
+            db.insert_checkpoint_files_and_prune(
+                "w1",
+                &[raw_file(
+                    &fid,
+                    &cpid,
+                    "a.txt",
+                    format!("content-{i}").as_bytes(),
+                )],
+                2,
+            )
+            .unwrap();
+        }
+
+        let file_rows: Vec<String> = {
+            let mut stmt = db
+                .conn()
+                .prepare("SELECT checkpoint_id FROM checkpoint_files ORDER BY checkpoint_id")
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            file_rows,
+            vec!["cp3".to_string(), "cp4".to_string()],
+            "retention=2 must drop file rows for cp0–cp2"
+        );
+
+        // Checkpoint rows + activities for the pruned checkpoints survive:
+        // chat history continues to show them, only restoreability is gone.
+        let turns = db.list_completed_turns("w1").unwrap();
+        assert_eq!(turns.len(), 5);
+
+        // Pruned checkpoints flip `has_file_state` to false automatically
+        // because it's derived as EXISTS over checkpoint_files.
+        let cp0 = db.get_checkpoint("cp0").unwrap().unwrap();
+        assert!(!cp0.has_file_state);
+        let cp4 = db.get_checkpoint("cp4").unwrap().unwrap();
+        assert!(cp4.has_file_state);
+    }
+
+    /// Blobs only referenced by pruned `checkpoint_files` rows must be
+    /// GC'd in the same transaction so retention actually reclaims space.
+    #[test]
+    fn retention_garbage_collects_orphaned_blobs() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "b"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::Assistant, "c"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w1", "m2", 1))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp3", "w1", "m3", 2))
+            .unwrap();
+
+        // Each checkpoint touches a unique blob.
+        db.insert_checkpoint_files_and_prune("w1", &[raw_file("f1", "cp1", "x.bin", b"AAAA")], 10)
+            .unwrap();
+        db.insert_checkpoint_files_and_prune("w1", &[raw_file("f2", "cp2", "x.bin", b"BBBB")], 10)
+            .unwrap();
+        db.insert_checkpoint_files_and_prune("w1", &[raw_file("f3", "cp3", "x.bin", b"CCCC")], 10)
+            .unwrap();
+        assert_eq!(blob_count(&db), 3);
+
+        // Tighten retention to 1 — the next insert prunes cp1 and cp2's
+        // file rows and GCs their now-orphan blobs in the same transaction.
+        db.insert_checkpoint_files_and_prune(
+            "w1",
+            &[raw_file("f3-take2", "cp3", "y.bin", b"DDDD")],
+            1,
+        )
+        .unwrap();
+        // cp3 retains two file rows (x.bin AAAA-style... no, CCCC for cp3 + DDDD).
+        // Only cp3's blobs survive (CCCC + DDDD); cp1/cp2 (AAAA/BBBB) are GC'd.
+        assert_eq!(blob_count(&db), 2);
+    }
+
+    /// `delete_checkpoint` cascades through `checkpoint_files` via the FK
+    /// and then orphan-GCs `checkpoint_blobs` so blob bytes are reclaimed
+    /// (not just the reference rows).
+    #[test]
+    fn delete_checkpoint_orphan_gcs_blobs() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "x.bin", b"ZZZZ")])
+            .unwrap();
+        assert_eq!(blob_count(&db), 1);
+
+        db.delete_checkpoint("cp1").unwrap();
+
+        assert_eq!(checkpoint_files_count(&db), 0);
+        assert_eq!(
+            blob_count(&db),
+            0,
+            "blob bytes must be reclaimed when no checkpoint_files row references them"
+        );
+    }
+
+    /// Codex peer-review pin: the retention prune subquery must skip
+    /// checkpoints whose file rows were already pruned in a previous run.
+    /// Without the `EXISTS(...)` filter, the subquery returns every
+    /// historical checkpoint past the offset on every snapshot — making
+    /// the per-snapshot cost O(workspace lifetime) instead of
+    /// O(retained-with-files).
+    #[test]
+    fn retention_prune_subquery_skips_already_pruned_checkpoints() {
+        let db = setup_db_with_workspace();
+        // Seed N+2 checkpoints, all with file rows. After a tight
+        // retention pass, only the N most-recent should still have files.
+        for i in 0..5 {
+            let mid = format!("m{i}");
+            let cpid = format!("cp{i}");
+            db.insert_chat_message(&make_chat_msg(&db, &mid, "w1", ChatRole::Assistant, "x"))
+                .unwrap();
+            db.insert_checkpoint(&make_checkpoint(&db, &cpid, "w1", &mid, i))
+                .unwrap();
+            db.insert_checkpoint_files_and_prune(
+                "w1",
+                &[raw_file(&format!("f-{i}"), &cpid, "a.txt", b"x")],
+                2,
+            )
+            .unwrap();
+        }
+
+        // EXPLAIN QUERY PLAN must consult `checkpoint_files` from the
+        // inner EXISTS filter — proving the new index path is in play
+        // and the subquery is bounded by the retained set.
+        let plan: Vec<String> = {
+            let mut stmt = db
+                .conn()
+                .prepare(
+                    "EXPLAIN QUERY PLAN
+                     DELETE FROM checkpoint_files
+                      WHERE checkpoint_id IN (
+                          SELECT id FROM conversation_checkpoints
+                           WHERE workspace_id = 'w1'
+                             AND EXISTS(
+                                 SELECT 1 FROM checkpoint_files
+                                  WHERE checkpoint_id = conversation_checkpoints.id
+                             )
+                           ORDER BY created_at DESC, turn_index DESC, id DESC
+                           LIMIT -1 OFFSET 2
+                      )",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        let plan_text = plan.join(" | ");
+        assert!(
+            plan_text.contains("checkpoint_files"),
+            "EXISTS filter must drive a checkpoint_files lookup in the plan: {plan_text}"
+        );
+
+        // And the retention semantics still hold — cp3 + cp4 keep files,
+        // cp0–cp2 don't. (Same invariant as
+        // `retention_prunes_old_file_rows_but_keeps_history`, but here it
+        // doubles as a sanity check that the EXISTS filter didn't change
+        // the semantic outcome — only the cost.)
+        let with_files: Vec<String> = {
+            let mut stmt = db
+                .conn()
+                .prepare(
+                    "SELECT DISTINCT checkpoint_id FROM checkpoint_files
+                     ORDER BY checkpoint_id",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(with_files, vec!["cp3".to_string(), "cp4".to_string()]);
+    }
+
+    // --- reclaimable_checkpoint_bytes ---
+
+    /// Sole-owned blobs count toward the workspace's reclaimable bytes;
+    /// blobs that another workspace also references do not (deleting this
+    /// workspace would not free them via `gc_orphan_blobs_tx`).
+    #[test]
+    fn reclaimable_bytes_excludes_blobs_shared_with_other_workspaces() {
+        let db = setup_db_with_workspace();
+        // Add a second workspace under the same repo so both can hold
+        // checkpoints in parallel.
+        db.insert_workspace(&make_workspace("w2", "r1", "other"))
+            .unwrap();
+
+        // Workspace A: cp1 with two file rows — one unique blob, one
+        // shared with B.
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let unique_a = vec![0xAAu8; 1000];
+        let shared = vec![0x55u8; 600];
+        db.insert_checkpoint_files(&[
+            raw_file("fa-unique", "cp1", "unique-a.bin", &unique_a),
+            raw_file("fa-shared", "cp1", "shared.bin", &shared),
+        ])
+        .unwrap();
+
+        // Workspace B: also references the shared blob.
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w2", ChatRole::Assistant, "b"))
+            .unwrap();
+        // make_checkpoint resolves the default session for the workspace, so
+        // it picks w2's session here.
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w2", "m2", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("fb-shared", "cp2", "shared.bin", &shared)])
+            .unwrap();
+
+        // Sanity: dedupe is on, so we have 2 distinct blobs total.
+        assert_eq!(blob_count(&db), 2);
+
+        // Only the unique-A blob is reclaimable for w1 — the shared one
+        // would survive because cp2 still references it.
+        let bytes = db.reclaimable_checkpoint_bytes("w1").unwrap();
+        assert_eq!(bytes, unique_a.len() as u64);
+    }
+
+    /// Legacy un-backfilled rows (content in `checkpoint_files.content`,
+    /// `blob_sha256 IS NULL`) reclaim 1:1 since no other row can reference
+    /// them.
+    #[test]
+    fn reclaimable_bytes_counts_legacy_inline_content() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        // Backdoor a legacy row (no blob_sha256, raw bytes in content),
+        // matching the partially-migrated-DB shape the read-path fallback
+        // test uses.
+        db.execute_batch(
+            "INSERT INTO checkpoint_files
+                (id, checkpoint_id, file_path, content, blob_sha256, file_mode)
+             VALUES ('legacy', 'cp1', 'legacy.txt', x'6c6567616379', NULL, 33188);",
+        )
+        .unwrap();
+
+        // 'legacy' = 6 bytes (l e g a c y).
+        let bytes = db.reclaimable_checkpoint_bytes("w1").unwrap();
+        assert_eq!(bytes, 6);
+    }
+
+    /// A workspace with no checkpoints (or checkpoints with no files)
+    /// reports 0 rather than failing — important so the cleanup UI can
+    /// surface "0 B" instead of `—` for brand-new archives.
+    #[test]
+    fn reclaimable_bytes_empty_workspace_returns_zero() {
+        let db = setup_db_with_workspace();
+        let bytes = db.reclaimable_checkpoint_bytes("w1").unwrap();
+        assert_eq!(bytes, 0);
+    }
+
+    /// Codex peer-review pin: when two archived workspaces both
+    /// reference the same dedup blob, deleting them together must
+    /// reclaim that blob exactly once. The per-row sole-owned helper
+    /// would honestly report 0 for each (because the other still
+    /// references it), and naïvely summing the per-row numbers in the
+    /// UI would advertise a smaller-than-real reclaim. The set helper
+    /// is the correct math for the "Delete selected (N)" total.
+    #[test]
+    fn reclaimable_bytes_for_workspaces_counts_blobs_shared_within_set_once() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "other"))
+            .unwrap();
+        let shared = vec![0x77u8; 800];
+
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "shared.bin", &shared)])
+            .unwrap();
+
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w2", ChatRole::Assistant, "b"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w2", "m2", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f2", "cp2", "shared.bin", &shared)])
+            .unwrap();
+        assert_eq!(blob_count(&db), 1);
+
+        // Per-row sole-owned excludes shared blob from BOTH workspaces.
+        assert_eq!(db.reclaimable_checkpoint_bytes("w1").unwrap(), 0);
+        assert_eq!(db.reclaimable_checkpoint_bytes("w2").unwrap(), 0);
+
+        // Set-based version counts it once when both are in the set.
+        let set_bytes = db
+            .reclaimable_checkpoint_bytes_for_workspaces(&["w1", "w2"])
+            .unwrap();
+        assert_eq!(set_bytes, shared.len() as u64);
+    }
+
+    /// A blob shared with a workspace OUTSIDE the deletion set must not
+    /// count — the GC's `NOT EXISTS` predicate would leave it in place.
+    #[test]
+    fn reclaimable_bytes_for_workspaces_excludes_blobs_referenced_outside_set() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "second"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w3", "r1", "third"))
+            .unwrap();
+        let shared = vec![0x33u8; 500];
+        let unique_to_w1 = vec![0x11u8; 200];
+
+        // w1 owns one blob outright and shares another with w3 (NOT in
+        // the deletion set).
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[
+            raw_file("f1a", "cp1", "shared.bin", &shared),
+            raw_file("f1b", "cp1", "unique.bin", &unique_to_w1),
+        ])
+        .unwrap();
+
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w3", ChatRole::Assistant, "c"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp3", "w3", "m3", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f3", "cp3", "shared.bin", &shared)])
+            .unwrap();
+
+        // Deletion set is {w1, w2}. The shared blob survives because
+        // w3 still references it; only unique_to_w1 reclaims.
+        let bytes = db
+            .reclaimable_checkpoint_bytes_for_workspaces(&["w1", "w2"])
+            .unwrap();
+        assert_eq!(bytes, unique_to_w1.len() as u64);
+    }
+
+    /// Empty set returns 0 cleanly — the set helper must not panic on
+    /// "no selection" (placeholders-with-0-args would be invalid SQL).
+    #[test]
+    fn reclaimable_bytes_for_workspaces_empty_set_returns_zero() {
+        let db = setup_db_with_workspace();
+        let bytes = db.reclaimable_checkpoint_bytes_for_workspaces(&[]).unwrap();
+        assert_eq!(bytes, 0);
+    }
+
+    /// Codex peer-review pin: deleting a workspace must reclaim its
+    /// sole-owned checkpoint blobs in the same call. Without orphan-blob
+    /// GC chained onto the workspace delete path, the FK cascade drops
+    /// `checkpoint_files` references but the blob bytes in
+    /// `checkpoint_blobs` survive until some unrelated future GC pass.
+    /// That would make `reclaimable_checkpoint_bytes` lie to the cleanup
+    /// dialog — bytes shown as freeable wouldn't actually free.
+    #[test]
+    fn delete_workspace_with_summary_orphan_gcs_blobs() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "x.bin", b"unique-to-w1")])
+            .unwrap();
+        assert_eq!(blob_count(&db), 1);
+
+        db.delete_workspace_with_summary("w1").unwrap();
+
+        assert_eq!(checkpoint_files_count(&db), 0);
+        assert_eq!(
+            blob_count(&db),
+            0,
+            "delete_workspace_with_summary must orphan-GC blobs whose only references were the deleted workspace's checkpoint_files"
+        );
+    }
+
+    /// Blobs shared with a workspace that is NOT being deleted must
+    /// survive. Same SQL contract as `gc_orphan_blobs_tx`: only blobs
+    /// with zero remaining references go away. Pins the symmetry with
+    /// `reclaimable_checkpoint_bytes_excludes_blobs_shared_with_other_workspaces`
+    /// — the helper excludes shared blobs from the reclaim count AND
+    /// the GC leaves them in place.
+    #[test]
+    fn delete_workspace_with_summary_keeps_blobs_shared_with_others() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "other"))
+            .unwrap();
+        let shared = b"shared-bytes";
+
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "shared.bin", shared)])
+            .unwrap();
+
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w2", ChatRole::Assistant, "b"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w2", "m2", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f2", "cp2", "shared.bin", shared)])
+            .unwrap();
+        assert_eq!(blob_count(&db), 1, "dedupe collapses to one blob");
+
+        db.delete_workspace_with_summary("w1").unwrap();
+
+        assert_eq!(
+            blob_count(&db),
+            1,
+            "shared blob must survive because w2 still references it"
+        );
     }
 }

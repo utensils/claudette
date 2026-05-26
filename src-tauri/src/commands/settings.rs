@@ -6,7 +6,6 @@ use tauri::{AppHandle, State};
 use claudette::db::Database;
 
 use crate::state::AppState;
-use claudette::process::CommandWindowExt as _;
 
 /// Spawn a short-lived process and reap it in a background thread to prevent zombies.
 pub(crate) fn spawn_and_reap(mut child: std::process::Child) {
@@ -15,7 +14,14 @@ pub(crate) fn spawn_and_reap(mut child: std::process::Child) {
     });
 }
 
-#[derive(Serialize, Deserialize)]
+/// Spawn a short-lived Tokio process and reap it in the background to prevent zombies.
+pub(crate) fn spawn_tokio_and_reap(mut child: tokio::process::Child) {
+    tauri::async_runtime::spawn(async move {
+        let _ = child.wait().await;
+    });
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ThemeDefinition {
     pub id: String,
     pub name: String,
@@ -173,8 +179,7 @@ pub async fn list_system_fonts() -> Vec<String> {
     {
         // Swift is always available on macOS; NSFontManager is the canonical API.
         let script = r#"import AppKit; NSFontManager.shared.availableFontFamilies.sorted().forEach { print($0) }"#;
-        if let Ok(output) = tokio::process::Command::new("/usr/bin/swift")
-            .no_console_window()
+        if let Ok(output) = claudette::process::command("/usr/bin/swift")
             .arg("-e")
             .arg(script)
             .output()
@@ -193,8 +198,7 @@ pub async fn list_system_fonts() -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
         // fontconfig is standard on all Linux desktops.
-        if let Ok(output) = tokio::process::Command::new("fc-list")
-            .no_console_window()
+        if let Ok(output) = claudette::process::command("fc-list")
             .args([":", "family"])
             .output()
             .await
@@ -241,8 +245,7 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
         } else {
             format!("/System/Library/Sounds/{sound}.aiff")
         };
-        if let Ok(child) = std::process::Command::new("afplay")
-            .no_console_window()
+        if let Ok(child) = claudette::process::std_command("afplay")
             .arg("-v")
             .arg(format!("{vol}"))
             .arg(&path)
@@ -259,14 +262,12 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
             sound.to_lowercase()
         };
         let pa_volume = (vol * 65536.0) as u32;
-        if let Ok(child) = std::process::Command::new("canberra-gtk-play")
-            .no_console_window()
+        if let Ok(child) = claudette::process::std_command("canberra-gtk-play")
             .arg("-i")
             .arg(&sound_name)
             .spawn()
             .or_else(|_| {
-                std::process::Command::new("paplay")
-                    .no_console_window()
+                claudette::process::std_command("paplay")
                     .arg("--volume")
                     .arg(pa_volume.to_string())
                     .arg(format!(
@@ -351,19 +352,18 @@ pub(crate) fn build_notification_command(
     }
     #[cfg(not(windows))]
     let mut command = {
-        let mut c = std::process::Command::new("sh");
+        let mut c = claudette::process::std_command("sh");
         c.arg("-c").arg(cmd);
         c
     };
     #[cfg(windows)]
     let mut command = {
-        let mut c = std::process::Command::new("cmd.exe");
+        let mut c = claudette::process::std_command("cmd.exe");
         // /S = leave the command line alone (no double-quote stripping);
         // /C = execute the command and terminate.
         c.arg("/S").arg("/C").arg(cmd);
         c
     };
-    command.no_console_window();
     ws_env.apply_std(&mut command);
     Some(command)
 }
@@ -460,6 +460,137 @@ pub fn run_notification_command(
     Ok(())
 }
 
+/// Hex validation for Base16 slot values: accept `#rrggbb`, `rrggbb`,
+/// `#rgb`, or `rgb` (case-insensitive). Returns true if the string is a
+/// well-formed hex color.
+fn is_valid_hex_color(s: &str) -> bool {
+    let v = s.trim().strip_prefix('#').unwrap_or(s.trim());
+    (v.len() == 3 || v.len() == 6) && v.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Look up a Base16 slot tolerantly. Real-world Base16 files take two
+/// common shapes:
+///   - The legacy flat shape: `base00`, `base01`, ... at the top level.
+///   - The current Tinted Theming shape (spec-0.11+): the same keys nested
+///     under a `palette` object alongside top-level `system`, `name`,
+///     `variant`, `author` fields.
+/// We accept both, plus lowercase suffixes (`base0a` rather than `base0A`).
+fn read_base16_slot<'a>(
+    raw: &'a HashMap<String, serde_json::Value>,
+    suffix: &str,
+) -> Option<&'a str> {
+    let upper = format!("base{suffix}");
+    let lower = format!("base{}", suffix.to_lowercase());
+    // Top-level lookup (flat shape).
+    if let Some(v) = raw.get(&upper).or_else(|| raw.get(&lower))
+        && let Some(s) = v.as_str()
+    {
+        return Some(s);
+    }
+    // Nested-under-palette lookup (Tinted Theming canonical shape).
+    let palette = raw.get("palette")?.as_object()?;
+    palette
+        .get(&upper)
+        .or_else(|| palette.get(&lower))
+        .and_then(|v| v.as_str())
+}
+
+/// Parse a single user-theme JSON file. Tries the native Claudette shape first
+/// (id/name/colors), then falls back to a permissive shape that accepts
+/// Base16 schemes: any JSON object whose top-level fields include all 16
+/// `base00`–`base0F` slots with valid hex values is captured as `colors`,
+/// with `id` synthesized from `file_stem` and `name` from the `scheme`/`name`
+/// field. Conversion to Claudette tokens happens in the frontend (see
+/// utils/theme.ts).
+///
+/// Returns `Err(reason)` if the file is neither a Claudette theme nor a
+/// well-formed Base16 scheme. Callers log the reason and skip — preserving
+/// the underlying error makes "malformed JSON" easy to distinguish from
+/// "valid JSON but unsupported shape" in the logs.
+fn parse_theme_file(content: &str, file_stem: &str) -> Result<ThemeDefinition, String> {
+    let native_err = match serde_json::from_str::<ThemeDefinition>(content) {
+        Ok(theme) => return Ok(theme),
+        Err(e) => e,
+    };
+
+    // Two-step parse so we can distinguish JSON-syntax errors from
+    // valid-JSON-of-the-wrong-shape errors in the logs. The first
+    // `from_str::<Value>` succeeds for any valid JSON; the `as_object`
+    // check then catches arrays, numbers, strings, etc.
+    let value: serde_json::Value = serde_json::from_str(content)
+        .map_err(|e| format!("invalid JSON: {e} (native parse: {native_err})"))?;
+    let Some(obj) = value.as_object() else {
+        return Err(format!(
+            "theme file must be a JSON object, got {} (native parse: {native_err})",
+            match &value {
+                serde_json::Value::Array(_) => "array",
+                serde_json::Value::String(_) => "string",
+                serde_json::Value::Number(_) => "number",
+                serde_json::Value::Bool(_) => "boolean",
+                serde_json::Value::Null => "null",
+                serde_json::Value::Object(_) => unreachable!(),
+            }
+        ));
+    };
+    let raw: HashMap<String, serde_json::Value> =
+        obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+    const BASE16_SUFFIXES: [&str; 16] = [
+        "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "0A", "0B", "0C", "0D", "0E",
+        "0F",
+    ];
+    // Every slot must exist AND be a valid hex string. Files that look almost
+    // base16 but ship malformed colors are skipped here so they never reach
+    // the frontend as broken Claudette themes.
+    let mut missing: Vec<String> = Vec::new();
+    for suffix in BASE16_SUFFIXES {
+        match read_base16_slot(&raw, suffix) {
+            Some(value) if is_valid_hex_color(value) => {}
+            Some(_) => missing.push(format!("base{suffix} (invalid hex)")),
+            None => missing.push(format!("base{suffix} (missing)")),
+        }
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "not a Claudette theme (native parse: {native_err}); base16 fallback rejected: {}",
+            missing.join(", ")
+        ));
+    }
+
+    // Capture every string-valued top-level field so the frontend converter
+    // can read `variant`, `scheme`, etc. alongside the base16 hex values.
+    // For the Tinted Theming nested shape (palette: { base00: ... }), also
+    // flatten the palette's children into `palette.baseXX` keys so the TS
+    // lookup finds them.
+    let mut colors: HashMap<String, String> = raw
+        .iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+        .collect();
+    if let Some(palette) = raw.get("palette").and_then(|v| v.as_object()) {
+        for (k, v) in palette {
+            if let Some(s) = v.as_str() {
+                colors.insert(format!("palette.{k}"), s.to_string());
+            }
+        }
+    }
+
+    let name = colors
+        .get("scheme")
+        .or_else(|| colors.get("name"))
+        .cloned()
+        .unwrap_or_else(|| file_stem.to_string());
+    let author = colors.get("author").cloned();
+    let description = colors.get("description").cloned();
+
+    Ok(ThemeDefinition {
+        id: file_stem.to_string(),
+        name,
+        author,
+        description,
+        colors,
+    })
+}
+
 #[tauri::command]
 pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -522,13 +653,18 @@ pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
                 }
             };
 
-            match serde_json::from_str::<ThemeDefinition>(&content) {
+            let file_stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unnamed");
+
+            match parse_theme_file(&content, file_stem) {
                 Ok(theme) => themes.push(theme),
-                Err(e) => tracing::warn!(
+                Err(reason) => tracing::warn!(
                     target: "claudette::ui",
                     path = %path.display(),
-                    error = %e,
-                    "skipping theme file: parse failed"
+                    reason = %reason,
+                    "skipping theme file"
                 ),
             }
         }
@@ -549,6 +685,199 @@ mod tests {
         assert!(sounds.len() >= 2);
         assert_eq!(sounds[0], "Default");
         assert_eq!(sounds[1], "None");
+    }
+
+    #[test]
+    fn parse_theme_file_native_claudette_shape() {
+        let content = r##"{
+            "id": "my-theme",
+            "name": "My Theme",
+            "author": "alice",
+            "colors": {
+                "accent-primary": "#ff00aa",
+                "app-bg": "#111111"
+            }
+        }"##;
+        let theme = parse_theme_file(content, "my-theme").expect("should parse");
+        assert_eq!(theme.id, "my-theme");
+        assert_eq!(theme.name, "My Theme");
+        assert_eq!(theme.author.as_deref(), Some("alice"));
+        assert_eq!(
+            theme.colors.get("accent-primary").map(|s| s.as_str()),
+            Some("#ff00aa")
+        );
+    }
+
+    #[test]
+    fn parse_theme_file_canonical_base16() {
+        // Canonical Base16 Tomorrow Night (top-level baseXX keys, no `colors` wrapper).
+        let content = r#"{
+            "scheme": "Tomorrow Night",
+            "author": "Chris Kempson",
+            "base00": "1d1f21", "base01": "282a2e", "base02": "373b41", "base03": "969896",
+            "base04": "b4b7b4", "base05": "c5c8c6", "base06": "e0e0e0", "base07": "ffffff",
+            "base08": "cc6666", "base09": "de935f", "base0A": "f0c674", "base0B": "b5bd68",
+            "base0C": "8abeb7", "base0D": "81a2be", "base0E": "b294bb", "base0F": "a3685a"
+        }"#;
+        let theme = parse_theme_file(content, "tomorrow-night").expect("should parse");
+        assert_eq!(theme.id, "tomorrow-night");
+        assert_eq!(theme.name, "Tomorrow Night"); // from `scheme`
+        assert_eq!(theme.author.as_deref(), Some("Chris Kempson"));
+        // All 16 base keys preserved as-is for the frontend to convert.
+        for key in [
+            "base00", "base01", "base02", "base03", "base04", "base05", "base06", "base07",
+            "base08", "base09", "base0A", "base0B", "base0C", "base0D", "base0E", "base0F",
+        ] {
+            assert!(theme.colors.contains_key(key), "missing base16 key: {key}");
+        }
+    }
+
+    #[test]
+    fn parse_theme_file_base16_falls_back_to_stem_when_no_scheme() {
+        let content = r#"{
+            "base00": "000000", "base01": "111111", "base02": "222222", "base03": "333333",
+            "base04": "444444", "base05": "555555", "base06": "666666", "base07": "777777",
+            "base08": "880000", "base09": "990000", "base0A": "aa0000", "base0B": "bb0000",
+            "base0C": "cc0000", "base0D": "dd0000", "base0E": "ee0000", "base0F": "ff0000"
+        }"#;
+        let theme = parse_theme_file(content, "anon-scheme").expect("should parse");
+        assert_eq!(theme.id, "anon-scheme");
+        assert_eq!(theme.name, "anon-scheme");
+        assert!(theme.author.is_none());
+    }
+
+    #[test]
+    fn parse_theme_file_skips_partial_base16() {
+        // Missing base0F — not a complete base16 scheme, and not native Claudette.
+        let content = r#"{
+            "base00": "000000", "base01": "111111", "base02": "222222", "base03": "333333",
+            "base04": "444444", "base05": "555555", "base06": "666666", "base07": "777777",
+            "base08": "880000", "base09": "990000", "base0A": "aa0000", "base0B": "bb0000",
+            "base0C": "cc0000", "base0D": "dd0000", "base0E": "ee0000"
+        }"#;
+        let err = parse_theme_file(content, "partial").unwrap_err();
+        assert!(
+            err.contains("base0F"),
+            "error should mention missing slot: {err}"
+        );
+        assert!(
+            err.contains("missing"),
+            "error should distinguish missing vs invalid: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_theme_file_rejects_invalid_hex_in_base16_slot() {
+        // All 16 slots present, but base05 is not a valid hex value — the file
+        // must be rejected with a clear reason instead of leaking to the frontend.
+        let content = r#"{
+            "base00": "000000", "base01": "111111", "base02": "222222", "base03": "333333",
+            "base04": "444444", "base05": "not-a-hex", "base06": "666666", "base07": "777777",
+            "base08": "880000", "base09": "990000", "base0A": "aa0000", "base0B": "bb0000",
+            "base0C": "cc0000", "base0D": "dd0000", "base0E": "ee0000", "base0F": "ff0000"
+        }"#;
+        let err = parse_theme_file(content, "broken").unwrap_err();
+        assert!(
+            err.contains("base05"),
+            "error should name the bad slot: {err}"
+        );
+        assert!(
+            err.contains("invalid hex"),
+            "error should distinguish invalid hex: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_theme_file_accepts_tinted_theming_palette_nested_shape() {
+        // Current Tinted Theming canonical shape: base keys nested under
+        // `palette` alongside top-level metadata. Direct YAML→JSON
+        // conversion of `tinted-theming/schemes` files lands here.
+        let content = r##"{
+            "system": "base16",
+            "name": "Tomorrow Night",
+            "variant": "dark",
+            "author": "Chris Kempson",
+            "palette": {
+                "base00": "1d1f21", "base01": "282a2e", "base02": "373b41", "base03": "969896",
+                "base04": "b4b7b4", "base05": "c5c8c6", "base06": "e0e0e0", "base07": "ffffff",
+                "base08": "cc6666", "base09": "de935f", "base0A": "f0c674", "base0B": "b5bd68",
+                "base0C": "8abeb7", "base0D": "81a2be", "base0E": "b294bb", "base0F": "a3685a"
+            }
+        }"##;
+        let theme = parse_theme_file(content, "tomorrow-night").expect("should parse");
+        assert_eq!(theme.id, "tomorrow-night");
+        assert_eq!(theme.name, "Tomorrow Night");
+        assert_eq!(theme.author.as_deref(), Some("Chris Kempson"));
+        // Palette children must be flattened into `palette.baseXX` keys
+        // so the TS converter (which knows about this shape) can find them.
+        for key in [
+            "palette.base00",
+            "palette.base05",
+            "palette.base08",
+            "palette.base0F",
+        ] {
+            assert!(
+                theme.colors.contains_key(key),
+                "missing flattened palette key: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_theme_file_accepts_lowercase_base16_keys() {
+        // Some legacy base16 schemes ship lowercase `base0a`–`base0f`. Both
+        // casings must parse to the same shape.
+        let content = r#"{
+            "base00": "000000", "base01": "111111", "base02": "222222", "base03": "333333",
+            "base04": "444444", "base05": "555555", "base06": "666666", "base07": "777777",
+            "base08": "880000", "base09": "990000", "base0a": "aa0000", "base0b": "bb0000",
+            "base0c": "cc0000", "base0d": "dd0000", "base0e": "ee0000", "base0f": "ff0000"
+        }"#;
+        let theme = parse_theme_file(content, "lower").expect("should parse");
+        assert!(theme.colors.contains_key("base0a"));
+    }
+
+    #[test]
+    fn parse_theme_file_preserves_underlying_parse_error() {
+        let err = parse_theme_file("{ not valid json", "broken").unwrap_err();
+        assert!(
+            err.contains("invalid JSON"),
+            "error should include the parse failure: {err}"
+        );
+
+        let empty_err = parse_theme_file("", "empty").unwrap_err();
+        assert!(
+            empty_err.contains("invalid JSON"),
+            "empty file error should be clear: {empty_err}"
+        );
+    }
+
+    #[test]
+    fn parse_theme_file_distinguishes_wrong_shape_from_invalid_json() {
+        // Valid JSON, wrong top-level type — should report "must be a JSON
+        // object" rather than the misleading "invalid JSON" used for true
+        // syntax errors.
+        for (content, kind) in [
+            ("[1, 2, 3]", "array"),
+            ("\"just a string\"", "string"),
+            ("42", "number"),
+            ("true", "boolean"),
+            ("null", "null"),
+        ] {
+            let err = parse_theme_file(content, "wrong-shape").unwrap_err();
+            assert!(
+                err.contains("must be a JSON object"),
+                "expected wrong-shape error for {kind}, got: {err}"
+            );
+            assert!(
+                err.contains(kind),
+                "error should name the unexpected type {kind}, got: {err}"
+            );
+            assert!(
+                !err.starts_with("invalid JSON:"),
+                "wrong-shape error must not be labeled 'invalid JSON' (got: {err})"
+            );
+        }
     }
 
     #[test]

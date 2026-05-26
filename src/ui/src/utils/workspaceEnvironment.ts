@@ -91,3 +91,18 @@ export function isWorkspaceEnvironmentPreparing(
   if (!workspace || workspace.remote_connection_id) return false;
   return state.workspaceEnvironment[workspaceId]?.status === "preparing";
 }
+
+export function formatEnvProviderName(plugin: string): string {
+  switch (plugin) {
+    case "env-direnv":
+      return "direnv";
+    case "env-mise":
+      return "mise";
+    case "env-dotenv":
+      return "dotenv";
+    case "env-nix-devshell":
+      return "nix";
+    default:
+      return plugin;
+  }
+}
