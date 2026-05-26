@@ -88,9 +88,22 @@ impl PtywrightClaudeSession {
         let workspace_env = params.workspace_env.cloned();
 
         let handle = tokio::task::spawn_blocking(move || {
+            // Generous PTY dimensions so the Claude Code TUI doesn't
+            // wrap long lines (which truncates file paths and breaks
+            // the chrome-strip regexes the plugin uses to keep tool
+            // progress out of streamed text) and so multi-tool turns
+            // fit in the visible buffer without scrolling state out of
+            // the classifier's reach (vt100 0.16.2 doesn't expose
+            // scrollback contents). 500 rows × 240 cols holds every
+            // single-turn render we've seen from Claude Code 2.1.x
+            // including long Explore-agent runs and large diffs;
+            // smaller defaults caused the chrome-leak / missing-tool
+            // symptoms tracked in the screenshot the user shared.
+            let pty_size = ptywright::TerminalSize::new(500, 240);
             let mut target = ptywright::Target::new(claude_program.clone())
                 .args(target_args)
-                .cwd(working_dir);
+                .cwd(working_dir)
+                .size(pty_size);
             target = apply_start_env(target, &settings, workspace_env.as_ref());
 
             let session = ptywright::Session::spawn(ptywright::SessionConfig::new(target))
