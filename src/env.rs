@@ -11,7 +11,6 @@
 //! It also defines [`WorkspaceEnv`], the set of `CLAUDETTE_*` environment
 //! variables injected into every subprocess.
 
-use crate::process::CommandWindowExt as _;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
@@ -205,8 +204,7 @@ pub fn probe_shell_env_with_shell(shell: &std::path::Path) -> Option<BTreeMap<St
         "env -0"
     };
 
-    let mut child = std::process::Command::new(shell)
-        .no_console_window()
+    let mut child = crate::process::std_command(shell)
         .args(["-l", "-i", "-c", emit_script])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -623,50 +621,6 @@ pub fn enriched_env() -> crate::env_provider::ResolvedEnv {
     if let Some(env) = shell_env() {
         for (k, v) in &env.vars {
             vars.insert(k.clone(), Some(v.clone()));
-/// Runs `$SHELL -l -c 'printf "%s\n" "$PATH"'` with a 5-second timeout.
-/// For fish shells, uses `string join :` to convert the space-separated list.
-///
-/// If the shell prints startup output (motd, banner, etc.), only the last
-/// non-empty line is used as the PATH value.
-fn login_shell_path_probe() -> Option<OsString> {
-    let shell = std::env::var("SHELL").ok()?;
-
-    // Validate: must be an absolute path.
-    if !shell.starts_with('/') {
-        return None;
-    }
-
-    // Fish treats $PATH as a list and prints space-separated entries.
-    let is_fish = shell.ends_with("/fish");
-    let cmd_arg = if is_fish {
-        r#"printf '%s\n' (string join : $PATH)"#
-    } else {
-        r#"printf '%s\n' "$PATH""#
-    };
-
-    let mut child = crate::process::std_command(&shell)
-        .args(["-l", "-c", cmd_arg])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-
-    // Wait up to 5 seconds. If the shell init hangs (nvm, pyenv, etc.),
-    // kill the subprocess to avoid leaking a stuck process.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(_) => break None,
         }
         sources.push(ResolvedSource {
             plugin_name: "shell-env".to_string(),

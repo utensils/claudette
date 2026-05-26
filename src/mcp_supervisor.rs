@@ -1328,7 +1328,7 @@ mod tests {
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         });
 
-        let mut cmd = tokio::process::Command::new("true");
+        let mut cmd = crate::process::command("true");
         crate::env::enriched_env().apply(&mut cmd);
 
         let envs: Vec<_> = cmd.as_std().get_envs().collect();

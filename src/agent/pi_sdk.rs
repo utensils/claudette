@@ -264,10 +264,6 @@ impl PiSdkSession {
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        crate::env::enriched_env().apply(&mut cmd);
-        if let Some(env) = config.resolved_env {
-            apply_resolved_env_to_command(&mut cmd, env);
-        }
         if let Some(env) = config.workspace_env {
             env.apply(&mut cmd);
         }

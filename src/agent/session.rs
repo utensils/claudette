@@ -100,7 +100,6 @@ impl PersistentSession {
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        crate::env::enriched_env().apply(&mut cmd);
 
         sanitize_claude_subprocess_env(&mut cmd);
 

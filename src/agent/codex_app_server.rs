@@ -148,7 +148,6 @@ impl CodexAppServerSession {
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        crate::env::enriched_env().apply(&mut cmd);
 
         if let Some(env) = options.workspace_env.as_ref() {
             env.apply(&mut cmd);

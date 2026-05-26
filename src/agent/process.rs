@@ -89,19 +89,18 @@ pub async fn run_turn(
     crate::missing_cli::precheck_cwd(working_dir)?;
 
     let claude_path = resolve_claude_path().await;
-    let mut cmd = Command::new(&claude_path);
-    cmd.no_console_window();
-    cmd.args(&args)
-        .current_dir(working_dir)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    crate::env::enriched_env().apply(&mut cmd);
-
-    if has_attachments {
-        cmd.stdin(std::process::Stdio::piped());
-    } else {
-        cmd.stdin(std::process::Stdio::null());
-    }
+    let built_command =
+        build_agent_command(claude_path.as_os_str(), &args, working_dir, resolved_env);
+    let invocation_program = built_command.invocation_program.clone();
+    let invocation_args = built_command.invocation_args.clone();
+    let mut cmd = built_command.command;
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(if has_attachments {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        });
 
     sanitize_claude_subprocess_env(&mut cmd);
 
