@@ -6,7 +6,7 @@
   "filter_repo_label": "Repo",
   "filter_all_repos": "All repos",
   "filter_show_archived": "Show archived",
-  "filter_show_turn_count": "View turns count",
+  "filter_show_turn_count": "View turn count",
   "turn_count_title": "{{count}} completed turn(s) in the current session",
   "turn_count_aria": "{{count}} completed turns",
   "clear_repo_filter": "Clear repo filter",

@@ -51,6 +51,7 @@ export interface PersistedViewStateV1 {
   sidebarGroupBy: SidebarGroupBy;
   sidebarRepoFilter: string;
   sidebarShowArchived: boolean;
+  sidebarShowTurnCount: boolean;
   selectedWorkspaceId: string | null;
   selectedSessionIdByWorkspaceId: Record<string, string>;
   repoCollapsed: Record<string, boolean>;
@@ -341,6 +342,8 @@ function parsePersistedViewState(raw: string | null): PersistedViewState | null 
     sidebarRepoFilter: typeof parsed.sidebarRepoFilter === "string" ? parsed.sidebarRepoFilter : "all",
     sidebarShowArchived:
       typeof parsed.sidebarShowArchived === "boolean" ? parsed.sidebarShowArchived : false,
+    sidebarShowTurnCount:
+      typeof parsed.sidebarShowTurnCount === "boolean" ? parsed.sidebarShowTurnCount : false,
     selectedWorkspaceId:
       typeof parsed.selectedWorkspaceId === "string" || parsed.selectedWorkspaceId === null
         ? parsed.selectedWorkspaceId
@@ -455,6 +458,7 @@ export function buildPersistedViewState(state: AppState): PersistedViewStateV1 {
     sidebarGroupBy: state.sidebarGroupBy,
     sidebarRepoFilter: state.sidebarRepoFilter,
     sidebarShowArchived: state.sidebarShowArchived,
+    sidebarShowTurnCount: state.sidebarShowTurnCount,
     selectedWorkspaceId: state.selectedWorkspaceId,
     selectedSessionIdByWorkspaceId: state.selectedSessionIdByWorkspaceId,
     repoCollapsed: state.repoCollapsed,
@@ -603,6 +607,7 @@ export function applyPersistedViewState(
         ? persisted.sidebarRepoFilter
         : "all",
     sidebarShowArchived: persisted.sidebarShowArchived,
+    sidebarShowTurnCount: persisted.sidebarShowTurnCount,
     selectedWorkspaceId,
     selectedSessionIdByWorkspaceId: filteredRecord(
       persisted.selectedSessionIdByWorkspaceId,
