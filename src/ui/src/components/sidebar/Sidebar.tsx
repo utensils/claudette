@@ -25,7 +25,7 @@ import {
   interruptPtyForeground,
 } from "../../services/tauri";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ, FolderSearch } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ, FolderSearch, MessageSquare } from "lucide-react";
 import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
 import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
@@ -104,6 +104,10 @@ export const Sidebar = memo(function Sidebar() {
   const setSidebarRepoFilter = useAppStore((s) => s.setSidebarRepoFilter);
   const sidebarShowArchived = useAppStore((s) => s.sidebarShowArchived);
   const setSidebarShowArchived = useAppStore((s) => s.setSidebarShowArchived);
+  const sidebarShowTurnCount = useAppStore((s) => s.sidebarShowTurnCount);
+  const setSidebarShowTurnCount = useAppStore((s) => s.setSidebarShowTurnCount);
+  const selectedSessionIdByWorkspaceId = useAppStore((s) => s.selectedSessionIdByWorkspaceId);
+  const completedTurns = useAppStore((s) => s.completedTurns);
   const repoCollapsed = useAppStore((s) => s.repoCollapsed);
   const toggleRepoCollapsed = useAppStore((s) => s.toggleRepoCollapsed);
   const statusGroupCollapsed = useAppStore((s) => s.statusGroupCollapsed);
@@ -824,6 +828,23 @@ export const Sidebar = memo(function Sidebar() {
             );
           })()}
         </div>
+        {(() => {
+          if (!sidebarShowTurnCount) return null;
+          const sessionId = selectedSessionIdByWorkspaceId[ws.id];
+          if (!sessionId) return null;
+          const turnCount = completedTurns[sessionId]?.length ?? 0;
+          if (turnCount === 0) return null;
+          return (
+            <span
+              className={styles.turnCountBadge}
+              title={t("turn_count_title", { count: turnCount })}
+              aria-label={t("turn_count_aria", { count: turnCount })}
+            >
+              <MessageSquare size={10} aria-hidden="true" />
+              <span className={styles.turnCountNumber}>{turnCount}</span>
+            </span>
+          );
+        })()}
         <WorkspaceScmLinkIcon workspaceId={ws.id} />
         <div className={styles.wsActions}>
           {ws.status === "Active" ? (
@@ -932,6 +953,14 @@ export const Sidebar = memo(function Sidebar() {
                   onChange={(e) => setSidebarShowArchived(e.target.checked)}
                 />
                 <span className={styles.filterLabel}>{t("filter_show_archived")}</span>
+              </label>
+              <label className={`${styles.filterRow} ${styles.filterCheckboxRow}`}>
+                <input
+                  type="checkbox"
+                  checked={sidebarShowTurnCount}
+                  onChange={(e) => setSidebarShowTurnCount(e.target.checked)}
+                />
+                <span className={styles.filterLabel}>{t("filter_show_turn_count")}</span>
               </label>
             </div>
           )}

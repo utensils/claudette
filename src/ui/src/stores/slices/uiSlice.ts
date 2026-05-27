@@ -34,6 +34,7 @@ export interface UiSlice {
   sidebarGroupBy: "status" | "repo";
   sidebarRepoFilter: string; // repo ID or "all"
   sidebarShowArchived: boolean;
+  sidebarShowTurnCount: boolean;
   manualWorkspaceOrderByRepo: Record<string, "manual">;
   repoCollapsed: Record<string, boolean>;
   statusGroupCollapsed: Record<string, boolean>;
@@ -50,6 +51,7 @@ export interface UiSlice {
   setSidebarGroupBy: (g: "status" | "repo") => void;
   setSidebarRepoFilter: (id: string) => void;
   setSidebarShowArchived: (show: boolean) => void;
+  setSidebarShowTurnCount: (show: boolean) => void;
   setManualWorkspaceOrderByRepo: (
     modes: Record<string, "manual">,
   ) => void;
@@ -172,6 +174,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   sidebarGroupBy: "repo",
   sidebarRepoFilter: "all",
   sidebarShowArchived: false,
+  sidebarShowTurnCount: false,
   manualWorkspaceOrderByRepo: {},
   repoCollapsed: {},
   statusGroupCollapsed: {},
@@ -190,6 +193,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   setSidebarGroupBy: (g) => set({ sidebarGroupBy: g }),
   setSidebarRepoFilter: (id) => set({ sidebarRepoFilter: id }),
   setSidebarShowArchived: (show) => set({ sidebarShowArchived: show }),
+  setSidebarShowTurnCount: (show) => set({ sidebarShowTurnCount: show }),
   setManualWorkspaceOrderByRepo: (modes) =>
     set({ manualWorkspaceOrderByRepo: modes }),
   markWorkspaceOrderManual: (repoId) =>
