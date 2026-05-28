@@ -57,7 +57,8 @@ export function is1mContextModel(modelId: string): boolean {
 }
 
 const NON_1M_FALLBACKS: Record<string, string> = {
-  "opus": "claude-opus-4-7",
+  "opus": "claude-opus-4-8",
+  "claude-opus-4-7[1m]": "claude-opus-4-7",
   "claude-sonnet-4-6[1m]": "sonnet",
   "claude-opus-4-6[1m]": "claude-opus-4-6",
 };
@@ -74,11 +75,13 @@ export const MODELS: readonly Model[] = [
   // We optimize for Max/Team/Enterprise (Claudette's primary audience), so only Sonnet 1M
   // carries the indicator; Pro users selecting Opus 1M see no warning even though it
   // counts against their extra-usage allotment.
-  { id: "opus", label: "Opus 4.7 1M", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
-  { id: "claude-opus-4-7", label: "Opus 4.7", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
+  { id: "opus", label: "Opus 4.8 1M", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
+  { id: "claude-opus-4-8", label: "Opus 4.8", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
   { id: "sonnet", label: "Sonnet 4.6", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
   { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M", group: "Claude Code", extraUsage: true, contextWindowTokens: 1_000_000 },
   { id: "haiku", label: "Haiku 4.5", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
+  { id: "claude-opus-4-7", label: "Opus 4.7", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
+  { id: "claude-opus-4-7[1m]", label: "Opus 4.7 1M", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 1_000_000 },
   { id: "claude-opus-4-6", label: "Opus 4.6", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
   { id: "claude-opus-4-6[1m]", label: "Opus 4.6 1M", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 1_000_000 },
   { id: "claude-opus-4-5", label: "Opus 4.5", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
