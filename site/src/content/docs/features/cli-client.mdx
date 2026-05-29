@@ -151,11 +151,11 @@ Boolean flags are tri-state — pass `--plan` to force on, `--no-plan` to force 
 
 | Flag | Values | Effect |
 |---|---|---|
-| `--model` | `opus`, `sonnet`, `haiku`, `claude-opus-4-7`, ... | Override model for this turn |
+| `--model` | `opus`, `sonnet`, `haiku`, `claude-opus-4-8`, ... | Override model for this turn |
 | `--plan` / `--no-plan` | — | Plan mode (read-only until approved) |
 | `--thinking` / `--no-thinking` | — | Extended thinking |
 | `--fast` / `--no-fast` | — | Fast mode (built-in support: Opus 4.6) |
-| `--effort` | `low`, `medium`, `high`, `xhigh`, `max` | Reasoning effort (`xhigh` requires Opus 4.7) |
+| `--effort` | `low`, `medium`, `high`, `xhigh`, `max` | Reasoning effort (`xhigh` requires Opus 4.7+) |
 | `--chrome` / `--no-chrome` | — | Chrome browser tool |
 | `--disable-1m-context` | — | Suppress Max-plan auto-upgrade to a 1M context window |
 | `--permission` | `default`, `acceptEdits`, `bypassPermissions` | Permission level |
