@@ -253,7 +253,7 @@ describe("applySelectedModel", () => {
 
       expect(appStore.setSelectedModel).toHaveBeenCalledWith(
         "sess-1",
-        "claude-opus-4-7",
+        "claude-opus-4-8",
         "anthropic",
       );
       expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();

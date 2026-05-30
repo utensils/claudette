@@ -94,6 +94,13 @@ const PRICING_TABLE: &[(&str, ModelPricing)] = &[
     ),
     // -- Anthropic (only used when local-aggregating, e.g. via Pi) -----
     (
+        "claude-opus-4-8",
+        ModelPricing {
+            prompt_per_mtok_usd: 15.00,
+            completion_per_mtok_usd: 75.00,
+        },
+    ),
+    (
         "claude-opus-4-7",
         ModelPricing {
             prompt_per_mtok_usd: 15.00,

@@ -20,7 +20,7 @@ describe("modelRegistry", () => {
     }
   });
 
-  // `"opus"` is the 1M alias of Opus 4.7 whose id lacks the `[1m]` suffix
+  // `"opus"` is the 1M alias of Opus 4.8 whose id lacks the `[1m]` suffix
   // other 1M variants use. Keep the explicit `id === "opus"` check — removing
   // it would silently misclassify the alias as a 200k model.
   it("1M-context variants report 1_000_000", () => {
@@ -63,7 +63,8 @@ describe("modelRegistry", () => {
 
   describe("get1mFallback", () => {
     it("maps 1M models to their 200K equivalents", () => {
-      expect(get1mFallback("opus")).toBe("claude-opus-4-7");
+      expect(get1mFallback("opus")).toBe("claude-opus-4-8");
+      expect(get1mFallback("claude-opus-4-7[1m]")).toBe("claude-opus-4-7");
       expect(get1mFallback("claude-sonnet-4-6[1m]")).toBe("sonnet");
       expect(get1mFallback("claude-opus-4-6[1m]")).toBe("claude-opus-4-6");
     });
