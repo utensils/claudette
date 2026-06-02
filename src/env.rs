@@ -150,6 +150,17 @@ fn name_matches_built_in_deny(name: &str) -> bool {
     BUILT_IN_DENY_PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
+/// The hardcoded built-in denylist (names + a note for prefix groups),
+/// exposed for the Settings UI so users can see what is always filtered.
+/// Returns owned Strings so the Tauri command can serialize them directly.
+pub fn built_in_denylist() -> Vec<String> {
+    let mut out: Vec<String> = BUILT_IN_DENY.iter().map(|s| s.to_string()).collect();
+    // Represent prefix groups as a glob-ish label so the UI can show them.
+    out.extend(BUILT_IN_DENY_PREFIXES.iter().map(|p| format!("{p}*")));
+    out.sort();
+    out
+}
+
 /// Apply the built-in and user-supplied denylist to a captured env
 /// map. Returns `(kept, dropped_names)`. Invalid user globs are
 /// silently ignored (logged elsewhere) so a malformed Settings entry
@@ -212,6 +223,20 @@ pub fn probe_shell_env_with_shell(shell: &std::path::Path) -> Option<BTreeMap<St
         .spawn()
         .ok()?;
 
+    // Drain stdout on a dedicated thread so a large env dump can't fill the
+    // OS pipe buffer (~64KB) and wedge the child on write() — which would
+    // make the wait loop below always time out and kill the child, yielding
+    // no shell-env plus a 5s stall. See #990 review.
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut out) = stdout {
+            use std::io::Read;
+            let _ = out.read_to_end(&mut buf);
+        }
+        buf
+    });
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let status = loop {
         match child.try_wait() {
@@ -229,14 +254,13 @@ pub fn probe_shell_env_with_shell(shell: &std::path::Path) -> Option<BTreeMap<St
     }?;
 
     if !status.success() {
+        // The reader thread observes EOF once the (killed) child's stdout
+        // closes; join to avoid leaking the thread.
+        let _ = reader.join();
         return None;
     }
 
-    let mut buf = Vec::new();
-    if let Some(mut out) = child.stdout.take() {
-        use std::io::Read;
-        let _ = out.read_to_end(&mut buf);
-    }
+    let buf = reader.join().ok()?;
     let parsed = parse_env_dump(&buf);
     if parsed.is_empty() {
         None
@@ -612,6 +636,13 @@ where
 /// [`crate::env_provider::resolve_with_registry`] instead, which now
 /// merges shell-env at precedence 0 plus all per-workspace
 /// providers on top.
+///
+/// Note: this does NOT consult the `shell_env:disabled` toggle (the lib
+/// crate has no DB handle and must not gain one). It is not on the
+/// production spawn path — production goes through the dispatcher, which
+/// honors the disabled flag via `load_disabled_providers`. After the
+/// recent merge this is only exercised by tests (e.g. the
+/// `mcp_supervisor` regression test).
 pub fn enriched_env() -> crate::env_provider::ResolvedEnv {
     use crate::env_provider::types::EnvMap;
     use crate::env_provider::{ResolvedEnv, ResolvedSource};
@@ -1043,7 +1074,9 @@ mod tests {
     fn shell_env_returns_none_before_set() {
         // SHELL_ENV is process-global. Acquire the test lock to ensure no
         // other test has set it before we assert the None contract.
-        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         invalidate_shell_env();
         assert!(
             shell_env().is_none(),
@@ -1454,7 +1487,9 @@ mod tests {
 
     #[test]
     fn invalidate_shell_env_clears_cache() {
-        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::BTreeMap;
         let mut vars = BTreeMap::new();
         vars.insert("FOO".into(), "bar".into());
@@ -1477,7 +1512,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn prewarm_with_shim_populates_cache_with_diff() {
-        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let shim = tmp.path().join("rcshell");
@@ -1530,7 +1567,9 @@ mod tests {
 
     #[test]
     fn shell_path_reads_from_shell_env_when_present() {
-        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::BTreeMap;
         let mut vars = BTreeMap::new();
         vars.insert("PATH".into(), "/from-shell".into());
@@ -1550,7 +1589,9 @@ mod tests {
 
     #[test]
     fn enriched_env_contains_shell_env_vars() {
-        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::BTreeMap;
         let mut vars = BTreeMap::new();
         vars.insert("CUSTOM".into(), "user-set".into());
@@ -1615,5 +1656,56 @@ mod tests {
         assert_eq!(added.len(), 1);
         assert!(added.contains_key("ADDED"));
         assert!(!added.contains_key("HOME"), "HOME is unchanged, not added");
+    }
+
+    #[test]
+    fn built_in_denylist_contains_known_entries_and_is_sorted() {
+        let list = built_in_denylist();
+        assert!(
+            list.contains(&"LD_PRELOAD".to_string()),
+            "built-in denylist must include the LD_PRELOAD injection vector",
+        );
+        assert!(
+            list.contains(&"STARSHIP_*".to_string()),
+            "built-in denylist must surface the STARSHIP_ prefix group as a glob",
+        );
+        let mut sorted = list.clone();
+        sorted.sort();
+        assert_eq!(list, sorted, "built-in denylist must be returned sorted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_drains_large_stdout_without_deadlock() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let shim = tmp.path().join("bigshell");
+        // Emit ~200KB of NUL-delimited env so we exceed the pipe buffer.
+        let mut f = std::fs::File::create(&shim).unwrap();
+        writeln!(f, "#!/bin/sh").unwrap();
+        // BIGVAR with a ~200000-char value, NUL-terminated, plus a sentinel.
+        writeln!(
+            f,
+            r#"printf 'BIGVAR=%s\0SENTINEL=ok\0' "$(head -c 200000 < /dev/zero | tr '\0' 'x')""#
+        )
+        .unwrap();
+        drop(f);
+        let mut perm = std::fs::metadata(&shim).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&shim, perm).unwrap();
+
+        let parsed = probe_shell_env_with_shell(shim.as_path())
+            .expect("probe must not deadlock on a large env dump");
+        assert_eq!(
+            parsed.get("SENTINEL").map(String::as_str),
+            Some("ok"),
+            "sentinel var must survive a large concurrent stdout drain",
+        );
+        assert_eq!(
+            parsed.get("BIGVAR").map(|v| v.len()),
+            Some(200000),
+            "large var must be captured in full without truncation",
+        );
     }
 }

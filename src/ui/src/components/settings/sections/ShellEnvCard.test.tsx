@@ -160,4 +160,131 @@ describe("ShellEnvCard", () => {
     expect(container.textContent).toContain("HOME");
     expect(container.textContent).toMatch(/1 variables inherited/i);
   });
+
+  it("hydrates the deny textarea from denied_user on snapshot load", async () => {
+    useAppStore.setState({
+      refreshShellEnv: vi.fn().mockResolvedValue(undefined),
+      reloadShellEnv: vi.fn().mockResolvedValue(undefined),
+      setShellEnvDenylist: vi.fn().mockResolvedValue(undefined),
+      setShellEnvDisabled: vi.fn().mockResolvedValue(undefined),
+      shellEnv: {
+        captured_at_ms: Date.now(),
+        forwarded: [],
+        inherited: [],
+        denied_built_in: [],
+        denied_user: ["AWS_*", "STRIPE_*"],
+        disabled: false,
+        source_files: [],
+        error: null,
+      },
+    });
+    const container = await renderCard();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    // Hydration runs via useEffect; flush pending microtasks
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(textarea!.value).toBe("AWS_*\nSTRIPE_*");
+  });
+
+  it("does not call setShellEnvDenylist on focus+blur without changes", async () => {
+    const setDenylistSpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({
+      refreshShellEnv: vi.fn().mockResolvedValue(undefined),
+      reloadShellEnv: vi.fn().mockResolvedValue(undefined),
+      setShellEnvDenylist: setDenylistSpy,
+      setShellEnvDisabled: vi.fn().mockResolvedValue(undefined),
+      shellEnv: {
+        captured_at_ms: Date.now(),
+        forwarded: [],
+        inherited: [],
+        denied_built_in: [],
+        denied_user: ["AWS_*"],
+        disabled: false,
+        source_files: [],
+        error: null,
+      },
+    });
+    const container = await renderCard();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+
+    // Flush hydration effect
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(textarea!.value).toBe("AWS_*");
+
+    // Focus then blur without changing value
+    await act(async () => {
+      textarea!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      textarea!.dispatchEvent(new FocusEvent("focus"));
+      textarea!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+
+    expect(setDenylistSpy).not.toHaveBeenCalled();
+  });
+
+  it("calls setShellEnvDenylist with parsed array when draft diverges from denied_user on blur", async () => {
+    // NOTE: triggering React's synthetic onChange on a controlled textarea
+    // without @testing-library is unreliable in happy-dom. We test the blur
+    // guard via a scenario where denyDraft legitimately diverges from
+    // denied_user:
+    //   1. Render with denied_user = ["AWS_*", "STRIPE_*"]
+    //      → hydration sets denyDraft = "AWS_*\nSTRIPE_*"
+    //   2. User focuses the textarea (focus-gate locks)
+    //   3. Backend/store updates denied_user = [] while textarea is focused
+    //      → hydration is gated, so denyDraft stays "AWS_*\nSTRIPE_*"
+    //   4. User blurs → guard sees draft ["AWS_*","STRIPE_*"] ≠ [] → calls
+    //      setShellEnvDenylist(["AWS_*","STRIPE_*"])
+    const setDenylistSpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({
+      refreshShellEnv: vi.fn().mockResolvedValue(undefined),
+      reloadShellEnv: vi.fn().mockResolvedValue(undefined),
+      setShellEnvDenylist: setDenylistSpy,
+      setShellEnvDisabled: vi.fn().mockResolvedValue(undefined),
+      shellEnv: {
+        captured_at_ms: Date.now(),
+        forwarded: [],
+        inherited: [],
+        denied_built_in: [],
+        denied_user: ["AWS_*", "STRIPE_*"],
+        disabled: false,
+        source_files: [],
+        error: null,
+      },
+    });
+    const container = await renderCard();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+
+    // Flush hydration effect
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(textarea!.value).toBe("AWS_*\nSTRIPE_*");
+
+    // Focus locks the hydration gate
+    await act(async () => {
+      textarea!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      textarea!.dispatchEvent(new FocusEvent("focus"));
+    });
+
+    // Backend update clears denied_user while textarea is focused
+    await act(async () => {
+      useAppStore.setState((state) => ({
+        shellEnv: state.shellEnv
+          ? { ...state.shellEnv, denied_user: [] }
+          : state.shellEnv,
+      }));
+    });
+
+    // Blur: denyDraft = "AWS_*\nSTRIPE_*", denied_user = [] — they differ
+    await act(async () => {
+      textarea!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+
+    expect(setDenylistSpy).toHaveBeenCalledWith(["AWS_*", "STRIPE_*"]);
+  });
 });

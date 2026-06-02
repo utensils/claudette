@@ -1317,7 +1317,9 @@ mod tests {
         // contract that apply() correctly forwards a synthetic var to a
         // tokio::process::Command, so a future refactor can't silently drop
         // the inheritance.
-        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::env::invalidate_shell_env();
 
         let mut vars = std::collections::BTreeMap::new();

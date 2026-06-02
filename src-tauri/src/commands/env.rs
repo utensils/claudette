@@ -292,7 +292,8 @@ pub(crate) fn load_disabled_providers(db: &Database, repo_id: &str) -> HashSet<S
     // We list all app settings with the repo+env_provider prefix.
     // Pattern is precise; rusqlite does this cheaply via LIKE.
     let prefix = format!("repo:{repo_id}:env_provider:");
-    db.list_app_settings_with_prefix(&prefix)
+    let mut set: HashSet<String> = db
+        .list_app_settings_with_prefix(&prefix)
         .unwrap_or_default()
         .into_iter()
         .filter_map(|(key, value)| {
@@ -305,7 +306,23 @@ pub(crate) fn load_disabled_providers(db: &Database, repo_id: &str) -> HashSet<S
                 None
             }
         })
-        .collect()
+        .collect();
+
+    // The global shell-env tier is toggled via a flat app_settings key
+    // (not the per-repo env_provider:{plugin}:enabled convention), so
+    // fold it into the disabled set here. The dispatcher treats
+    // "shell-env" in `disabled` as "skip the synthetic source".
+    if db
+        .get_app_setting("shell_env:disabled")
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        set.insert("shell-env".to_string());
+    }
+
+    set
 }
 
 /// Layer a workspace's stored input values onto an already-resolved env.
@@ -1348,13 +1365,28 @@ pub async fn list_shell_env(state: State<'_, AppState>) -> Result<ShellEnvSnapsh
         .map(|v| v == "true")
         .unwrap_or(false);
 
+    // The user-configured deny patterns, read once so both the
+    // probe-not-run early return and the success path surface them. The
+    // Settings UI uses these to hydrate the denylist editor.
+    let denied_user: Vec<String> = db
+        .get_app_setting("shell_env:denylist")
+        .ok()
+        .flatten()
+        .map(|s| {
+            s.lines()
+                .map(str::to_string)
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
     let Some(env) = claudette::env::shell_env() else {
         return Ok(ShellEnvSnapshot {
             captured_at_ms: 0,
             forwarded: Vec::new(),
             inherited: Vec::new(),
-            denied_built_in: Vec::new(),
-            denied_user: Vec::new(),
+            denied_built_in: claudette::env::built_in_denylist(),
+            denied_user,
             disabled,
             source_files: shell_rc_file_list(),
             error: Some("Shell environment probe has not completed yet.".to_string()),
@@ -1391,8 +1423,8 @@ pub async fn list_shell_env(state: State<'_, AppState>) -> Result<ShellEnvSnapsh
         captured_at_ms,
         forwarded,
         inherited,
-        denied_built_in: Vec::new(),
-        denied_user: Vec::new(),
+        denied_built_in: claudette::env::built_in_denylist(),
+        denied_user,
         disabled,
         source_files: shell_rc_file_list(),
         error: None,
@@ -1575,13 +1607,29 @@ pub fn setup_env_watcher(app: AppHandle) {
     let state = app.state::<AppState>();
     let cache = Arc::clone(&state.env_cache);
     let app_for_cb = app.clone();
+    let db_path_for_cb = state.db_path.clone();
     let trust_probe_versions: Arc<Mutex<HashMap<(String, String), u64>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let watcher = match EnvWatcher::new(Arc::new(move |worktree, plugin| {
         if plugin == "shell-env" {
             // Synthetic global source — no entry in EnvCache, no trust probe.
-            // Just invalidate the shell-env cache and notify UI.
+            // Invalidate the shell-env cache and notify the UI.
             claudette::env::invalidate_shell_env();
+            // Re-probe immediately so the cache stays warm — otherwise the
+            // dispatcher's shell_env_is_cached() gate goes false and
+            // shell-env silently drops out of every spawn until the next
+            // manual Reload (#990 review). Mirrors `reload_shell_env`.
+            let user_deny: Vec<String> = Database::open(&db_path_for_cb)
+                .ok()
+                .and_then(|db| db.get_app_setting("shell_env:denylist").ok().flatten())
+                .map(|s| {
+                    s.lines()
+                        .map(str::to_string)
+                        .filter(|l| !l.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            std::thread::spawn(move || claudette::env::prewarm_shell_env(user_deny));
             let _ = app_for_cb.emit(
                 "env-cache-invalidated",
                 EnvCacheInvalidatedPayload {
@@ -2314,5 +2362,39 @@ mod tests {
 
         // Cache: the entry is gone.
         assert!(cache.get_fresh(worktree, "env-direnv").is_none());
+    }
+
+    #[test]
+    fn load_disabled_providers_folds_in_shell_env_global_toggle() {
+        use claudette::db::Database;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path).unwrap();
+
+        // Absent key = enabled → shell-env not in the set.
+        let disabled = load_disabled_providers(&db, "repo-1");
+        assert!(
+            !disabled.contains("shell-env"),
+            "shell-env must not be disabled when the global toggle is unset",
+        );
+
+        // Global toggle on → shell-env folded into the disabled set so
+        // the dispatcher skips the synthetic source.
+        db.set_app_setting("shell_env:disabled", "true").unwrap();
+        let disabled = load_disabled_providers(&db, "repo-1");
+        assert!(
+            disabled.contains("shell-env"),
+            "shell_env:disabled=true must inject \"shell-env\" into the disabled set",
+        );
+
+        // Toggle back off → shell-env drops out again.
+        db.set_app_setting("shell_env:disabled", "false").unwrap();
+        let disabled = load_disabled_providers(&db, "repo-1");
+        assert!(
+            !disabled.contains("shell-env"),
+            "shell_env:disabled=false must not disable shell-env",
+        );
     }
 }

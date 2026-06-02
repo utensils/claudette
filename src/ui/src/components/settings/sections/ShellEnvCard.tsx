@@ -1,6 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
 import styles from "./ShellEnvCard.module.css";
+
+const parseDraft = (s: string): string[] =>
+  s
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
 
 export function ShellEnvCard() {
   const shellEnv = useAppStore((s) => s.shellEnv);
@@ -11,19 +17,22 @@ export function ShellEnvCard() {
 
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [denyDraft, setDenyDraft] = useState<string>("");
+  const textareaFocused = useRef(false);
 
   useEffect(() => {
     void refreshShellEnv();
   }, [refreshShellEnv]);
 
-  // Hydrate the textarea from the persisted denylist so a focus/blur can't
-  // accidentally clear the user's denylist.
+  // Hydrate the deny draft from the persisted snapshot whenever it changes,
+  // but only when the textarea is not focused (to avoid clobbering in-progress
+  // edits). Focus-gating handles the empty->repopulate case too: a no-op
+  // focus/blur never persists (see the blur guard below), so a saved denylist
+  // can't be silently cleared.
   useEffect(() => {
-    if (!shellEnv) return;
-    if (denyDraft !== "") return;
-    if (shellEnv.denied_user.length === 0) return;
-    setDenyDraft(shellEnv.denied_user.join("\n"));
-  }, [shellEnv, denyDraft]);
+    if (textareaFocused.current) return;
+    const persisted = shellEnv?.denied_user ?? [];
+    setDenyDraft(persisted.join("\n"));
+  }, [shellEnv?.denied_user]);
 
   const sources = shellEnv?.source_files.join(", ") ?? "—";
 
@@ -129,13 +138,19 @@ export function ShellEnvCard() {
       <textarea
         value={denyDraft}
         onChange={(e) => setDenyDraft(e.target.value)}
+        onFocus={() => {
+          textareaFocused.current = true;
+        }}
         onBlur={() => {
-          void setShellEnvDenylist(
-            denyDraft
-              .split("\n")
-              .map((l) => l.trim())
-              .filter(Boolean),
-          );
+          textareaFocused.current = false;
+          const next = parseDraft(denyDraft);
+          const current = shellEnv?.denied_user ?? [];
+          const same =
+            next.length === current.length &&
+            next.every((v, i) => v === current[i]);
+          if (!same) {
+            void setShellEnvDenylist(next);
+          }
         }}
         rows={4}
         className={styles.denyTextarea}
