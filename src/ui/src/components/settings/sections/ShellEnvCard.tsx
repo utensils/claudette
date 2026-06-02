@@ -16,6 +16,15 @@ export function ShellEnvCard() {
     void refreshShellEnv();
   }, [refreshShellEnv]);
 
+  // Hydrate the textarea from the persisted denylist so a focus/blur can't
+  // accidentally clear the user's denylist.
+  useEffect(() => {
+    if (!shellEnv) return;
+    if (denyDraft !== "") return;
+    if (shellEnv.denied_user.length === 0) return;
+    setDenyDraft(shellEnv.denied_user.join("\n"));
+  }, [shellEnv, denyDraft]);
+
   const sources = shellEnv?.source_files.join(", ") ?? "—";
 
   const lastRefreshed = useMemo(() => {
