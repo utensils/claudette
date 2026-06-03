@@ -14,6 +14,7 @@ const TRAY_ES: &str = include_str!("../locales/es/tray.json");
 const TRAY_PT_BR: &str = include_str!("../locales/pt-BR/tray.json");
 const TRAY_JA: &str = include_str!("../locales/ja/tray.json");
 const TRAY_ZH_CN: &str = include_str!("../locales/zh-CN/tray.json");
+const TRAY_DE: &str = include_str!("../locales/de/tray.json");
 
 /// Supported locales. Mirrors `SUPPORTED_LANGUAGES` in `src/ui/src/i18n.ts`;
 /// keep both lists in sync. Unknown values from the DB fall back to `En`.
@@ -24,6 +25,7 @@ pub enum Locale {
     PtBr,
     Ja,
     ZhCn,
+    De,
 }
 
 impl Locale {
@@ -36,6 +38,7 @@ impl Locale {
             "pt-BR" => Locale::PtBr,
             "ja" => Locale::Ja,
             "zh-CN" => Locale::ZhCn,
+            "de" => Locale::De,
             _ => Locale::En,
         }
     }
@@ -47,6 +50,7 @@ impl Locale {
             Locale::PtBr => pt_br_store(),
             Locale::Ja => ja_store(),
             Locale::ZhCn => zh_cn_store(),
+            Locale::De => de_store(),
         }
     }
 }
@@ -74,6 +78,11 @@ fn ja_store() -> &'static HashMap<String, String> {
 fn zh_cn_store() -> &'static HashMap<String, String> {
     static ZH_CN: OnceLock<HashMap<String, String>> = OnceLock::new();
     ZH_CN.get_or_init(|| parse_locale(TRAY_ZH_CN, "zh-CN"))
+}
+
+fn de_store() -> &'static HashMap<String, String> {
+    static DE: OnceLock<HashMap<String, String>> = OnceLock::new();
+    DE.get_or_init(|| parse_locale(TRAY_DE, "de"))
 }
 
 fn parse_locale(raw: &str, tag: &str) -> HashMap<String, String> {
@@ -129,13 +138,14 @@ mod tests {
         assert_eq!(Locale::from_db_value(Some(" ja ")), Locale::Ja);
         assert_eq!(Locale::from_db_value(Some("zh-CN")), Locale::ZhCn);
         assert_eq!(Locale::from_db_value(Some(" zh-CN ")), Locale::ZhCn);
+        assert_eq!(Locale::from_db_value(Some("de")), Locale::De);
+        assert_eq!(Locale::from_db_value(Some(" de ")), Locale::De);
     }
 
     #[test]
     fn from_db_value_falls_back_to_english() {
         assert_eq!(Locale::from_db_value(None), Locale::En);
         assert_eq!(Locale::from_db_value(Some("")), Locale::En);
-        assert_eq!(Locale::from_db_value(Some("de")), Locale::En);
         assert_eq!(Locale::from_db_value(Some("xx-XX")), Locale::En);
     }
 
@@ -146,6 +156,7 @@ mod tests {
         assert_eq!(t(Locale::PtBr, "menu_settings"), "Configurações");
         assert_eq!(t(Locale::Ja, "menu_settings"), "設定");
         assert_eq!(t(Locale::ZhCn, "menu_settings"), "设置");
+        assert_eq!(t(Locale::De, "menu_settings"), "Einstellungen");
     }
 
     #[test]
@@ -157,7 +168,13 @@ mod tests {
         );
         assert_eq!(body, "vast-daffodil is waiting for your response");
 
-        for locale in [Locale::Es, Locale::PtBr, Locale::Ja, Locale::ZhCn] {
+        for locale in [
+            Locale::Es,
+            Locale::PtBr,
+            Locale::Ja,
+            Locale::ZhCn,
+            Locale::De,
+        ] {
             let body = t_args(locale, "notification_body", &[("ws_name", "vast-daffodil")]);
             assert!(
                 body.contains("vast-daffodil"),
@@ -183,6 +200,7 @@ mod tests {
             ("pt-BR", pt_br_store()),
             ("ja", ja_store()),
             ("zh-CN", zh_cn_store()),
+            ("de", de_store()),
         ] {
             let other: std::collections::BTreeSet<_> = store.keys().collect();
             let only_en: Vec<_> = en.difference(&other).collect();

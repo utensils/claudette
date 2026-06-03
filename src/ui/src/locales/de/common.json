@@ -1,0 +1,23 @@
+{
+  "cancel": "Abbrechen",
+  "save": "Speichern",
+  "delete": "Löschen",
+  "close": "Schließen",
+  "browse": "Durchsuchen",
+  "file_picker_unavailable": "Dateidialog nicht verfügbar — füge den Pfad oben ein. (Auf Linux: xdg-desktop-portal installieren für native Dialoge.)",
+  "file_picker_unavailable_attachment": "Dateidialog nicht verfügbar — zieh Dateien stattdessen direkt in den Composer. (Auf Linux: xdg-desktop-portal installieren für native Dialoge.)",
+  "copy": "Kopieren",
+  "copied": "Kopiert",
+  "add": "Hinzufügen",
+  "edit": "Bearbeiten",
+  "loading": "Lade…",
+  "error": "Fehler",
+  "open": "Öffnen",
+  "none": "Keine",
+  "custom": "Benutzerdefiniert",
+  "more": "Mehr",
+  "retry": "Erneut versuchen",
+  "skip": "Überspringen",
+  "done": "Fertig",
+  "back_to_app": "Zurück zur App"
+}
