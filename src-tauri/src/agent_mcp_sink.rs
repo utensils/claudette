@@ -23,6 +23,7 @@ use claudette::agent_mcp::protocol::{BridgePayload, BridgeResponse};
 use claudette::agent_mcp::tools::send_to_user::policy;
 use claudette::db::Database;
 use claudette::model::{Attachment, AttachmentOrigin};
+use claudette::scheduling::ScheduleTarget;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -219,7 +220,7 @@ fn schedule_wakeup(
     // is already running on a backend and doesn't get to choose for the
     // fired turn.
     match db.create_agent_wakeup(
-        &chat_session_id,
+        &ScheduleTarget::Session(chat_session_id),
         fire_at,
         &prompt,
         reason.as_deref(),
@@ -251,7 +252,7 @@ fn create_cron(
         Err(err) => return BridgeResponse::err(format!("open db: {err}")),
     };
     match db.create_agent_cron_task(
-        &chat_session_id,
+        &ScheduleTarget::Session(chat_session_id),
         name.as_deref(),
         &cron_expr,
         &prompt,

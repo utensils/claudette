@@ -951,6 +951,7 @@ async fn ensure_remote_control_monitor(
                     output_tokens: None,
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
+                    scheduled_task_id: None,
                 };
                 if let Ok(db) = Database::open(&db_path) {
                     let _ = db.insert_chat_message(&msg);
@@ -1035,6 +1036,7 @@ async fn ensure_remote_control_monitor(
                     output_tokens: None,
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
+                    scheduled_task_id: None,
                 };
                 let _ = db.insert_chat_message(&msg);
             }
@@ -1385,6 +1387,7 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            scheduled_task_id: None,
         }
     }
 

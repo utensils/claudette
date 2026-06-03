@@ -1129,12 +1129,18 @@ export function useAgentStream() {
   }, [addChatMessage]);
 
   // Backend-authored chat messages that are not tied to the normal GUI send
-  // path. Claude Remote Control uses this for remote-origin user prompts.
+  // path. Claude Remote Control uses this for remote-origin user prompts, and
+  // the scheduler uses it to render a fired prompt live. Dedup by id: these
+  // rows are also persisted (by the same id), so a reload re-reads them — and
+  // if a path ever emits the same message twice, we must not double-render.
   useEffect(() => {
     let active = true;
     const unlisten = listen<ChatMessage>("chat-message", (event) => {
       if (!active) return;
-      addChatMessage(event.payload.chat_session_id, event.payload);
+      const { chat_session_id: sessionId, id } = event.payload;
+      const existing = useAppStore.getState().chatMessages[sessionId];
+      if (existing?.some((m) => m.id === id)) return;
+      addChatMessage(sessionId, event.payload);
     });
     return () => {
       active = false;

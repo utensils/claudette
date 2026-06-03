@@ -82,5 +82,6 @@ pub(crate) fn make_chat_msg(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id: None,
     }
 }

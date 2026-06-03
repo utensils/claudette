@@ -11,3 +11,14 @@
   color: var(--text-primary);
   cursor: pointer;
 }
+
+/* Repo + workspace selects sit side by side; each field flexes to fill. */
+.targetRow {
+  display: flex;
+  gap: 12px;
+}
+
+.targetRow > * {
+  flex: 1;
+  min-width: 0;
+}

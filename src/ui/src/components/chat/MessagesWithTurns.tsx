@@ -870,7 +870,17 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                 }`}
               >
                 {msg.role === "User" && (
-                  <div className={styles.roleLabel}>{t("you_label")}</div>
+                  <div className={styles.roleLabel}>
+                    {t("you_label")}
+                    {msg.scheduled_task_id && (
+                      <span
+                        className={styles.scheduledBadge}
+                        title={t("scheduled_badge_title")}
+                      >
+                        {t("scheduled_badge")}
+                      </span>
+                    )}
+                  </div>
                 )}
                 {msg.role === "User" && msg.content.length > 0 && (
                   <MessageCopyButton

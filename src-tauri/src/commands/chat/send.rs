@@ -332,6 +332,7 @@ fn post_agent_auth_failure_message(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id: None,
     };
 
     match Database::open(db_path).and_then(|db| db.insert_chat_message(&message)) {
@@ -781,6 +782,7 @@ fn prepare_user_send(
     message_id: Option<String>,
     content: &str,
     attachments: Option<&[AttachmentInput]>,
+    scheduled_task_id: Option<String>,
 ) -> Result<PreparedUserSend, String> {
     let user_msg = ChatMessage {
         id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
@@ -796,6 +798,7 @@ fn prepare_user_send(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id,
     };
 
     let mut att_models: Vec<claudette::model::Attachment> = Vec::new();
@@ -1022,6 +1025,8 @@ pub async fn steer_queued_chat_message(
         message_id,
         &content,
         attachments.as_deref(),
+        // Steering re-sends a user-edited prompt; never a scheduled fire.
+        None,
     )?;
 
     // Steer goes straight to the live persistent session, so the harness
@@ -1088,7 +1093,7 @@ pub async fn steer_queued_chat_message(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
     target = "claudette::chat",
-    skip(content, mentioned_files, attachments, app, state),
+    skip(content, mentioned_files, attachments, scheduled_task_id, app, state),
     fields(
         chat_session_id = %session_id,
         message_id = message_id.as_deref(),
@@ -1114,6 +1119,10 @@ pub async fn send_chat_message(
     disable_1m_context: Option<bool>,
     backend_id: Option<String>,
     attachments: Option<Vec<AttachmentInput>>,
+    // Set by the scheduler when a scheduled task fires this prompt, so the
+    // persisted user message carries the task id for the "Scheduled" badge.
+    // `None` for ordinary user / IPC sends.
+    scheduled_task_id: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -1166,6 +1175,7 @@ pub async fn send_chat_message(
         message_id,
         &content,
         attachments.as_deref(),
+        scheduled_task_id,
     )?;
     // Resolve the backend runtime *before* persisting the user turn so
     // a harness/payload incompatibility (e.g. Pi + attachments) bails
@@ -1937,6 +1947,7 @@ pub async fn send_chat_message(
                 output_tokens: None,
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
+                scheduled_task_id: None,
             };
             if let Err(err) = db.insert_chat_message(&warning) {
                 // Logging-only: a missing warning shouldn't block the turn.
@@ -2885,6 +2896,7 @@ pub async fn send_chat_message(
                     output_tokens: None,
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
+                    scheduled_task_id: None,
                 };
                 let _ = db.insert_chat_message(&msg);
             }
@@ -3447,6 +3459,7 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            scheduled_task_id: None,
         }
     }
 

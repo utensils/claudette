@@ -30,11 +30,29 @@ impl std::str::FromStr for ScheduledTaskKind {
     }
 }
 
+/// Where a scheduled task dispatches when it fires. Chosen at creation and
+/// recorded on the row (`chat_session_id` + `create_new_session`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleTarget {
+    /// Reuse an existing chat session; its workspace is derived at creation.
+    Session(String),
+    /// Create a fresh chat session in this workspace each time the task fires
+    /// (so a recurring cron gets a clean session per run).
+    NewSessionInWorkspace(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledTask {
     pub id: String,
-    pub chat_session_id: String,
+    /// Target session for reuse-mode tasks. `None` when `create_new_session`
+    /// is true — those rows have no session until the scheduler makes a fresh
+    /// one in `workspace_id` at fire time.
+    pub chat_session_id: Option<String>,
     pub workspace_id: String,
+    /// When true, the scheduler creates a brand-new chat session in
+    /// `workspace_id` each time the task fires (so a recurring cron gets a
+    /// clean session per run) instead of dispatching into `chat_session_id`.
+    pub create_new_session: bool,
     pub kind: ScheduledTaskKind,
     pub name: Option<String>,
     pub prompt: String,

@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
-import { createCronRoutine, scheduleWakeup } from "../../services/tauri";
+import {
+  createCronRoutine,
+  listChatSessions,
+  scheduleWakeup,
+} from "../../services/tauri";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 import styles from "./CreateScheduledTaskModal.module.css";
 
 type TaskType = "wakeup" | "cron";
+
+/** Sentinel for the session dropdown's "create a fresh session each run"
+ *  choice. Distinct from any real session id. */
+const NEW_SESSION = "__new_session__";
 
 /** `Date` -> value for `<input type="datetime-local">` (local time, no tz). */
 function toDatetimeLocalValue(d: Date): string {
@@ -19,8 +27,7 @@ function toDatetimeLocalValue(d: Date): string {
 function looksLikeCron(expr: string): boolean {
   const trimmed = expr.trim();
   if (!trimmed) return false;
-  const fields = trimmed.split(/\s+/);
-  return fields.length === 5;
+  return trimmed.split(/\s+/).length === 5;
 }
 
 export function CreateScheduledTaskModal() {
@@ -28,25 +35,13 @@ export function CreateScheduledTaskModal() {
   const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
-  const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
+  const repositories = useAppStore((s) => s.repositories);
   const workspaces = useAppStore((s) => s.workspaces);
+  const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
+  const sessionsLoadedByWorkspace = useAppStore((s) => s.sessionsLoadedByWorkspace);
+  const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
   const loadScheduledTasks = useAppStore((s) => s.loadScheduledTasks);
   const activeSessionId = useAppStore(selectActiveSessionId);
-
-  /** Flat list of selectable sessions, with a label that disambiguates
-   *  across workspaces. */
-  const sessions = useMemo(() => {
-    const rows: { id: string; label: string }[] = [];
-    for (const [wsId, list] of Object.entries(sessionsByWorkspace)) {
-      const ws = workspaces.find((w) => w.id === wsId);
-      const wsLabel = ws?.branch_name ?? wsId.slice(0, 8);
-      for (const s of list) {
-        if (s.status === "Archived") continue;
-        rows.push({ id: s.id, label: `${wsLabel} · ${s.name}` });
-      }
-    }
-    return rows;
-  }, [sessionsByWorkspace, workspaces]);
 
   const prefillSessionId =
     typeof modalData.sessionId === "string" ? (modalData.sessionId as string) : null;
@@ -57,12 +52,46 @@ export function CreateScheduledTaskModal() {
   const prefillCron =
     typeof modalData.cronExpr === "string" ? (modalData.cronExpr as string) : "";
 
-  const [type, setType] = useState<TaskType>(() =>
-    prefillCron ? "cron" : "wakeup",
+  // Active (non-archived) workspaces for a repo, in sidebar order.
+  const workspacesForRepo = (repoId: string) =>
+    workspaces
+      .filter((w) => w.repository_id === repoId && w.status !== "Archived")
+      .sort((a, b) => a.sort_order - b.sort_order);
+
+  // Resolve the initial repo/workspace once, at mount, from the prefilled
+  // session (a `/schedule` from a chat), then the currently open workspace,
+  // then the first available workspace.
+  const [repoId, setRepoId] = useState<string>(() => {
+    const s = useAppStore.getState();
+    const seedWsId =
+      (prefillSessionId &&
+        Object.entries(s.sessionsByWorkspace).find(([, list]) =>
+          list.some((cs) => cs.id === prefillSessionId),
+        )?.[0]) ||
+      s.selectedWorkspaceId ||
+      s.workspaces.find((w) => w.status !== "Archived")?.id ||
+      "";
+    return s.workspaces.find((w) => w.id === seedWsId)?.repository_id ?? s.repositories[0]?.id ?? "";
+  });
+  const [workspaceId, setWorkspaceId] = useState<string>(() => {
+    const s = useAppStore.getState();
+    if (prefillSessionId) {
+      const hit = Object.entries(s.sessionsByWorkspace).find(([, list]) =>
+        list.some((cs) => cs.id === prefillSessionId),
+      );
+      if (hit) return hit[0];
+    }
+    return (
+      s.selectedWorkspaceId ||
+      s.workspaces.find((w) => w.status !== "Archived")?.id ||
+      ""
+    );
+  });
+  const [sessionTarget, setSessionTarget] = useState<string>(
+    () => prefillSessionId ?? activeSessionId ?? NEW_SESSION,
   );
-  const [sessionId, setSessionId] = useState<string>(
-    () => prefillSessionId ?? activeSessionId ?? sessions[0]?.id ?? "",
-  );
+
+  const [type, setType] = useState<TaskType>(() => (prefillCron ? "cron" : "wakeup"));
   const [fireAt, setFireAt] = useState<string>(() => {
     if (prefillFireAt) {
       const d = new Date(prefillFireAt);
@@ -74,20 +103,69 @@ export function CreateScheduledTaskModal() {
   const [name, setName] = useState<string>("");
   const [recurring, setRecurring] = useState<boolean>(true);
   const [prompt, setPrompt] = useState<string>(prefillPrompt);
+  const [loadingSessions, setLoadingSessions] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // If the picker has no value yet but sessions arrive, default to the active
-  // one (or the first available).
+  // Lazy-load the chosen workspace's sessions. SessionTabs only loads the
+  // open workspace, so unopened ones are blank until we fetch them here.
   useEffect(() => {
-    if (!sessionId && sessions.length > 0) {
-      setSessionId(activeSessionId ?? sessions[0].id);
-    }
-  }, [sessionId, sessions, activeSessionId]);
+    if (!workspaceId || sessionsLoadedByWorkspace[workspaceId]) return;
+    let cancelled = false;
+    setLoadingSessions(true);
+    listChatSessions(workspaceId)
+      .then((list) => {
+        if (!cancelled) setSessionsForWorkspace(workspaceId, list);
+      })
+      .catch(() => {
+        // Leave the dropdown with just "New session"; submit still works.
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSessions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, sessionsLoadedByWorkspace, setSessionsForWorkspace]);
+
+  // Keep the workspace consistent with the selected repo.
+  useEffect(() => {
+    const list = workspacesForRepo(repoId);
+    if (workspaceId && list.some((w) => w.id === workspaceId)) return;
+    setWorkspaceId(list[0]?.id ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repoId]);
+
+  const workspaceSessions = useMemo(
+    () =>
+      (sessionsByWorkspace[workspaceId] ?? []).filter((s) => s.status !== "Archived"),
+    [sessionsByWorkspace, workspaceId],
+  );
+
+  // Once the workspace's sessions are known, drop a stale session target
+  // (one belonging to a different workspace) down to the first session, or
+  // to "new session" if the workspace has none. Never clobbers an explicit
+  // "new session" choice.
+  useEffect(() => {
+    if (!workspaceId || !sessionsLoadedByWorkspace[workspaceId]) return;
+    setSessionTarget((prev) => {
+      if (prev === NEW_SESSION) return prev;
+      if (workspaceSessions.some((s) => s.id === prev)) return prev;
+      return workspaceSessions[0]?.id ?? NEW_SESSION;
+    });
+  }, [workspaceId, workspaceSessions, sessionsLoadedByWorkspace]);
+
+  const repoWorkspaces = workspacesForRepo(repoId);
+  const usesNewSession = sessionTarget === NEW_SESSION;
+  const canSubmit = !submitting && !!workspaceId && (usesNewSession || !!sessionTarget);
 
   const handleSubmit = async () => {
     setError(null);
-    if (!sessionId) {
+    if (!workspaceId) {
+      setError(t("error_pick_workspace"));
+      return;
+    }
+    if (!usesNewSession && !sessionTarget) {
       setError(t("error_pick_session"));
       return;
     }
@@ -95,6 +173,9 @@ export function CreateScheduledTaskModal() {
       setError(t("error_empty_prompt"));
       return;
     }
+    const targetArgs = usesNewSession
+      ? { workspaceId, createNewSession: true }
+      : { sessionId: sessionTarget };
     try {
       setSubmitting(true);
       if (type === "wakeup") {
@@ -105,7 +186,7 @@ export function CreateScheduledTaskModal() {
           return;
         }
         await scheduleWakeup({
-          sessionId,
+          ...targetArgs,
           fireAt: when.toISOString(),
           prompt: prompt.trim(),
         });
@@ -116,7 +197,7 @@ export function CreateScheduledTaskModal() {
           return;
         }
         await createCronRoutine({
-          sessionId,
+          ...targetArgs,
           name: name.trim() || undefined,
           cronExpr: cronExpr.trim(),
           prompt: prompt.trim(),
@@ -160,23 +241,67 @@ export function CreateScheduledTaskModal() {
         </div>
       </div>
 
+      <div className={styles.targetRow}>
+        <div className={shared.field}>
+          <label className={shared.label}>{t("target_repo")}</label>
+          <select
+            className={shared.input}
+            value={repoId}
+            onChange={(e) => setRepoId(e.target.value)}
+            disabled={repositories.length === 0}
+          >
+            {repositories.length === 0 && (
+              <option value="">{t("no_repos")}</option>
+            )}
+            {repositories.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className={shared.field}>
+          <label className={shared.label}>{t("target_workspace")}</label>
+          <select
+            className={shared.input}
+            value={workspaceId}
+            onChange={(e) => setWorkspaceId(e.target.value)}
+            disabled={repoWorkspaces.length === 0}
+          >
+            {repoWorkspaces.length === 0 && (
+              <option value="">{t("no_workspaces")}</option>
+            )}
+            {repoWorkspaces.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       <div className={shared.field}>
-        <label className={shared.label}>{t("session_label")}</label>
+        <label className={shared.label}>{t("target_session")}</label>
         <select
           className={shared.input}
-          value={sessionId}
-          onChange={(e) => setSessionId(e.target.value)}
-          disabled={sessions.length === 0}
+          value={sessionTarget}
+          onChange={(e) => setSessionTarget(e.target.value)}
+          disabled={!workspaceId}
         >
-          {sessions.length === 0 && (
-            <option value="">{t("session_none_available")}</option>
-          )}
-          {sessions.map((s) => (
+          <option value={NEW_SESSION}>{t("new_session_option")}</option>
+          {workspaceSessions.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.id === activeSessionId ? `${t("session_current")} — ${s.label}` : s.label}
+              {s.id === activeSessionId ? `${s.name} (${t("session_current")})` : s.name}
             </option>
           ))}
         </select>
+        <div className={shared.smallHint}>
+          {loadingSessions
+            ? t("loading_sessions")
+            : usesNewSession
+              ? t("new_session_hint")
+              : t("reuse_session_hint")}
+        </div>
       </div>
 
       {type === "wakeup" ? (
@@ -239,11 +364,7 @@ export function CreateScheduledTaskModal() {
         <button className={shared.btn} onClick={closeModal}>
           {tCommon("cancel")}
         </button>
-        <button
-          className={shared.btnPrimary}
-          onClick={handleSubmit}
-          disabled={submitting || !sessionId}
-        >
+        <button className={shared.btnPrimary} onClick={handleSubmit} disabled={!canSubmit}>
           {submitting ? t("creating") : t("create_btn")}
         </button>
       </div>

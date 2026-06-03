@@ -6,9 +6,40 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::db::Database;
 use claudette::model::{ChatMessage, ChatRole};
-use claudette::scheduling::{ScheduledTask, ScheduledTaskKind, cron_to_human};
+use claudette::scheduling::{ScheduleTarget, ScheduledTask, ScheduledTaskKind, cron_to_human};
 
 use crate::state::AppState;
+
+/// Resolve the GUI/IPC command arguments into a [`ScheduleTarget`].
+///
+/// `create_new_session` requires a `workspace_id` (the scheduler makes a fresh
+/// session there each fire); otherwise a concrete `session_id` is reused.
+fn build_schedule_target(
+    session_id: Option<String>,
+    workspace_id: Option<String>,
+    create_new_session: Option<bool>,
+) -> Result<ScheduleTarget, String> {
+    if create_new_session.unwrap_or(false) {
+        let ws = workspace_id
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or("workspace_id is required when create_new_session is set")?;
+        Ok(ScheduleTarget::NewSessionInWorkspace(ws))
+    } else {
+        let sid = session_id
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        match sid {
+            Some(sid) => Ok(ScheduleTarget::Session(sid)),
+            // A caller that supplied only a workspace likely meant new-session.
+            None if workspace_id.is_some() => Err(
+                "session_id is required, or set create_new_session: true to target a workspace"
+                    .to_string(),
+            ),
+            None => Err("session_id is required".to_string()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ScheduledTaskView {
@@ -30,7 +61,9 @@ impl From<ScheduledTask> for ScheduledTaskView {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn schedule_wakeup(
-    session_id: String,
+    session_id: Option<String>,
+    workspace_id: Option<String>,
+    create_new_session: Option<bool>,
     delay_seconds: Option<i64>,
     fire_at: Option<String>,
     prompt: String,
@@ -43,11 +76,12 @@ pub async fn schedule_wakeup(
     if prompt.trim().is_empty() {
         return Err("prompt is required".to_string());
     }
+    let target = build_schedule_target(session_id, workspace_id, create_new_session)?;
     let fire_at = resolve_fire_at(delay_seconds, fire_at.as_deref())?;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let task = db
         .create_agent_wakeup(
-            &session_id,
+            &target,
             fire_at,
             prompt.trim(),
             reason.as_deref(),
@@ -60,7 +94,7 @@ pub async fn schedule_wakeup(
         &app,
         &state.db_path,
         &task.workspace_id,
-        &task.chat_session_id,
+        task.chat_session_id.as_deref(),
         format!(
             "Scheduled wakeup for {}. Manage it from the scheduler (clock icon in the sidebar).",
             fire_at.to_rfc3339()
@@ -72,7 +106,9 @@ pub async fn schedule_wakeup(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_cron_routine(
-    session_id: String,
+    session_id: Option<String>,
+    workspace_id: Option<String>,
+    create_new_session: Option<bool>,
     name: Option<String>,
     cron_expr: String,
     prompt: String,
@@ -85,11 +121,12 @@ pub async fn create_cron_routine(
     if prompt.trim().is_empty() {
         return Err("prompt is required".to_string());
     }
+    let target = build_schedule_target(session_id, workspace_id, create_new_session)?;
     let cron_expr = cron_expr.trim().to_string();
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let task = db
         .create_agent_cron_task(
-            &session_id,
+            &target,
             name.as_deref(),
             &cron_expr,
             prompt.trim(),
@@ -103,7 +140,7 @@ pub async fn create_cron_routine(
         &app,
         &state.db_path,
         &task.workspace_id,
-        &task.chat_session_id,
+        task.chat_session_id.as_deref(),
         format!(
             "Looping (`{cron_expr}` — {}). Manage it from the scheduler (clock icon in the sidebar).",
             cron_to_human(&cron_expr)
@@ -272,40 +309,97 @@ pub async fn dispatch_task_prompt(
     source: &str,
 ) -> Result<(), String> {
     let prompt = build_dispatch_prompt(&task, source);
-    // Forward the row's pinned backend / model so a cron created from a
-    // Codex or Pi chat fires on the same runtime it was scheduled under.
-    // Either being `None` keeps the existing global-default fallback (the
-    // case for agent-callable rows and pre-migration rows).
-    dispatch_prompt_to_session_with_backend(
-        app,
-        task.chat_session_id,
-        prompt,
-        task.backend_id,
-        task.model,
-    )
-    .await
+    // Resolve where this fire lands. `create_new_session` rows make a fresh
+    // session in the target workspace on every fire (so a recurring cron gets
+    // a clean session per run); reuse rows dispatch into their stored session.
+    if task.create_new_session {
+        let state = app.state::<AppState>();
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        let session = db
+            .create_chat_session(&task.workspace_id)
+            .map_err(|e| e.to_string())?;
+        let session_id = session.id.clone();
+        let result = dispatch_prompt_to_session_inner(
+            app.clone(),
+            session_id.clone(),
+            prompt,
+            task.backend_id,
+            task.model,
+            Some(task.id),
+            // Announce the fresh session to the frontend so its tab appears
+            // before the live `chat-message` lands.
+            Some(session),
+        )
+        .await;
+        if result.is_err()
+            && let Ok(db) = Database::open(&app.state::<AppState>().db_path)
+        {
+            // The fire never started — roll back the empty session we made so
+            // a persistently-failing cron doesn't accrete blank tabs.
+            let _ = db.archive_chat_session(&session_id);
+        }
+        result
+    } else {
+        let session_id = task
+            .chat_session_id
+            .clone()
+            .ok_or("scheduled task has no target session")?;
+        // Forward the row's pinned backend / model so a cron created from a
+        // Codex or Pi chat fires on the same runtime it was scheduled under.
+        // Either being `None` keeps the existing global-default fallback.
+        dispatch_prompt_to_session_inner(
+            app,
+            session_id,
+            prompt,
+            task.backend_id,
+            task.model,
+            Some(task.id),
+            None,
+        )
+        .await
+    }
 }
 
+/// Dispatch a backend-originated prompt into a session (used by the agent
+/// `Monitor` tool). Renders the injected prompt like any other backend-origin
+/// send — see [`dispatch_prompt_to_session_inner`].
 pub async fn dispatch_prompt_to_session(
     app: AppHandle,
     chat_session_id: String,
     prompt: String,
 ) -> Result<(), String> {
-    dispatch_prompt_to_session_with_backend(app, chat_session_id, prompt, None, None).await
+    dispatch_prompt_to_session_inner(app, chat_session_id, prompt, None, None, None, None).await
 }
 
-async fn dispatch_prompt_to_session_with_backend(
+/// Run the turn via `send_chat_message` (which persists the user row by the
+/// `message_id` we pass, carrying `scheduled_task_id` for the "Scheduled"
+/// badge), then — only on success — emit the user message as a `chat-message`
+/// so a focused session renders it live, the same way Claude Remote Control
+/// surfaces remote-origin prompts that skip the GUI's optimistic insert.
+///
+/// Emitting *after* `send_chat_message` returns `Ok` (it persists + spawns the
+/// stream task, then returns) avoids leaving a phantom badged prompt on screen
+/// when send fails before persisting (e.g. an unresolvable pinned backend).
+/// When `announce_session` is set (a freshly created new-session fire), its
+/// `chat-session-created` event is emitted first so the tab exists before the
+/// message arrives.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_prompt_to_session_inner(
     app: AppHandle,
     chat_session_id: String,
     prompt: String,
     backend_id: Option<String>,
     model: Option<String>,
+    scheduled_task_id: Option<String>,
+    announce_session: Option<claudette::model::ChatSession>,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
-    crate::commands::chat::send::send_chat_message(
-        chat_session_id,
-        None,
-        prompt,
+    let message_id = uuid::Uuid::new_v4().to_string();
+
+    let result = crate::commands::chat::send::send_chat_message(
+        chat_session_id.clone(),
+        Some(message_id.clone()),
+        prompt.clone(),
         None,
         None,
         model,
@@ -317,10 +411,44 @@ async fn dispatch_prompt_to_session_with_backend(
         None,
         backend_id,
         None,
+        scheduled_task_id.clone(),
         app.clone(),
         state,
     )
-    .await
+    .await;
+
+    if result.is_ok() {
+        if let Some(session) = announce_session {
+            let _ = app.emit("chat-session-created", &session);
+        }
+        // The row is already persisted by `send_chat_message` (via
+        // `prepare_user_send`) under `message_id`; this emit just mirrors it
+        // into the live store. Best-effort: a focused session renders it, and
+        // a reload reads the same persisted row.
+        if let Ok(db) = Database::open(&app.state::<AppState>().db_path)
+            && let Ok(Some(session)) = db.get_chat_session(&chat_session_id)
+        {
+            let user_msg = ChatMessage {
+                id: message_id,
+                workspace_id: session.workspace_id,
+                chat_session_id,
+                role: ChatRole::User,
+                content: prompt,
+                cost_usd: None,
+                duration_ms: None,
+                created_at: crate::commands::chat::now_iso(),
+                thinking: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                scheduled_task_id,
+            };
+            let _ = app.emit("chat-message", &user_msg);
+        }
+    }
+
+    result
 }
 
 /// Append a system-role chat message announcing that a wakeup / cron was
@@ -333,9 +461,15 @@ fn post_creation_note(
     app: &AppHandle,
     db_path: &std::path::Path,
     workspace_id: &str,
-    chat_session_id: &str,
+    chat_session_id: Option<&str>,
     content: String,
 ) {
+    // New-session tasks have no session at schedule time — there's nowhere to
+    // post the confirmation, so skip it. The task still appears in the
+    // scheduler view.
+    let Some(chat_session_id) = chat_session_id else {
+        return;
+    };
     let message = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id: workspace_id.to_string(),
@@ -353,6 +487,7 @@ fn post_creation_note(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id: None,
     };
     match Database::open(db_path).and_then(|db| db.insert_chat_message(&message)) {
         Ok(()) => {
@@ -417,8 +552,9 @@ mod tests {
     fn task(kind: ScheduledTaskKind) -> ScheduledTask {
         ScheduledTask {
             id: "task-1".into(),
-            chat_session_id: "chat-1".into(),
+            chat_session_id: Some("chat-1".into()),
             workspace_id: "ws-1".into(),
+            create_new_session: false,
             kind,
             name: Some("morning".into()),
             prompt: "Check the PR".into(),

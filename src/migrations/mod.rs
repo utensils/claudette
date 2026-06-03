@@ -269,4 +269,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260521212019_agent_scheduled_task_failures.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260603151107_agent_scheduled_tasks_new_session",
+        sql: include_str!("20260603151107_agent_scheduled_tasks_new_session.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20260603151108_chat_message_scheduled_task",
+        sql: include_str!("20260603151108_chat_message_scheduled_task.sql"),
+        legacy_version: None,
+    },
 ];
