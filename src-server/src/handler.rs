@@ -677,6 +677,7 @@ async fn handle_send_chat_message(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id: None,
     };
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;
@@ -1278,6 +1279,7 @@ async fn handle_stop_agent(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id: None,
     };
     db.insert_chat_message(&msg).map_err(|e| e.to_string())?;
     Ok(json!(null))
@@ -1540,6 +1542,7 @@ async fn dispatch_queued_message(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id: None,
     };
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;

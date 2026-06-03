@@ -106,6 +106,8 @@
   "model_picker_no_results": "No models match",
   "model_picker_clear_search": "Clear search",
   "you_label": "You",
+  "scheduled_badge": "Scheduled",
+  "scheduled_badge_title": "This prompt was sent by a scheduled task (clock icon in the sidebar).",
   "agent_question_title": "Agent Question",
   "agent_question_submit_answer": "Submit answer",
   "agent_question_or_type": "Or type your response below",

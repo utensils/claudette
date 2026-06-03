@@ -41,8 +41,9 @@ impl Database {
         self.conn.execute(
             "INSERT INTO chat_messages (
                 id, workspace_id, chat_session_id, role, content, cost_usd, duration_ms, thinking,
-                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                scheduled_task_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 msg.id,
                 msg.workspace_id,
@@ -56,6 +57,7 @@ impl Database {
                 msg.output_tokens,
                 msg.cache_read_tokens,
                 msg.cache_creation_tokens,
+                msg.scheduled_task_id,
             ],
         )?;
         Ok(())
@@ -148,12 +150,13 @@ impl Database {
             output_tokens: row.get(10)?,
             cache_read_tokens: row.get(11)?,
             cache_creation_tokens: row.get(12)?,
+            scheduled_task_id: row.get(13)?,
         })
     }
 
     pub(super) const CHAT_MESSAGE_COLS: &str = "id, workspace_id, chat_session_id, role, content, cost_usd, \
          duration_ms, created_at, thinking, input_tokens, output_tokens, cache_read_tokens, \
-         cache_creation_tokens";
+         cache_creation_tokens, scheduled_task_id";
 
     /// Predicate that filters out legacy empty assistant rows (assistant role,
     /// empty content, no thinking text). The frontend used to drop these in

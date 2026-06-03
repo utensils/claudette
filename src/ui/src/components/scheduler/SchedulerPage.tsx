@@ -227,6 +227,7 @@ function TaskRow({ task, now, workspaceLabel, busyId, onRun, onDelete, t }: Task
         <div className={styles.rowMeta}>
           {schedule}
           {mode ? ` · ${mode}` : ""} · {next} {last} · {workspaceLabel(task.workspace_id)}
+          {task.create_new_session ? ` · ${t("target_new_session")}` : ""}
         </div>
         {task.name && <div className={styles.rowPrompt}>{task.prompt}</div>}
         {task.reason && <div className={styles.rowReason}>{task.reason}</div>}

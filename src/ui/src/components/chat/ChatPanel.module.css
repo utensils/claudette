@@ -355,6 +355,21 @@
   flex-shrink: 0;
 }
 
+/* Marks a user prompt that the scheduler injected (vs. one the user typed),
+   so it's clear what triggered the agent's work. */
+.scheduledBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--accent-bg);
+  color: var(--accent-primary);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .role_Assistant .roleLabel {
   display: none;
 }

@@ -67,4 +67,10 @@ pub struct ChatMessage {
     /// Per-message cache-creation input tokens (maps to
     /// `cache_creation_input_tokens` in the Anthropic API). NULL for historical rows.
     pub cache_creation_tokens: Option<i64>,
+    /// Id of the scheduled task (`agent_scheduled_tasks.id`) that injected this
+    /// message, when it was fired by the scheduler rather than typed by the
+    /// user. `None` for ordinary prompts. Drives the "Scheduled" affordance on
+    /// the triggering user message; not a foreign key (the task may be deleted
+    /// while its history remains).
+    pub scheduled_task_id: Option<String>,
 }

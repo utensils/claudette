@@ -935,6 +935,8 @@ async fn handle_send_chat_message(
         parsed.disable_1m_context,
         parsed.backend_id,
         parsed.attachments,
+        // IPC / CLI sends are user-driven, never scheduler-fired.
+        None,
         app.clone(),
         state,
     )
@@ -948,7 +950,17 @@ async fn handle_schedule_wakeup(
 ) -> Result<serde_json::Value, String> {
     let session_id = string_param(params, "session_id")
         .or_else(|_| string_param(params, "chat_session_id"))
-        .or_else(|_| string_param(params, "session"))?;
+        .or_else(|_| string_param(params, "session"))
+        .ok();
+    let workspace_id = params
+        .get("workspace_id")
+        .or_else(|| params.get("workspaceId"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let create_new_session = params
+        .get("create_new_session")
+        .or_else(|| params.get("createNewSession"))
+        .and_then(|v| v.as_bool());
     let prompt = string_param(params, "prompt")?;
     let delay_seconds = params
         .get("delay_seconds")
@@ -975,6 +987,8 @@ async fn handle_schedule_wakeup(
     let state = app_state(app)?;
     let value = crate::commands::scheduling::schedule_wakeup(
         session_id,
+        workspace_id,
+        create_new_session,
         delay_seconds,
         fire_at,
         prompt,
@@ -994,7 +1008,17 @@ async fn handle_routine_create(
 ) -> Result<serde_json::Value, String> {
     let session_id = string_param(params, "session_id")
         .or_else(|_| string_param(params, "chat_session_id"))
-        .or_else(|_| string_param(params, "session"))?;
+        .or_else(|_| string_param(params, "session"))
+        .ok();
+    let workspace_id = params
+        .get("workspace_id")
+        .or_else(|| params.get("workspaceId"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let create_new_session = params
+        .get("create_new_session")
+        .or_else(|| params.get("createNewSession"))
+        .and_then(|v| v.as_bool());
     let cron_expr = string_param(params, "cron_expr").or_else(|_| string_param(params, "cron"))?;
     let prompt = string_param(params, "prompt")?;
     let name = params
@@ -1014,6 +1038,8 @@ async fn handle_routine_create(
     let state = app_state(app)?;
     let value = crate::commands::scheduling::create_cron_routine(
         session_id,
+        workspace_id,
+        create_new_session,
         name,
         cron_expr,
         prompt,
@@ -1542,6 +1568,7 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            scheduled_task_id: None,
         }
     }
 
