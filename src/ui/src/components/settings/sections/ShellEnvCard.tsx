@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import styles from "./ShellEnvCard.module.css";
 
@@ -9,6 +10,7 @@ const parseDraft = (s: string): string[] =>
     .filter(Boolean);
 
 export function ShellEnvCard() {
+  const { t } = useTranslation("settings");
   const shellEnv = useAppStore((s) => s.shellEnv);
   const refreshShellEnv = useAppStore((s) => s.refreshShellEnv);
   const reloadShellEnv = useAppStore((s) => s.reloadShellEnv);
@@ -34,7 +36,11 @@ export function ShellEnvCard() {
     setDenyDraft(persisted.join("\n"));
   }, [shellEnv?.denied_user]);
 
-  const sources = shellEnv?.source_files.join(", ") ?? "—";
+  // `?? "—"` only catches undefined; an empty array would render "()".
+  // Use a length check so the no-source case shows the placeholder.
+  const sources = shellEnv?.source_files.length
+    ? shellEnv.source_files.join(", ")
+    : "—";
 
   const lastRefreshed = useMemo(() => {
     if (!shellEnv?.captured_at_ms) return "—";
@@ -47,7 +53,7 @@ export function ShellEnvCard() {
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
-        <h3>Shell environment</h3>
+        <h3>{t("shell_env_title")}</h3>
         <button
           type="button"
           onClick={() => {
@@ -55,23 +61,26 @@ export function ShellEnvCard() {
           }}
           className={styles.iconButton}
         >
-          ↻ Reload
+          ↻ {t("shell_env_reload")}
         </button>
       </header>
       <p className={styles.cardSubtitle}>
-        Captured from your shell init ({sources}) · last refreshed{" "}
-        {lastRefreshed}
+        {t("shell_env_captured_from", {
+          sources,
+          lastRefreshed,
+        })}
       </p>
       {shellEnv?.error ? (
         <p className={styles.errorText} role="alert">
           {shellEnv.error}
         </p>
       ) : null}
-      <h4>{shellEnv?.forwarded.length ?? 0} variables forwarded</h4>
-      <p className={styles.cardSubtitle}>
-        Vars that shell-init adds on top of the launch baseline. The shell-env
-        tier applies these to every subprocess Claudette spawns.
-      </p>
+      <h4>
+        {t("shell_env_forwarded_heading", {
+          count: shellEnv?.forwarded.length ?? 0,
+        })}
+      </h4>
+      <p className={styles.cardSubtitle}>{t("shell_env_forwarded_desc")}</p>
       <ul className={styles.varList}>
         {shellEnv?.forwarded.map((v) => (
           <li key={v.name} className={styles.varRow}>
@@ -86,19 +95,20 @@ export function ShellEnvCard() {
                 setRevealed((r) => ({ ...r, [v.name]: !r[v.name] }))
               }
             >
-              {revealed[v.name] ? "hide" : "show"}
+              {revealed[v.name] ? t("shell_env_hide") : t("shell_env_show")}
             </button>
           </li>
         ))}
       </ul>
       {shellEnv?.inherited && shellEnv.inherited.length > 0 ? (
         <>
-          <h4>{shellEnv.inherited.length} variables inherited from parent process</h4>
+          <h4>
+            {t("shell_env_inherited_heading", {
+              count: shellEnv.inherited.length,
+            })}
+          </h4>
           <p className={styles.cardSubtitle}>
-            These vars are already in Claudette&apos;s process environment
-            (inherited from the parent shell at launch). Subprocesses get them
-            via normal env inheritance — the shell-env tier doesn&apos;t need to
-            re-add them.
+            {t("shell_env_inherited_desc")}
           </p>
           <ul className={styles.varList}>
             {shellEnv.inherited.map((v) => (
@@ -117,7 +127,9 @@ export function ShellEnvCard() {
                     }))
                   }
                 >
-                  {revealed[`inh:${v.name}`] ? "hide" : "show"}
+                  {revealed[`inh:${v.name}`]
+                    ? t("shell_env_hide")
+                    : t("shell_env_show")}
                 </button>
               </li>
             ))}
@@ -126,15 +138,17 @@ export function ShellEnvCard() {
       ) : null}
       {shellEnv?.denied_built_in && shellEnv.denied_built_in.length > 0 ? (
         <details>
-          <summary>{shellEnv.denied_built_in.length} built-in denied</summary>
+          <summary>
+            {t("shell_env_built_in_denied", {
+              count: shellEnv.denied_built_in.length,
+            })}
+          </summary>
           <code className={styles.deniedList}>
             {shellEnv.denied_built_in.join(", ")}
           </code>
         </details>
       ) : null}
-      <label className={styles.denyLabel}>
-        Additional deny patterns (one glob per line):
-      </label>
+      <label className={styles.denyLabel}>{t("shell_env_deny_label")}</label>
       <textarea
         value={denyDraft}
         onChange={(e) => setDenyDraft(e.target.value)}
@@ -165,8 +179,8 @@ export function ShellEnvCard() {
           }}
         >
           {shellEnv?.disabled
-            ? "Enable shell-env"
-            : "Disable shell-env entirely"}
+            ? t("shell_env_enable")
+            : t("shell_env_disable")}
         </button>
       </div>
     </section>

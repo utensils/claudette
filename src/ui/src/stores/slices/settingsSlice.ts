@@ -274,15 +274,27 @@ export const createSettingsSlice: StateCreator<
     }
   },
   setShellEnvDenylist: async (patterns: string[]) => {
-    await setShellEnvDenylist(patterns);
-    await get().refreshShellEnv();
+    try {
+      await setShellEnvDenylist(patterns);
+      await get().refreshShellEnv();
+    } catch (e) {
+      console.error("setShellEnvDenylist failed", e);
+    }
   },
   setShellEnvDisabled: async (disabled: boolean) => {
-    await setShellEnvDisabled(disabled);
-    await get().refreshShellEnv();
+    try {
+      await setShellEnvDisabled(disabled);
+      await get().refreshShellEnv();
+    } catch (e) {
+      console.error("setShellEnvDisabled failed", e);
+    }
   },
   reloadShellEnv: async () => {
-    await reloadShellEnv();
-    await get().refreshShellEnv();
+    try {
+      await reloadShellEnv();
+      await get().refreshShellEnv();
+    } catch (e) {
+      console.error("reloadShellEnv failed", e);
+    }
   },
 });

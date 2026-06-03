@@ -278,7 +278,19 @@ fn main() {
     // launchd's baseline. Subsequent code in main() and setup hooks
     // freely mutates env without affecting this snapshot.
     {
-        let snapshot: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+        // Use `vars_os()` + lossy conversion rather than `vars()`: the
+        // latter panics if any env key/value is not valid UTF-8 (possible
+        // on Unix), which would crash the GUI at launch for users with
+        // non-UTF8 env entries. The shell-env diff only needs string keys
+        // for comparison, so a lossy snapshot is fine here.
+        let snapshot: std::collections::BTreeMap<String, String> = std::env::vars_os()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
         claudette::env::set_launch_env_snapshot(snapshot);
     }
 
@@ -830,9 +842,10 @@ fn main() {
             std::thread::spawn(usage::warm_user_agent_cache_sync);
 
             // Pre-warm the shell-env cache. On Unix, this spawns
-            // `$SHELL -lc 'env'` with a 5-second timeout — fine to pay
-            // once at startup on a std thread, but lethal if it ever runs
-            // inline on a Tokio worker. On Windows this is a no-op.
+            // `$SHELL -l -i -c '<emit>'` — a NUL-delimited env dump via
+            // `env -0` (or the fish equivalent) — with a 5-second timeout.
+            // Fine to pay once at startup on a std thread, but lethal if it
+            // ever runs inline on a Tokio worker. On Windows this is a no-op.
             // Read user-supplied shell-env deny patterns from app_settings
             // so the very first probe already filters per the user's policy.
             let user_deny: Vec<String> = match claudette::db::Database::open(&db_path) {

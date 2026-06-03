@@ -1330,10 +1330,11 @@ pub struct ShellEnvVarSnapshot {
 }
 
 /// Full snapshot of the shell-env probe result, returned by
-/// [`list_shell_env`]. The `denied_built_in` and `denied_user` fields
-/// are intentionally empty in v1 — the probe has already filtered denied
-/// vars out of `env.vars`, so we don't have the pre-filter dump to
-/// reconstruct them. A future task can expose them if needed.
+/// [`list_shell_env`]. `denied_built_in` carries the hardcoded built-in
+/// denylist (from `claudette::env::built_in_denylist`) and `denied_user`
+/// carries the user's persisted `shell_env:denylist` patterns, so the
+/// Settings UI can both display the active deny policy and hydrate the
+/// denylist editor.
 #[derive(serde::Serialize)]
 pub struct ShellEnvSnapshot {
     pub captured_at_ms: u128,

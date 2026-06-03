@@ -200,7 +200,16 @@ pub fn apply_denylist(
 ///
 /// Fish has no `env -0`, so we build the NUL-delimited stream by
 /// hand using `set -nx` (lists exported var names) and `$$var`
-/// indirection.
+/// indirection. Fish list values are joined with `:` (matching what
+/// fish exports to child processes for `PATH`-style vars) — NOT
+/// `string join0`, which would inject NUL bytes *inside* the value and
+/// make the parser truncate list vars after their first element.
+///
+/// Both the POSIX and fish scripts print a leading NUL sentinel before
+/// the dump. Sourcing rc files under `-l -i` can emit banner text to
+/// stdout (motd, version notices); the sentinel isolates that text into
+/// the first NUL-delimited chunk so [`parse_env_dump`] drops it instead
+/// of letting it corrupt the key of the first real `KEY=VALUE` entry.
 pub fn probe_shell_env_with_shell(shell: &std::path::Path) -> Option<BTreeMap<String, String>> {
     if !shell.is_absolute() {
         return None;
@@ -210,9 +219,9 @@ pub fn probe_shell_env_with_shell(shell: &std::path::Path) -> Option<BTreeMap<St
     let is_fish = shell_name == "fish";
 
     let emit_script = if is_fish {
-        r#"for var in (set -nx); printf '%s=%s\0' $var (string join0 -- $$var); end"#
+        r#"printf '\0'; for var in (set -nx); printf '%s=%s\0' $var (string join : -- $$var); end"#
     } else {
-        "env -0"
+        r#"printf '\0'; env -0"#
     };
 
     let mut child = crate::process::std_command(shell)
@@ -1066,6 +1075,28 @@ mod tests {
             Some("fine"),
             "valid entry after bad one must be preserved",
         );
+    }
+
+    #[test]
+    fn parse_env_dump_drops_leading_banner_sentinel_chunk() {
+        // Mirrors what the real probe emits: a leading NUL sentinel after
+        // any rc-file banner output, then the NUL-delimited env. The
+        // banner chunk (no `=`) must be dropped, and the first real var
+        // must not absorb the banner text into its key. PATH-style list
+        // values joined with `:` must round-trip intact (regression for
+        // the fish `string join0` NUL-in-value bug).
+        let dump = b"motd: welcome\0PATH=/a:/b:/c\0HOME=/u/k\0";
+        let parsed = parse_env_dump(dump);
+        assert!(
+            !parsed.keys().any(|k| k.contains("motd")),
+            "banner chunk must not leak into a key: {parsed:?}",
+        );
+        assert_eq!(
+            parsed.get("PATH").map(String::as_str),
+            Some("/a:/b:/c"),
+            "colon-joined list value must survive intact",
+        );
+        assert_eq!(parsed.get("HOME").map(String::as_str), Some("/u/k"));
     }
 
     // ---- ShellEnv type and LAUNCH_ENV baseline tests ----------------------

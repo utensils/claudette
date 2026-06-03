@@ -22,6 +22,17 @@ vi.mock("../../../services/env", () => ({
   reloadShellEnv: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Mirror the repo convention (see GeneralSettings.test.tsx): mock
+// react-i18next so `t(key)` returns the key. Assertions then check keys
+// rather than English copy, keeping tests stable across translation
+// changes. The i18n keys here embed "show"/"hide"/"reload", so the
+// substring-based button filters below still match.
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (key: string) => key,
+  }),
+}));
+
 import { ShellEnvCard } from "./ShellEnvCard";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -158,7 +169,9 @@ describe("ShellEnvCard", () => {
     const container = await renderCard();
     expect(container.textContent).toContain("JWT_CLIENT_ID");
     expect(container.textContent).toContain("HOME");
-    expect(container.textContent).toMatch(/1 variables inherited/i);
+    // i18n is mocked to return keys, so assert the inherited-section heading
+    // key rendered (the section only renders when inherited.length > 0).
+    expect(container.textContent).toContain("shell_env_inherited_heading");
   });
 
   it("hydrates the deny textarea from denied_user on snapshot load", async () => {
