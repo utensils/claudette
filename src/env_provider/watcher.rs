@@ -367,6 +367,45 @@ impl EnvWatcher {
         }
     }
 
+    /// Globally watch the user's POSIX shell init files. When any of
+    /// them mutates, the configured [`OnChange`] callback fires with
+    /// plugin name `"shell-env"`. Idempotent: calling twice with the
+    /// same home re-registers the same path set (harmless given
+    /// internal dedup).
+    ///
+    /// The list mirrors the POSIX shells we support:
+    /// - zsh: `.zshrc`, `.zprofile`, `.zlogin`, `.zshenv`
+    /// - bash: `.bashrc`, `.bash_profile`, `.profile`
+    /// - fish: `.config/fish/config.fish`
+    ///
+    /// Files that don't exist are still registered — `notify` will fire
+    /// a Create event if the user creates the file later.
+    pub fn watch_rc_files_with_home(&self, home: &std::path::Path) -> std::io::Result<()> {
+        let rc_files = [
+            ".zshrc",
+            ".zprofile",
+            ".zlogin",
+            ".zshenv",
+            ".bashrc",
+            ".bash_profile",
+            ".profile",
+            ".config/fish/config.fish",
+        ];
+        let paths: Vec<std::path::PathBuf> = rc_files.iter().map(|rel| home.join(rel)).collect();
+        // Use HOME as the synthetic worktree key so this entry doesn't
+        // collide with any real workspace's (worktree, plugin) tuple.
+        self.register(home, "shell-env", &paths);
+        Ok(())
+    }
+
+    /// Convenience wrapper: resolves `$HOME` and calls
+    /// [`watch_rc_files_with_home`].
+    pub fn watch_rc_files(&self) -> std::io::Result<()> {
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "$HOME not set"))?;
+        self.watch_rc_files_with_home(std::path::Path::new(&home))
+    }
+
     /// Test-only introspection: number of unique paths currently
     /// watched across all keys.
     #[cfg(test)]
@@ -589,6 +628,35 @@ mod tests {
         // The key is still tracked — we just logged the watch failure.
         // That way a later register with an existing path still works.
         assert_eq!(watcher.registered_key_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn rc_file_change_invokes_shell_env_callback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rc = tmp.path().join(".zshrc");
+        std::fs::write(&rc, "old").unwrap();
+
+        let fired = Arc::new(std::sync::Mutex::new(0u32));
+        let fired_c = Arc::clone(&fired);
+        let on_change: OnChange = Arc::new(move |_path, plugin| {
+            if plugin == "shell-env" {
+                *fired_c.lock().unwrap() += 1;
+            }
+        });
+        let watcher = EnvWatcher::new(on_change).unwrap();
+        watcher
+            .watch_rc_files_with_home(tmp.path())
+            .expect("watching synthetic HOME succeeds");
+
+        // Give the watcher time to install the fs-event subscription.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        std::fs::write(&rc, "new contents").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        assert!(
+            *fired.lock().unwrap() >= 1,
+            "rc-file edit must fire the watcher callback with plugin=shell-env",
+        );
     }
 
     #[test]

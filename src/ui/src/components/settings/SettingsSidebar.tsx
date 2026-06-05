@@ -17,6 +17,7 @@ import {
   HelpCircle,
   Flag,
   Stethoscope,
+  Variable,
   HardDrive,
   ArrowLeft,
 } from "lucide-react";
@@ -35,6 +36,7 @@ export function getAppSections() {
     { id: "notifications", icon: Bell },
     { id: "automation", icon: Clock },
     { id: "editor", icon: FileCode },
+    { id: "environment", icon: Variable },
     { id: "diagnostics", icon: Stethoscope },
     { id: "storage", icon: HardDrive },
     { id: "git", icon: GitBranch },
@@ -65,6 +67,7 @@ export function SettingsSidebar() {
     if (id === "notifications") return t("settings:nav_notifications");
     if (id === "automation") return t("settings:nav_automation");
     if (id === "editor") return t("settings:nav_editor");
+    if (id === "environment") return t("settings:nav_environment");
     if (id === "diagnostics") return t("settings:nav_diagnostics");
     if (id === "storage") return t("settings:nav_storage");
     if (id === "git") return t("settings:nav_git");

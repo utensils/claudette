@@ -1,0 +1,112 @@
+.card {
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-1);
+}
+
+.cardHeader h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--text-primary);
+}
+
+.cardSubtitle {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  margin: 0 0 var(--space-2) 0;
+}
+
+.errorText {
+  color: var(--status-stopped);
+  margin: var(--space-2) 0;
+}
+
+.varList {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-2) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.varRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.varName {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.varValue {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.iconButton {
+  background: transparent;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+}
+
+.iconButton:hover {
+  background: var(--hover-bg);
+}
+
+.deniedList {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.denyLabel {
+  display: block;
+  margin-top: var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.denyTextarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  background: var(--sidebar-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  margin-top: var(--space-1);
+  font-size: var(--fs-sm);
+}
+
+.cardFooter {
+  margin-top: var(--space-3);
+}
+
+.linkButton {
+  background: transparent;
+  border: none;
+  color: var(--accent-primary);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}

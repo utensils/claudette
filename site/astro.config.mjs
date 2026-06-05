@@ -133,6 +133,7 @@ export default defineConfig({
           label: 'Settings & Trust',
           items: [
             { slug: 'features/settings' },
+            { slug: 'features/shell-environment' },
             { slug: 'features/diagnostics' },
             { slug: 'features/experimental-features' },
             { slug: 'features/community-registry-trust' },

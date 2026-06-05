@@ -1,0 +1,44 @@
+---
+title: Shell environment
+description: How Claudette inherits PATH and env vars from your shell init when launched from Finder, Dock, or a Linux desktop launcher.
+---
+
+When you launch Claudette from Finder, Dock, Spotlight, or a Linux desktop launcher, the OS only hands the app a minimal environment. Anything you set in your interactive shell init — `.zshrc`, `.bashrc`, `.zprofile`, `.bash_profile`, `~/.config/fish/config.fish` — is invisible by default. Tools like `mise activate`, `nvm`, and `pyenv` typically configure PATH in `.zshrc`, and custom secrets like `JWT_CLIENT_ID` or `GH_TOKEN` are exported there too.
+
+Claudette captures that environment for you.
+
+## How it works
+
+At app launch, Claudette runs your shell as `$SHELL -l -i -c 'env -0'` (or the equivalent fish command), captures the result, diffs it against the launchd / desktop-launcher baseline, applies a denylist, and exposes the remaining vars as a low-precedence env tier. Per-project env from direnv, mise, and dotenv plugins layers on top — they always win on key collision.
+
+You can inspect and control what was captured at **Settings → Environment → Shell environment**.
+
+## Denylist
+
+Some env-var names are *never* forwarded, regardless of your config:
+
+- **Injection vectors** — `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FALLBACK_*`. Forwarding these is a known privilege-escalation path.
+- **Shell-presentation noise** — `PS1`, `PROMPT_COMMAND`, `OLDPWD`, `PWD`, `SHLVL`, `_`, `STARSHIP_*`. Meaningless in a non-interactive subprocess.
+
+You can extend the denylist with your own glob patterns in the Settings panel. For example:
+
+```
+AWS_*
+STRIPE_*
+GITHUB_TOKEN
+```
+
+## Refresh
+
+Claudette watches your rc files (`.zshrc`, `.bashrc`, `.zprofile`, `.bash_profile`, `.profile`, `~/.config/fish/config.fish`). When any of them changes on disk, the captured env invalidates and the next subprocess spawn re-probes — no app restart needed.
+
+You can also force a re-probe via **Settings → Environment → Shell environment → Reload**.
+
+## Disabling
+
+If you'd rather Claudette run with only the launchd baseline, click **Disable shell-env entirely** at the bottom of the card. Per-project env providers (direnv, mise, etc.) keep working — you only lose the shell-init layer.
+
+## Platform support
+
+- **macOS** and **Linux** — full support.
+- **Windows** — Claudette reads PATH from the registry on every spawn so binaries installed by `winget` and similar tools are found. Capturing arbitrary user-defined Windows env vars from the registry is tracked separately.

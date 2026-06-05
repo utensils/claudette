@@ -859,6 +859,7 @@ dependencies = [
  "flate2",
  "futures",
  "futures-util",
+ "glob",
  "hex",
  "interprocess",
  "libc",

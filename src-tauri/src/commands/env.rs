@@ -292,7 +292,8 @@ pub(crate) fn load_disabled_providers(db: &Database, repo_id: &str) -> HashSet<S
     // We list all app settings with the repo+env_provider prefix.
     // Pattern is precise; rusqlite does this cheaply via LIKE.
     let prefix = format!("repo:{repo_id}:env_provider:");
-    db.list_app_settings_with_prefix(&prefix)
+    let mut set: HashSet<String> = db
+        .list_app_settings_with_prefix(&prefix)
         .unwrap_or_default()
         .into_iter()
         .filter_map(|(key, value)| {
@@ -305,7 +306,23 @@ pub(crate) fn load_disabled_providers(db: &Database, repo_id: &str) -> HashSet<S
                 None
             }
         })
-        .collect()
+        .collect();
+
+    // The global shell-env tier is toggled via a flat app_settings key
+    // (not the per-repo env_provider:{plugin}:enabled convention), so
+    // fold it into the disabled set here. The dispatcher treats
+    // "shell-env" in `disabled` as "skip the synthetic source".
+    if db
+        .get_app_setting("shell_env:disabled")
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        set.insert("shell-env".to_string());
+    }
+
+    set
 }
 
 /// Layer a workspace's stored input values onto an already-resolved env.
@@ -1300,6 +1317,206 @@ fn resolve_worktree_target_from_db(
     Ok(repo.map(workspace_info_for_repo))
 }
 
+// ---------------------------------------------------------------------------
+// Shell-env commands (global, not per-workspace)
+// ---------------------------------------------------------------------------
+
+/// Snapshot of one env var from the captured shell environment.
+#[derive(serde::Serialize)]
+pub struct ShellEnvVarSnapshot {
+    pub name: String,
+    pub value: String,
+    pub denied: bool,
+}
+
+/// Full snapshot of the shell-env probe result, returned by
+/// [`list_shell_env`]. `denied_built_in` carries the hardcoded built-in
+/// denylist (from `claudette::env::built_in_denylist`) and `denied_user`
+/// carries the user's persisted `shell_env:denylist` patterns, so the
+/// Settings UI can both display the active deny policy and hydrate the
+/// denylist editor.
+#[derive(serde::Serialize)]
+pub struct ShellEnvSnapshot {
+    pub captured_at_ms: u128,
+    pub forwarded: Vec<ShellEnvVarSnapshot>,
+    /// Vars present in both the launch baseline and the shell probe with
+    /// identical values. Already in process env via normal inheritance;
+    /// the shell-env tier does not re-add them. Shown in the Settings UI
+    /// so developers launching from a terminal understand the full
+    /// captured set rather than just the (potentially empty) diff.
+    pub inherited: Vec<ShellEnvVarSnapshot>,
+    pub denied_built_in: Vec<String>,
+    pub denied_user: Vec<String>,
+    pub disabled: bool,
+    pub source_files: Vec<String>,
+    pub error: Option<String>,
+}
+
+/// Return the current shell-env snapshot: the forwarded vars, the
+/// disabled flag from `app_settings`, and the list of shell rc files
+/// that exist on disk. When the probe hasn't completed yet, the
+/// `error` field is set and the var list is empty.
+#[tauri::command]
+pub async fn list_shell_env(state: State<'_, AppState>) -> Result<ShellEnvSnapshot, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let disabled = db
+        .get_app_setting("shell_env:disabled")
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    // The user-configured deny patterns, read once so both the
+    // probe-not-run early return and the success path surface them. The
+    // Settings UI uses these to hydrate the denylist editor.
+    let denied_user: Vec<String> = db
+        .get_app_setting("shell_env:denylist")
+        .ok()
+        .flatten()
+        .map(|s| {
+            s.lines()
+                .map(str::to_string)
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let Some(env) = claudette::env::shell_env() else {
+        return Ok(ShellEnvSnapshot {
+            captured_at_ms: 0,
+            forwarded: Vec::new(),
+            inherited: Vec::new(),
+            denied_built_in: claudette::env::built_in_denylist(),
+            denied_user,
+            disabled,
+            source_files: shell_rc_file_list(),
+            error: Some("Shell environment probe has not completed yet.".to_string()),
+        });
+    };
+
+    let captured_at_ms = env
+        .captured_at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+
+    let forwarded = env
+        .vars
+        .iter()
+        .map(|(k, v)| ShellEnvVarSnapshot {
+            name: k.clone(),
+            value: v.clone(),
+            denied: false,
+        })
+        .collect();
+
+    let inherited = env
+        .inherited
+        .iter()
+        .map(|(k, v)| ShellEnvVarSnapshot {
+            name: k.clone(),
+            value: v.clone(),
+            denied: false,
+        })
+        .collect();
+
+    Ok(ShellEnvSnapshot {
+        captured_at_ms,
+        forwarded,
+        inherited,
+        denied_built_in: claudette::env::built_in_denylist(),
+        denied_user,
+        disabled,
+        source_files: shell_rc_file_list(),
+        error: None,
+    })
+}
+
+/// Return the list of shell rc files that exist in `$HOME`. Used by
+/// [`list_shell_env`] to tell the UI which files the probe reads so the
+/// user understands where their vars come from.
+fn shell_rc_file_list() -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
+    let home = std::path::PathBuf::from(home);
+    let candidates = [
+        ".zshrc",
+        ".zprofile",
+        ".zlogin",
+        ".zshenv",
+        ".bashrc",
+        ".bash_profile",
+        ".profile",
+        ".config/fish/config.fish",
+    ];
+    candidates
+        .iter()
+        .map(|rel| home.join(rel))
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Persist the denylist globs to `app_settings` under `shell_env:denylist`
+/// (newline-joined), then invalidate the in-memory cache and re-probe so
+/// the new patterns take effect immediately without an app restart.
+#[tauri::command]
+pub async fn set_shell_env_denylist(
+    state: State<'_, AppState>,
+    patterns: Vec<String>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let joined = patterns.join("\n");
+    db.set_app_setting("shell_env:denylist", &joined)
+        .map_err(|e| e.to_string())?;
+    // Invalidate cached result and kick off a fresh probe so the UI
+    // can call list_shell_env again without restarting.
+    claudette::env::invalidate_shell_env();
+    let cleaned: Vec<String> = patterns.into_iter().filter(|s| !s.is_empty()).collect();
+    std::thread::spawn(move || claudette::env::prewarm_shell_env(cleaned));
+    Ok(())
+}
+
+/// Persist the disabled flag to `app_settings` under `shell_env:disabled`.
+/// When `true`, the shell-env dispatcher skips forwarding vars to
+/// agent spawns.
+#[tauri::command]
+pub async fn set_shell_env_disabled(
+    state: State<'_, AppState>,
+    disabled: bool,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.set_app_setting(
+        "shell_env:disabled",
+        if disabled { "true" } else { "false" },
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Force a fresh shell-env probe using the currently-persisted denylist.
+/// Invalidates the in-memory cache and spawns a background probe, so a
+/// subsequent [`list_shell_env`] call will see the new result.
+#[tauri::command]
+pub async fn reload_shell_env(state: State<'_, AppState>) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let user_deny: Vec<String> = db
+        .get_app_setting("shell_env:denylist")
+        .ok()
+        .flatten()
+        .map(|s| {
+            s.lines()
+                .map(str::to_string)
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    claudette::env::invalidate_shell_env();
+    std::thread::spawn(move || claudette::env::prewarm_shell_env(user_deny));
+    Ok(())
+}
+
 /// Build a [`WorkspaceInfo`] for the given target, returning
 /// `(worktree_path, ws_info, repo_id)`.
 async fn resolve_target(state: &AppState, target: &EnvTarget) -> Result<EnvResolveTarget, String> {
@@ -1391,9 +1608,39 @@ pub fn setup_env_watcher(app: AppHandle) {
     let state = app.state::<AppState>();
     let cache = Arc::clone(&state.env_cache);
     let app_for_cb = app.clone();
+    let db_path_for_cb = state.db_path.clone();
     let trust_probe_versions: Arc<Mutex<HashMap<(String, String), u64>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let watcher = match EnvWatcher::new(Arc::new(move |worktree, plugin| {
+        if plugin == "shell-env" {
+            // Synthetic global source — no entry in EnvCache, no trust probe.
+            // Invalidate the shell-env cache and notify the UI.
+            claudette::env::invalidate_shell_env();
+            // Re-probe immediately so the cache stays warm — otherwise the
+            // dispatcher's shell_env_is_cached() gate goes false and
+            // shell-env silently drops out of every spawn until the next
+            // manual Reload (#990 review). Mirrors `reload_shell_env`.
+            let user_deny: Vec<String> = Database::open(&db_path_for_cb)
+                .ok()
+                .and_then(|db| db.get_app_setting("shell_env:denylist").ok().flatten())
+                .map(|s| {
+                    s.lines()
+                        .map(str::to_string)
+                        .filter(|l| !l.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            std::thread::spawn(move || claudette::env::prewarm_shell_env(user_deny));
+            let _ = app_for_cb.emit(
+                "env-cache-invalidated",
+                EnvCacheInvalidatedPayload {
+                    worktree_path: worktree.to_string_lossy().into_owned(),
+                    plugin_name: "shell-env".to_string(),
+                },
+            );
+            return;
+        }
+        cache.invalidate(worktree, Some(plugin));
         // A watcher event means *some* watched path was touched, but
         // `touch`, `git checkout`, save-on-noop editors, and
         // nix-direnv re-evaluation all fire events without changing
@@ -1464,6 +1711,15 @@ pub fn setup_env_watcher(app: AppHandle) {
     let app_for_store = app.clone();
     tauri::async_runtime::block_on(async move {
         let state = app_for_store.state::<AppState>();
+        // Subscribe to the user's rc files so shell-env invalidates on
+        // .zshrc / .bashrc edits.
+        if let Err(e) = watcher.watch_rc_files() {
+            tracing::warn!(
+                target: "claudette::env-watcher",
+                error = %e,
+                "watch_rc_files failed — shell-env will only refresh on app restart"
+            );
+        }
         *state.env_watcher.write().await = Some(watcher);
     });
 }
@@ -2107,5 +2363,39 @@ mod tests {
 
         // Cache: the entry is gone.
         assert!(cache.get_fresh(worktree, "env-direnv").is_none());
+    }
+
+    #[test]
+    fn load_disabled_providers_folds_in_shell_env_global_toggle() {
+        use claudette::db::Database;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path).unwrap();
+
+        // Absent key = enabled → shell-env not in the set.
+        let disabled = load_disabled_providers(&db, "repo-1");
+        assert!(
+            !disabled.contains("shell-env"),
+            "shell-env must not be disabled when the global toggle is unset",
+        );
+
+        // Global toggle on → shell-env folded into the disabled set so
+        // the dispatcher skips the synthetic source.
+        db.set_app_setting("shell_env:disabled", "true").unwrap();
+        let disabled = load_disabled_providers(&db, "repo-1");
+        assert!(
+            disabled.contains("shell-env"),
+            "shell_env:disabled=true must inject \"shell-env\" into the disabled set",
+        );
+
+        // Toggle back off → shell-env drops out again.
+        db.set_app_setting("shell_env:disabled", "false").unwrap();
+        let disabled = load_disabled_providers(&db, "repo-1");
+        assert!(
+            !disabled.contains("shell-env"),
+            "shell_env:disabled=false must not disable shell-env",
+        );
     }
 }

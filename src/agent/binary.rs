@@ -15,12 +15,12 @@ use std::sync::OnceLock;
 /// subsequent calls can retry resolution if the environment improves (e.g.,
 /// a slow shell probe that timed out on first call).
 ///
-/// The login-shell probe uses `std::process::Command` (blocking) with a
+/// The login-shell env probe uses `std::process::Command` (blocking) with a
 /// 5-second timeout that kills the subprocess on expiry. On Unix we run
-/// the whole resolution inside `spawn_blocking` so a cold `SHELL_PATH`
-/// cache never stalls a Tokio worker — `enriched_path()` transitively
-/// calls `login_shell_path_probe()` on first use, and that probe can
-/// block for up to 5 s on slow shell-init files. (Startup also calls
+/// the whole resolution inside `spawn_blocking` so a cold `SHELL_ENV`
+/// cache never stalls a Tokio worker — `enriched_path()` reads the PATH
+/// entry from the cached shell env, and that initial probe can block for
+/// up to 5 s on slow shell-init files. (Startup calls
 /// [`crate::env::prewarm_shell_path`] to warm the cache up front, but we
 /// keep the `spawn_blocking` wrapper as a belt-and-braces guard.)
 /// On Windows the base PATH comes from the registry — a handful of
@@ -496,7 +496,7 @@ fn search_path_dirs_for(
 /// Delegates to the shared `crate::env::shell_path()` which probes the
 /// login shell once and caches the result for the process lifetime.
 fn login_shell_path() -> Option<OsString> {
-    crate::env::shell_path().cloned()
+    crate::env::shell_path()
 }
 
 #[cfg(test)]

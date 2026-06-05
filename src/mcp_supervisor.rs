@@ -1306,4 +1306,41 @@ mod tests {
             "expected stale servers to be cleared"
         );
     }
+
+    #[tokio::test]
+    async fn enriched_env_forwards_custom_var_to_spawned_command() {
+        // Regression guard for issue #990: subprocesses (agent, MCP, setup
+        // scripts) MUST inherit user-defined env vars from .zshrc / .bashrc
+        // (not just PATH). Task 12 wired enriched_env().apply() into every
+        // agent spawn site, which also covers MCP servers (they're spawned as
+        // Claude CLI children and inherit the agent's env). This test pins the
+        // contract that apply() correctly forwards a synthetic var to a
+        // tokio::process::Command, so a future refactor can't silently drop
+        // the inheritance.
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::env::invalidate_shell_env();
+
+        let mut vars = std::collections::BTreeMap::new();
+        vars.insert("JWT_CLIENT_ID".into(), "test-abc".into());
+        crate::env::install_shell_env_for_test(crate::env::ShellEnv {
+            vars,
+            inherited: std::collections::BTreeMap::new(),
+            captured_at: std::time::SystemTime::UNIX_EPOCH,
+        });
+
+        let mut cmd = crate::process::command("true");
+        crate::env::enriched_env().apply(&mut cmd);
+
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        assert!(
+            envs.iter()
+                .any(|(k, v)| k == &std::ffi::OsStr::new("JWT_CLIENT_ID")
+                    && v == &Some(std::ffi::OsStr::new("test-abc"))),
+            "enriched_env().apply() must forward captured shell vars to the spawn command (issue #990)",
+        );
+
+        crate::env::invalidate_shell_env();
+    }
 }

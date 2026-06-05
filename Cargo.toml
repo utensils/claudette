@@ -69,6 +69,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 tracing-appender = "0.2"
 chrono = "0.4"
+glob = "0.3"
 # HTTP client for the multi-provider usage source
 # (`src/usage/anthropic_oauth.rs` + `openrouter.rs`). `rustls` keeps the
 # build platform-agnostic; `json` enables `Response::json` for the
