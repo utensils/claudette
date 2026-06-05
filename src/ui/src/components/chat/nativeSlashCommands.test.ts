@@ -33,6 +33,13 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     openUsageSettingsExternal: vi.fn<() => void>(),
     openReleaseNotes: vi.fn<() => void>(),
     workspaceId: "ws-1",
+    sessionId: "sess-1",
+    openScheduler: vi.fn<(prefill?: {
+      sessionId?: string;
+      prompt?: string;
+      fireAt?: string;
+      cronExpr?: string;
+    }) => void>(),
     agentStatus: "Idle",
     selectedModel: "opus",
     selectedModelProvider: "anthropic",

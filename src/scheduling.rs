@@ -30,11 +30,29 @@ impl std::str::FromStr for ScheduledTaskKind {
     }
 }
 
+/// Where a scheduled task dispatches when it fires. Chosen at creation and
+/// recorded on the row (`chat_session_id` + `create_new_session`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleTarget {
+    /// Reuse an existing chat session; its workspace is derived at creation.
+    Session(String),
+    /// Create a fresh chat session in this workspace each time the task fires
+    /// (so a recurring cron gets a clean session per run).
+    NewSessionInWorkspace(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledTask {
     pub id: String,
-    pub chat_session_id: String,
+    /// Target session for reuse-mode tasks. `None` when `create_new_session`
+    /// is true — those rows have no session until the scheduler makes a fresh
+    /// one in `workspace_id` at fire time.
+    pub chat_session_id: Option<String>,
     pub workspace_id: String,
+    /// When true, the scheduler creates a brand-new chat session in
+    /// `workspace_id` each time the task fires (so a recurring cron gets a
+    /// clean session per run) instead of dispatching into `chat_session_id`.
+    pub create_new_session: bool,
     pub kind: ScheduledTaskKind,
     pub name: Option<String>,
     pub prompt: String,
@@ -51,6 +69,16 @@ pub struct ScheduledTask {
     pub last_failed_at: Option<String>,
     pub last_error: Option<String>,
     pub disabled_reason: Option<String>,
+    /// Backend the task was scheduled under. The scheduler passes this
+    /// through to `send_chat_message` so a Codex- or Pi-chat cron fires
+    /// on its own backend instead of falling through to the global
+    /// `default_agent_backend` app setting. `None` for legacy rows and
+    /// for agent-callable scheduling that chose not to pin a backend —
+    /// those keep the prior global-default behavior.
+    pub backend_id: Option<String>,
+    /// Model id captured at schedule time. Forwarded to
+    /// `send_chat_message` like [`Self::backend_id`].
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -122,6 +122,7 @@ pub async fn stop_agent(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id: None,
     };
     db.insert_chat_message(&msg).map_err(|e| e.to_string())?;
 

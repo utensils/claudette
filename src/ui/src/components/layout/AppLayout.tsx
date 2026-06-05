@@ -14,6 +14,7 @@ import { CommandPalette } from "../command-palette/CommandPalette";
 import { Dashboard } from "./Dashboard";
 import { ModalRouter } from "../modals/ModalRouter";
 import { SettingsPage } from "../settings/SettingsPage";
+import { SchedulerPage } from "../scheduler/SchedulerPage";
 import { ResizeHandle } from "./ResizeHandle";
 import { ToastContainer } from "./Toast";
 import { AppTooltip } from "../shared/AppTooltip";
@@ -40,6 +41,7 @@ export function AppLayout() {
   const terminalHeight = useAppStore((s) => s.terminalHeight);
   const setTerminalHeight = useAppStore((s) => s.setTerminalHeight);
   const settingsOpen = useAppStore((s) => s.settingsOpen);
+  const schedulerOpen = useAppStore((s) => s.schedulerOpen);
   const fuzzyFinderOpen = useAppStore((s) => s.fuzzyFinderOpen);
   const commandPaletteOpen = useAppStore((s) => s.commandPaletteOpen);
 
@@ -132,7 +134,12 @@ export function AppLayout() {
           )}
           <div className={styles.center}>
             <div className={styles.content}>
-              {selectedWorkspaceId ? (
+              {/* The Loops and Schedules view replaces the workspace/dashboard
+                  content but, like the Dashboard, keeps the sidebar +
+                  PanelHeader + PanelToggles chrome in place. */}
+              {schedulerOpen ? (
+                <SchedulerPage />
+              ) : selectedWorkspaceId ? (
                 <>
                   <div
                     className={`${styles.contentPanel} ${
@@ -172,7 +179,7 @@ export function AppLayout() {
               only useful when a selected workspace's panel is visible, so we
               conditionally render it.
             */}
-            {selectedWorkspaceId && terminalPanelVisible && (
+            {!schedulerOpen && selectedWorkspaceId && terminalPanelVisible && (
               <ResizeHandle
                 direction="vertical"
                 targetRef={mainRef}
@@ -185,14 +192,14 @@ export function AppLayout() {
             )}
             <div
               className={`${styles.terminal} ${
-                selectedWorkspaceId && terminalPanelVisible ? "" : styles.terminalHidden
+                !schedulerOpen && selectedWorkspaceId && terminalPanelVisible ? "" : styles.terminalHidden
               }`}
-              aria-hidden={!selectedWorkspaceId || !terminalPanelVisible}
+              aria-hidden={schedulerOpen || !selectedWorkspaceId || !terminalPanelVisible}
             >
               <TerminalPanel />
             </div>
           </div>
-          {selectedWorkspaceId && (
+          {!schedulerOpen && selectedWorkspaceId && (
             <>
               {rightSidebarVisible && (
                 <ResizeHandle

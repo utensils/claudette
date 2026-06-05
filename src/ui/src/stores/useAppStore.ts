@@ -52,6 +52,10 @@ import {
   type PinnedPromptsSlice,
 } from "./slices/pinnedPromptsSlice";
 import {
+  createSchedulingSlice,
+  type SchedulingSlice,
+} from "./slices/schedulingSlice";
+import {
   createSettingsSlice,
   type SettingsSlice,
 } from "./slices/settingsSlice";
@@ -106,6 +110,7 @@ export type AppState = RepositoriesSlice &
   ScmSlice &
   UiSlice &
   PinnedPromptsSlice &
+  SchedulingSlice &
   SettingsSlice &
   RemoteSlice &
   SystemSlice &
@@ -128,6 +133,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createScmSlice(...a),
   ...createUiSlice(...a),
   ...createPinnedPromptsSlice(...a),
+  ...createSchedulingSlice(...a),
   ...createSettingsSlice(...a),
   ...createRemoteSlice(...a),
   ...createSystemSlice(...a),

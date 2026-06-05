@@ -651,6 +651,9 @@ export function ChatPanel() {
               );
             },
             workspaceId,
+            sessionId,
+            openScheduler: (prefill) =>
+              useAppStore.getState().openScheduler(prefill),
             agentStatus: agentStatusLabel,
             selectedModel: currentModel,
             selectedModelProvider: currentModelProvider,
