@@ -14,6 +14,7 @@ export interface ChatTurnSettings {
   planMode: boolean;
   effort: string | null;
   chromeEnabled: boolean;
+  ultracode: boolean;
 }
 
 export interface ToolbarSlice {
@@ -24,6 +25,10 @@ export interface ToolbarSlice {
   planMode: Record<string, boolean>;
   effortLevel: Record<string, string>;
   chromeEnabled: Record<string, boolean>;
+  /** Ultracode (top "ultracode" effort tier) toggle, keyed by session id.
+   *  Only offered for Opus 4.8 in the composer; drives the
+   *  `CLAUDE_CODE_EFFORT_LEVEL=ultracode` env on the spawned agent. */
+  ultracode: Record<string, boolean>;
   modelSelectorOpen: boolean;
   setSelectedModel: (wsId: string, model: string, providerId?: string) => void;
   setSelectedModelProvider: (wsId: string, providerId: string) => void;
@@ -32,6 +37,7 @@ export interface ToolbarSlice {
   setPlanMode: (wsId: string, enabled: boolean) => void;
   setEffortLevel: (wsId: string, level: string) => void;
   setChromeEnabled: (wsId: string, enabled: boolean) => void;
+  setUltracode: (wsId: string, enabled: boolean) => void;
   setModelSelectorOpen: (open: boolean) => void;
   applyChatTurnSettings: (settings: ChatTurnSettings) => void;
 }
@@ -49,6 +55,7 @@ export const createToolbarSlice: StateCreator<
   planMode: {},
   effortLevel: {},
   chromeEnabled: {},
+  ultracode: {},
   modelSelectorOpen: false,
   setSelectedModel: (wsId, model, providerId) =>
     set((s) => ({
@@ -81,6 +88,10 @@ export const createToolbarSlice: StateCreator<
     set((s) => ({
       chromeEnabled: { ...s.chromeEnabled, [wsId]: enabled },
     })),
+  setUltracode: (wsId, enabled) =>
+    set((s) => ({
+      ultracode: { ...s.ultracode, [wsId]: enabled },
+    })),
   setModelSelectorOpen: (open) => set({ modelSelectorOpen: open }),
   // Apply settings reported by the backend after a turn lands. Booleans are
   // always part of the resolved AgentSettings (false ≠ "unset"), so they
@@ -97,6 +108,7 @@ export const createToolbarSlice: StateCreator<
     planMode,
     effort,
     chromeEnabled,
+    ultracode,
   }) =>
     set((s) => {
       const next: Partial<ToolbarSlice> = {
@@ -104,6 +116,7 @@ export const createToolbarSlice: StateCreator<
         thinkingEnabled: { ...s.thinkingEnabled, [chatSessionId]: thinkingEnabled },
         planMode: { ...s.planMode, [chatSessionId]: planMode },
         chromeEnabled: { ...s.chromeEnabled, [chatSessionId]: chromeEnabled },
+        ultracode: { ...s.ultracode, [chatSessionId]: ultracode },
       };
       if (model !== null) {
         next.selectedModel = { ...s.selectedModel, [chatSessionId]: model };

@@ -76,6 +76,13 @@ pub struct AgentSettings {
     /// selected model runs at its 200k window. Derived frontend-side from
     /// the model registry's `contextWindowTokens`.
     pub disable_1m_context: bool,
+    /// When true, set `CLAUDE_CODE_EFFORT_LEVEL=ultracode` on the spawned CLI
+    /// process so Claude Code runs at its top "ultracode" effort tier (xhigh
+    /// reasoning plus standing dynamic-workflow orchestration). Session-level:
+    /// the env var is read once at process spawn, so the UI toggle resets the
+    /// agent session to re-spawn with the new value (mirrors `chrome_enabled`).
+    /// Only offered for xhigh-capable Opus 4.8 in the composer.
+    pub ultracode: bool,
     /// When true, redirect Claude Code agent-team teammates into Claudette
     /// session tabs. Defaults to true for new users; settings can opt out.
     pub team_agent_session_tabs_enabled: bool,
@@ -104,6 +111,7 @@ impl Default for AgentSettings {
             chrome_enabled: false,
             mcp_config: None,
             disable_1m_context: false,
+            ultracode: false,
             team_agent_session_tabs_enabled: true,
             backend_runtime: AgentBackendRuntime::default(),
             hook_bridge: None,

@@ -923,6 +923,7 @@ async fn handle_send_chat_message(
         parsed.effort,
         parsed.chrome_enabled,
         parsed.disable_1m_context,
+        parsed.ultracode,
         parsed.backend_id,
         parsed.attachments,
         app.clone(),
@@ -1029,6 +1030,7 @@ pub(crate) struct SendChatParams {
     pub effort: Option<String>,
     pub chrome_enabled: Option<bool>,
     pub disable_1m_context: Option<bool>,
+    pub ultracode: Option<bool>,
     pub backend_id: Option<String>,
     pub permission_level: Option<String>,
     pub attachments: Option<Vec<crate::commands::chat::AttachmentInput>>,
@@ -1066,6 +1068,7 @@ pub(crate) fn parse_send_chat_params(params: &serde_json::Value) -> Result<SendC
         effort: str_param("effort"),
         chrome_enabled: bool_param("chrome_enabled"),
         disable_1m_context: bool_param("disable_1m_context"),
+        ultracode: bool_param("ultracode"),
         backend_id: str_param("backend_id")
             .or_else(|| str_param("backendId"))
             .or_else(|| str_param("model_provider"))
@@ -1788,6 +1791,7 @@ mod tests {
             "effort": "high",
             "chrome_enabled": true,
             "disable_1m_context": true,
+            "ultracode": true,
             "permission_level": "acceptEdits",
             "mentioned_files": ["/tmp/a.rs"],
             "attachments": [{
@@ -1807,6 +1811,7 @@ mod tests {
         assert_eq!(parsed.effort.as_deref(), Some("high"));
         assert_eq!(parsed.chrome_enabled, Some(true));
         assert_eq!(parsed.disable_1m_context, Some(true));
+        assert_eq!(parsed.ultracode, Some(true));
         assert_eq!(parsed.permission_level.as_deref(), Some("acceptEdits"));
         assert_eq!(
             parsed.mentioned_files.as_ref().unwrap(),
@@ -1829,6 +1834,7 @@ mod tests {
         assert_eq!(parsed.effort, None);
         assert_eq!(parsed.chrome_enabled, None);
         assert_eq!(parsed.disable_1m_context, None);
+        assert_eq!(parsed.ultracode, None);
         assert_eq!(parsed.permission_level, None);
     }
 

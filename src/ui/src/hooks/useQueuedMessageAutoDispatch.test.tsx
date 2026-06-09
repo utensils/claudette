@@ -156,6 +156,7 @@ describe("useQueuedMessageAutoDispatch", () => {
       undefined,
       undefined,
       expect.any(String),
+      undefined,
     );
     expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-a");
     expect(useAppStore.getState().queuedMessages["session-b"]).toBeUndefined();

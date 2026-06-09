@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
+import { CircleDollarSign, Sparkles, BookOpen, Atom } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
-import { getAppSetting } from "../../../services/tauri";
+import { getAppSetting, setAppSetting, resetAgentSession } from "../../../services/tauri";
 import { tooltipAttributes } from "../../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../../hotkeys/platform";
 import { ModelSelector, is1mContextModel, get1mFallback } from "../ModelSelector";
 import { findModelInRegistry } from "../modelRegistry";
 import { useModelRegistry } from "../useModelRegistry";
-import { isFastSupported, isEffortSupported } from "../modelCapabilities";
+import { isFastSupported, isEffortSupported, isUltracodeSupported } from "../modelCapabilities";
 import {
   normalizeReasoningLevel,
   reasoningVariantForModel,
@@ -54,6 +54,7 @@ export function ComposerToolbar({
   const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
   const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
+  const ultracode = useAppStore((s) => s.ultracode[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const keybindings = useAppStore((s) => s.keybindings);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
@@ -61,6 +62,7 @@ export function ComposerToolbar({
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
+  const setUltracode = useAppStore((s) => s.setUltracode);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
   const claudeFlagsState = useAppStore(
@@ -90,7 +92,7 @@ export function ComposerToolbar({
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, provider, fast, thinking, plan, effort, showThinking, chrome, defModel, defProvider, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
+      const [model, provider, fast, thinking, plan, effort, showThinking, chrome, defModel, defProvider, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome, ultra] = await Promise.all([
         getAppSetting(`model:${sessionId}`),
         getAppSetting(`model_provider:${sessionId}`),
         getAppSetting(`fast_mode:${sessionId}`),
@@ -107,6 +109,7 @@ export function ComposerToolbar({
         getAppSetting("default_effort"),
         getAppSetting("default_show_thinking"),
         getAppSetting("default_chrome"),
+        getAppSetting(`ultracode_enabled:${sessionId}`),
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
@@ -133,11 +136,14 @@ export function ComposerToolbar({
       }
       setShowThinkingBlocks(sessionId, showThinking === "true" || (!showThinking && defShowThinking === "true"));
       setChromeEnabled(sessionId, chrome === "true" || (!chrome && defChrome === "true"));
+      // Ultracode is session-scoped: remembered per session, but never read
+      // from a global default (matches Claude Code's own ultracode semantics).
+      setUltracode(sessionId, ultra === "true");
       setLoaded(true);
     }
     load();
     return () => { cancelled = true; };
-  }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
+  }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled, setUltracode]);
 
   const handleModelSelect = useCallback(
     async (model: string, providerId = "anthropic") => {
@@ -152,6 +158,16 @@ export function ComposerToolbar({
   const togglePlan = useCallback(async () => {
     await setPlanModeAndPersist(sessionId, !planMode);
   }, [sessionId, planMode]);
+
+  // Ultracode drives the `CLAUDE_CODE_EFFORT_LEVEL=ultracode` env, which the
+  // agent reads only at process spawn. Reset the session so the next turn
+  // re-spawns with the new value — same pattern as the Chrome toggle.
+  const toggleUltracode = useCallback(async () => {
+    const next = !ultracode;
+    setUltracode(sessionId, next);
+    await setAppSetting(`ultracode_enabled:${sessionId}`, String(next));
+    await resetAgentSession(sessionId);
+  }, [sessionId, ultracode, setUltracode]);
 
   // The Cmd/Ctrl+T thinking-mode hotkey lived here as a raw
   // `window.addEventListener("keydown")` listener. It's been removed —
@@ -173,6 +189,10 @@ export function ComposerToolbar({
     ? `${currentModel.providerLabel} / ${currentModel.label}`
     : currentModel?.label ?? selectedModel;
   const isExtraUsage = currentModel?.extraUsage ?? false;
+  // Ultracode is offered only on Opus 4.8 (the xhigh-capable, product-gated
+  // model). Hidden entirely on every other model rather than disabled.
+  const ultracodeAvailable =
+    selectedProvider === "anthropic" && isUltracodeSupported(selectedModel);
   const isMac = isMacHotkeyPlatform();
 
   if (!loaded) return null;
@@ -216,6 +236,18 @@ export function ComposerToolbar({
       />
 
       <ReasoningPill sessionId={sessionId} disabled={mutationDisabled} />
+
+      {ultracodeAvailable && (
+        <ToolbarPill
+          icon={<Atom size={14} />}
+          label="Ultracode"
+          active={ultracode}
+          onClick={toggleUltracode}
+          disabled={mutationDisabled}
+          title={`${ultracode ? "Disable" : "Enable"} Ultracode — xhigh effort + standing workflow orchestration (Opus 4.8 only)`}
+          ariaPressed={ultracode}
+        />
+      )}
 
       <ClaudeFlagsTooltip resolved={resolvedFlags} />
 

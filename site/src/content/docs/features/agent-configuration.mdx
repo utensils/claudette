@@ -56,6 +56,14 @@ Select the effort level from the dropdown in the chat header, next to the model 
 
 Set the default in `Settings > Models > Default effort level`.
 
+## Ultracode
+
+Ultracode is Claude Code's top effort tier — **XHigh reasoning plus standing dynamic-workflow orchestration**, so the agent leans on multi-agent workflows to produce the most exhaustive, correct answer rather than the fastest one. It is meant for large, high-stakes tasks where thoroughness matters more than turnaround.
+
+When the active model is **Opus 4.8** (the `opus` 1M alias or `claude-opus-4-8`), an **Ultracode** pill appears in the chat header toolbar, next to the reasoning controls. It is hidden on every other model, because ultracode requires an xhigh-capable model. Toggling it on sets `CLAUDE_CODE_EFFORT_LEVEL=ultracode` on the agent subprocess; because that variable is read once when the process spawns, flipping the toggle restarts the agent session so the next turn picks up the new tier (the conversation transcript is preserved).
+
+Ultracode is session-scoped — it is remembered per chat session but is intentionally never promoted to a saved default, matching Claude Code's own behavior for this tier.
+
 ## Extended Thinking
 
 When enabled, the agent shows its reasoning process in expandable "thinking" blocks before its response.

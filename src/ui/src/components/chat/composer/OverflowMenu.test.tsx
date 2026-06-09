@@ -21,6 +21,7 @@ interface MockState {
   planMode: Record<string, boolean>;
   effortLevel: Record<string, string>;
   chromeEnabled: Record<string, boolean>;
+  ultracode: Record<string, boolean>;
   setFastMode: ReturnType<typeof vi.fn>;
   setChromeEnabled: ReturnType<typeof vi.fn>;
   clearAgentQuestion: ReturnType<typeof vi.fn>;
@@ -40,6 +41,7 @@ const appStore = vi.hoisted(
       planMode: {},
       effortLevel: {},
       chromeEnabled: {},
+      ultracode: {},
       setFastMode: vi.fn(),
       setChromeEnabled: vi.fn(),
       clearAgentQuestion: vi.fn(),

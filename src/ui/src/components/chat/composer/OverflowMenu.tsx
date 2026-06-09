@@ -13,7 +13,7 @@ import {
   type ClaudeRemoteControlStatus,
 } from "../../../services/tauri";
 import { shouldDisable1mContext } from "../chatHelpers";
-import { isFastSupported } from "../modelCapabilities";
+import { isFastSupported, isUltracodeSupported } from "../modelCapabilities";
 import { useSelectedModelEntry } from "../useSelectedModelEntry";
 import styles from "./OverflowMenu.module.css";
 
@@ -67,6 +67,7 @@ export function OverflowMenu({
   const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
   const effortLevel = useAppStore((s) => s.effortLevel[sessionId] ?? "auto");
   const chromeEnabled = useAppStore((s) => s.chromeEnabled[sessionId] ?? false);
+  const ultracode = useAppStore((s) => s.ultracode[sessionId] ?? false);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
@@ -138,6 +139,10 @@ export function OverflowMenu({
           effort: effortLevel,
           chromeEnabled,
           disable1mContext: shouldDisable1mContext(selectedModel),
+          ultracode:
+            ultracode &&
+            selectedProvider === "anthropic" &&
+            isUltracodeSupported(selectedModel),
         });
         setRemoteControlStatus(next);
       } catch (err) {
@@ -162,6 +167,7 @@ export function OverflowMenu({
       selectedProvider,
       sessionId,
       thinkingEnabled,
+      ultracode,
     ],
   );
 

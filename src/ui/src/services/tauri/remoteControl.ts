@@ -35,6 +35,7 @@ export function setClaudeRemoteControl(
     effort?: string | null;
     chromeEnabled?: boolean;
     disable1mContext?: boolean;
+    ultracode?: boolean;
     backendId?: string;
   } = {},
 ): Promise<ClaudeRemoteControlStatus> {
@@ -49,6 +50,7 @@ export function setClaudeRemoteControl(
     effort: options.effort ?? null,
     chromeEnabled: options.chromeEnabled ?? null,
     disable1mContext: options.disable1mContext ?? null,
+    ultracode: options.ultracode ?? null,
     backendId: options.backendId ?? null,
   });
 }

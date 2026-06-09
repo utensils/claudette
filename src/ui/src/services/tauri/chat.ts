@@ -38,6 +38,7 @@ export function sendChatMessage(
   backendId?: string,
   attachments?: AttachmentInput[],
   messageId?: string,
+  ultracode?: boolean,
 ): Promise<void> {
   return invoke("send_chat_message", {
     sessionId,
@@ -52,6 +53,7 @@ export function sendChatMessage(
     effort: effort ?? null,
     chromeEnabled: chromeEnabled ?? null,
     disable1mContext: disable1mContext ?? null,
+    ultracode: ultracode ?? null,
     backendId: backendId ?? null,
     attachments: attachments ?? null,
   });

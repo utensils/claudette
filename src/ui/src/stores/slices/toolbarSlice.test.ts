@@ -11,6 +11,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
       planMode: {},
       effortLevel: {},
       chromeEnabled: {},
+      ultracode: {},
     });
   });
 
@@ -24,6 +25,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
       planMode: true,
       effort: "high",
       chromeEnabled: true,
+      ultracode: true,
     });
     const s = useAppStore.getState();
     expect(s.selectedModel["sess-1"]).toBe("sonnet");
@@ -32,6 +34,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
     expect(s.planMode["sess-1"]).toBe(true);
     expect(s.effortLevel["sess-1"]).toBe("high");
     expect(s.chromeEnabled["sess-1"]).toBe(true);
+    expect(s.ultracode["sess-1"]).toBe(true);
     expect(s.fastMode["sess-1"]).toBe(false);
   });
 
@@ -44,6 +47,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
       thinkingEnabled: { "sess-1": true },
       fastMode: { "sess-1": true },
       chromeEnabled: { "sess-1": true },
+      ultracode: { "sess-1": true },
     });
     useAppStore.getState().applyChatTurnSettings({
       chatSessionId: "sess-1",
@@ -54,12 +58,14 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
       planMode: false,
       effort: null,
       chromeEnabled: false,
+      ultracode: false,
     });
     const s = useAppStore.getState();
     expect(s.planMode["sess-1"]).toBe(false);
     expect(s.thinkingEnabled["sess-1"]).toBe(false);
     expect(s.fastMode["sess-1"]).toBe(false);
     expect(s.chromeEnabled["sess-1"]).toBe(false);
+    expect(s.ultracode["sess-1"]).toBe(false);
   });
 
   // model=null means the agent fell back to a workspace/global default we
@@ -81,6 +87,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
       planMode: false,
       effort: null,
       chromeEnabled: false,
+      ultracode: false,
     });
     const s = useAppStore.getState();
     expect(s.selectedModel["sess-1"]).toBe("opus");
@@ -103,6 +110,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
       planMode: false,
       effort: null,
       chromeEnabled: false,
+      ultracode: false,
     });
     const s = useAppStore.getState();
     expect(s.selectedModel["sess-1"]).toBe("sonnet");
