@@ -115,6 +115,42 @@ pub struct LoadedPlugin {
     pub trust: PluginTrust,
 }
 
+impl LoadedPlugin {
+    /// Whether this plugin's `required_clis` should be treated as available,
+    /// healing a stale "unavailable" snapshot by re-resolving against the
+    /// current enriched PATH.
+    ///
+    /// `cli_available` is a one-shot snapshot taken at registry discovery
+    /// (`PluginRegistry::discover`). On a Finder/Dock-launched app the
+    /// login-shell PATH probe (`prewarm_shell_env`) runs asynchronously and
+    /// usually finishes *after* discovery, so a CLI installed only under e.g.
+    /// `/opt/homebrew/bin` is missed and the snapshot latches `false` for the
+    /// whole session — which silently hides SCM providers (`gh`/`glab`) and
+    /// makes the sidebar PR/CI indicators disappear. Re-checking against the
+    /// (now-warm) enriched PATH lets the next consumer recover without a
+    /// restart, and also picks up a CLI the user installs or a `.zshrc` edit
+    /// made mid-session.
+    ///
+    /// Asymmetric by design — this is NOT a true "is it available this
+    /// instant" check:
+    /// - A snapshot of `true` is trusted and returned as-is, with no
+    ///   re-check, so this will keep reporting `true` for a CLI that was
+    ///   present at discovery but has since been removed (runtime errors
+    ///   from the failed invocation cover that case). The win is that the
+    ///   common already-available call stays a single bool read.
+    /// - Only a `false` snapshot triggers the live recovery check, which is
+    ///   a synchronous `which` PATH search (bounded filesystem lookups), NOT
+    ///   the up-to-5s shell probe (that only ever runs via
+    ///   `prewarm_shell_env` / the rc-file watcher).
+    ///
+    /// So it is cheap enough for the periodic SCM poll loop and the
+    /// `call_operation` gate, but it is not strictly non-blocking on the
+    /// recovery path — do not call it on latency-critical hot paths.
+    pub fn cli_available_now(&self) -> bool {
+        self.cli_available || check_clis_available(&self.manifest.required_clis)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PluginError {
     CliNotFound(String),
@@ -681,7 +717,14 @@ impl PluginRegistry {
             });
         }
 
-        if !plugin.cli_available {
+        // Re-check availability at use rather than trusting the
+        // discovery-time `cli_available` snapshot: that snapshot can latch
+        // `false` when the login-shell PATH probe hadn't warmed yet at
+        // startup (Finder-launched app), and the manual-override SCM fetch
+        // path reaches this gate. `cli_available_now()` keeps the warm
+        // bool as a fast path and only re-runs `which` when the snapshot
+        // was false.
+        if !plugin.cli_available_now() {
             let cli_list = plugin.manifest.required_clis.join(", ");
             return Err(PluginError::CliNotFound(cli_list));
         }
