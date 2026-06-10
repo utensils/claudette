@@ -116,7 +116,9 @@ pub struct LoadedPlugin {
 }
 
 impl LoadedPlugin {
-    /// Whether this plugin's `required_clis` resolve on PATH *right now*.
+    /// Whether this plugin's `required_clis` should be treated as available,
+    /// healing a stale "unavailable" snapshot by re-resolving against the
+    /// current enriched PATH.
     ///
     /// `cli_available` is a one-shot snapshot taken at registry discovery
     /// (`PluginRegistry::discover`). On a Finder/Dock-launched app the
@@ -129,10 +131,21 @@ impl LoadedPlugin {
     /// restart, and also picks up a CLI the user installs or a `.zshrc` edit
     /// made mid-session.
     ///
-    /// Cheap and non-blocking: the already-available path is a single bool
-    /// read; the recovery path is a `which` PATH search, never the up-to-5s
-    /// shell probe (that only ever runs via `prewarm_shell_env` / the
-    /// rc-file watcher). Safe to call from the async SCM poll loop.
+    /// Asymmetric by design — this is NOT a true "is it available this
+    /// instant" check:
+    /// - A snapshot of `true` is trusted and returned as-is, with no
+    ///   re-check, so this will keep reporting `true` for a CLI that was
+    ///   present at discovery but has since been removed (runtime errors
+    ///   from the failed invocation cover that case). The win is that the
+    ///   common already-available call stays a single bool read.
+    /// - Only a `false` snapshot triggers the live recovery check, which is
+    ///   a synchronous `which` PATH search (bounded filesystem lookups), NOT
+    ///   the up-to-5s shell probe (that only ever runs via
+    ///   `prewarm_shell_env` / the rc-file watcher).
+    ///
+    /// So it is cheap enough for the periodic SCM poll loop and the
+    /// `call_operation` gate, but it is not strictly non-blocking on the
+    /// recovery path — do not call it on latency-critical hot paths.
     pub fn cli_available_now(&self) -> bool {
         self.cli_available || check_clis_available(&self.manifest.required_clis)
     }
