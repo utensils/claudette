@@ -56,7 +56,12 @@ pub fn detect_provider(
     let mut best_match: Option<(String, usize)> = None;
 
     for (name, plugin) in plugins {
-        if !plugin.cli_available {
+        // `cli_available_now()` rather than the raw `cli_available`
+        // snapshot: discovery can latch `false` for `gh`/`glab` when the
+        // login-shell PATH probe hasn't warmed yet at startup, which would
+        // otherwise hide the provider — and the sidebar PR/CI indicator —
+        // for the whole session. The recheck recovers once the PATH warms.
+        if !plugin.cli_available_now() {
             continue;
         }
         for pattern in &plugin.manifest.remote_patterns {
@@ -219,7 +224,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_detect_provider_recovers_when_cli_now_resolvable() {
+        // Regression guard for the #990 fallout: plugin discovery can latch
+        // cli_available=false when the login-shell PATH probe hasn't warmed
+        // yet (Finder-launched app, cold shell-env cache). detect_provider
+        // must re-check availability at use, so a now-resolvable CLI
+        // restores the provider — and the sidebar PR/CI indicator — instead
+        // of staying hidden for the whole session. Empty required_clis here
+        // stands in for "the required CLIs now resolve on PATH".
+        let mut plugins = HashMap::new();
+        plugins.insert(
+            "github".to_string(),
+            make_plugin_with_clis("github", &["github.com"], false, vec![]),
+        );
+
+        assert_eq!(
+            detect_provider("https://github.com/user/repo.git", &plugins),
+            Some("github".to_string())
+        );
+    }
+
     fn make_plugin(name: &str, patterns: &[&str], cli_available: bool) -> LoadedPlugin {
+        // A genuinely-unavailable plugin must also declare a CLI that won't
+        // resolve on PATH; otherwise the self-healing `cli_available_now()`
+        // recheck would trivially pass on an empty required_clis list and
+        // the "unavailable" tests would no longer exercise unavailability.
+        let required_clis = if cli_available {
+            vec![]
+        } else {
+            vec!["claudette-scm-detect-test-absent-cli".to_string()]
+        };
+        make_plugin_with_clis(name, patterns, cli_available, required_clis)
+    }
+
+    fn make_plugin_with_clis(
+        name: &str,
+        patterns: &[&str],
+        cli_available: bool,
+        required_clis: Vec<String>,
+    ) -> LoadedPlugin {
         use crate::plugin_runtime::manifest::PluginManifest;
         LoadedPlugin {
             manifest: PluginManifest {
@@ -227,7 +271,7 @@ mod tests {
                 display_name: name.to_string(),
                 version: "1.0.0".to_string(),
                 description: "test".to_string(),
-                required_clis: vec![],
+                required_clis,
                 remote_patterns: patterns.iter().map(|s| s.to_string()).collect(),
                 operations: vec![],
                 config_schema: std::collections::HashMap::new(),

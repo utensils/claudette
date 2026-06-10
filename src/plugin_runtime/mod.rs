@@ -115,6 +115,29 @@ pub struct LoadedPlugin {
     pub trust: PluginTrust,
 }
 
+impl LoadedPlugin {
+    /// Whether this plugin's `required_clis` resolve on PATH *right now*.
+    ///
+    /// `cli_available` is a one-shot snapshot taken at registry discovery
+    /// (`PluginRegistry::discover`). On a Finder/Dock-launched app the
+    /// login-shell PATH probe (`prewarm_shell_env`) runs asynchronously and
+    /// usually finishes *after* discovery, so a CLI installed only under e.g.
+    /// `/opt/homebrew/bin` is missed and the snapshot latches `false` for the
+    /// whole session — which silently hides SCM providers (`gh`/`glab`) and
+    /// makes the sidebar PR/CI indicators disappear. Re-checking against the
+    /// (now-warm) enriched PATH lets the next consumer recover without a
+    /// restart, and also picks up a CLI the user installs or a `.zshrc` edit
+    /// made mid-session.
+    ///
+    /// Cheap and non-blocking: the already-available path is a single bool
+    /// read; the recovery path is a `which` PATH search, never the up-to-5s
+    /// shell probe (that only ever runs via `prewarm_shell_env` / the
+    /// rc-file watcher). Safe to call from the async SCM poll loop.
+    pub fn cli_available_now(&self) -> bool {
+        self.cli_available || check_clis_available(&self.manifest.required_clis)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PluginError {
     CliNotFound(String),
@@ -681,7 +704,14 @@ impl PluginRegistry {
             });
         }
 
-        if !plugin.cli_available {
+        // Re-check availability at use rather than trusting the
+        // discovery-time `cli_available` snapshot: that snapshot can latch
+        // `false` when the login-shell PATH probe hadn't warmed yet at
+        // startup (Finder-launched app), and the manual-override SCM fetch
+        // path reaches this gate. `cli_available_now()` keeps the warm
+        // bool as a fast path and only re-runs `which` when the snapshot
+        // was false.
+        if !plugin.cli_available_now() {
             let cli_list = plugin.manifest.required_clis.join(", ");
             return Err(PluginError::CliNotFound(cli_list));
         }
