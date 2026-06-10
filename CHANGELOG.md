@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.26.0](https://github.com/utensils/claudette/compare/v0.25.0...v0.26.0) (2026-06-10)
+
+
+### Features
+
+* **chat:** group MCP tool calls into per-server containers ([#984](https://github.com/utensils/claudette/issues/984)) ([49ad505](https://github.com/utensils/claudette/commit/49ad5055914c9706169db1d92696a7be849073aa))
+* **i18n:** add German (de) translation ([#986](https://github.com/utensils/claudette/issues/986)) ([cb4fafe](https://github.com/utensils/claudette/commit/cb4fafe9d7689a47d7cc84cc203c326358657e5c))
+* inherit user shell environment on subprocess spawn ([#990](https://github.com/utensils/claudette/issues/990)) ([#991](https://github.com/utensils/claudette/issues/991)) ([558b686](https://github.com/utensils/claudette/commit/558b6869bc6d14a19fb86b48e73da0ce5a63a5b8))
+* **models:** add Fable 5 as a selectable Anthropic model ([#995](https://github.com/utensils/claudette/issues/995)) ([a256209](https://github.com/utensils/claudette/commit/a256209e5d088d25dd2f4f90fd5fa85d95306585))
+* **models:** add Opus 4.8 and make it the default ([#993](https://github.com/utensils/claudette/issues/993)) ([e3de895](https://github.com/utensils/claudette/commit/e3de8953e550c1c0e775c9f124f8c855193e90e2))
+* **sidebar:** add opt-in turn count badge per workspace ([#992](https://github.com/utensils/claudette/issues/992)) ([a80303a](https://github.com/utensils/claudette/commit/a80303a29550b6e3a9d5756d407cfbb3e95797ac))
+
+
+### Bug Fixes
+
+* **scm:** restore sidebar PR/CI indicators by rechecking plugin CLI availability at use ([#996](https://github.com/utensils/claudette/issues/996)) ([9d50345](https://github.com/utensils/claudette/commit/9d50345c31c6834bc13bf608afd6c9704510cb36))
+
 ## [0.25.0](https://github.com/utensils/claudette/compare/v0.24.0...v0.25.0) (2026-05-22)
 
 
