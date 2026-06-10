@@ -93,6 +93,15 @@ const PRICING_TABLE: &[(&str, ModelPricing)] = &[
         },
     ),
     // -- Anthropic (only used when local-aggregating, e.g. via Pi) -----
+    // Fable 5 is priced at 2x Opus. The `[1m]` variant matches this same
+    // prefix via `starts_with`, so a single entry covers both ids.
+    (
+        "claude-fable-5",
+        ModelPricing {
+            prompt_per_mtok_usd: 30.00,
+            completion_per_mtok_usd: 150.00,
+        },
+    ),
     (
         "claude-opus-4-8",
         ModelPricing {
@@ -145,6 +154,16 @@ mod tests {
     fn lookup_known_model() {
         let p = lookup("gpt-5.4").expect("gpt-5.4 has pricing");
         assert!((p.prompt_per_mtok_usd - 1.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn lookup_fable_5_priced_at_2x_opus() {
+        let p = lookup("claude-fable-5").expect("claude-fable-5 has pricing");
+        assert!((p.prompt_per_mtok_usd - 30.00).abs() < f64::EPSILON);
+        assert!((p.completion_per_mtok_usd - 150.00).abs() < f64::EPSILON);
+        // The 1M variant shares the bare prefix via `starts_with`.
+        let one_m = lookup("claude-fable-5[1m]").expect("1M variant resolves to same pricing");
+        assert!((one_m.prompt_per_mtok_usd - 30.00).abs() < f64::EPSILON);
     }
 
     #[test]
