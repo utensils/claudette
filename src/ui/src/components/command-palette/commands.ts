@@ -234,7 +234,7 @@ export function buildEffortCommands(
     { id: "low", label: "Low", description: "Fast, minimal reasoning" },
     { id: "medium", label: "Medium", description: "Balanced" },
     { id: "high", label: "High", description: "Deep reasoning" },
-    { id: "xhigh", label: "Extra High", description: "Extended reasoning (Opus 4.7+)" },
+    { id: "xhigh", label: "Extra High", description: "Extended reasoning (Opus 4.7+, Fable 5)" },
     { id: "max", label: "Max", description: "Full budget" },
   ];
   const levels = !isEffortSupported(selectedModel)

@@ -58,6 +58,7 @@ export function is1mContextModel(modelId: string): boolean {
 
 const NON_1M_FALLBACKS: Record<string, string> = {
   "opus": "claude-opus-4-8",
+  "claude-fable-5[1m]": "claude-fable-5",
   "claude-opus-4-7[1m]": "claude-opus-4-7",
   "claude-sonnet-4-6[1m]": "sonnet",
   "claude-opus-4-6[1m]": "claude-opus-4-6",
@@ -80,6 +81,12 @@ export const MODELS: readonly Model[] = [
   { id: "sonnet", label: "Sonnet 4.6", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
   { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M", group: "Claude Code", extraUsage: true, contextWindowTokens: 1_000_000 },
   { id: "haiku", label: "Haiku 4.5", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
+  // Fable 5 is an Opus-class Anthropic model (effort incl. xhigh/max, 1M variant).
+  // It has no bare alias — the concrete id carries through to the Claude CLI `--model`
+  // arg and passes the `claude-` prefix gate in `gateway_translate.rs`. The 1M variant
+  // uses the `[1m]` suffix convention so `is1mContextModel` detects it without a special case.
+  { id: "claude-fable-5", label: "Fable 5", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
+  { id: "claude-fable-5[1m]", label: "Fable 5 1M", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
   { id: "claude-opus-4-7", label: "Opus 4.7", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
   { id: "claude-opus-4-7[1m]", label: "Opus 4.7 1M", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 1_000_000 },
   { id: "claude-opus-4-6", label: "Opus 4.6", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },

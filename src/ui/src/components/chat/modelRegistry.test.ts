@@ -64,6 +64,7 @@ describe("modelRegistry", () => {
   describe("get1mFallback", () => {
     it("maps 1M models to their 200K equivalents", () => {
       expect(get1mFallback("opus")).toBe("claude-opus-4-8");
+      expect(get1mFallback("claude-fable-5[1m]")).toBe("claude-fable-5");
       expect(get1mFallback("claude-opus-4-7[1m]")).toBe("claude-opus-4-7");
       expect(get1mFallback("claude-sonnet-4-6[1m]")).toBe("sonnet");
       expect(get1mFallback("claude-opus-4-6[1m]")).toBe("claude-opus-4-6");
