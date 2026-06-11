@@ -606,6 +606,7 @@ struct ChatTurnSettingsPayload<'a> {
     effort: Option<&'a str>,
     chrome_enabled: bool,
     disable_1m_context: bool,
+    ultracode: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -1112,6 +1113,7 @@ pub async fn send_chat_message(
     effort: Option<String>,
     chrome_enabled: Option<bool>,
     disable_1m_context: Option<bool>,
+    ultracode: Option<bool>,
     backend_id: Option<String>,
     attachments: Option<Vec<AttachmentInput>>,
     app: AppHandle,
@@ -1565,6 +1567,7 @@ pub async fn send_chat_message(
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
+        ultracode: ultracode.unwrap_or(false),
         team_agent_session_tabs_enabled: team_agent_tabs_enabled,
         backend_runtime: backend_runtime.clone(),
         hook_bridge: None,
@@ -1587,6 +1590,7 @@ pub async fn send_chat_message(
             effort: agent_settings.effort.as_deref(),
             chrome_enabled: agent_settings.chrome_enabled,
             disable_1m_context: agent_settings.disable_1m_context,
+            ultracode: agent_settings.ultracode,
         },
     );
 

@@ -885,6 +885,7 @@ function App() {
       effort: string | null;
       chromeEnabled: boolean;
       disable1mContext: boolean;
+      ultracode: boolean;
     }>("chat-turn-settings", (event) => {
       useAppStore.getState().applyChatTurnSettings({
         chatSessionId: event.payload.chatSessionId,
@@ -895,6 +896,7 @@ function App() {
         planMode: event.payload.planMode,
         effort: event.payload.effort,
         chromeEnabled: event.payload.chromeEnabled,
+        ultracode: event.payload.ultracode,
       });
     });
 

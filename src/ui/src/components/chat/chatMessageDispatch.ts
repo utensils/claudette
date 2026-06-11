@@ -3,6 +3,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import type { AttachmentInput } from "../../types/chat";
 import { shouldDisable1mContext } from "./chatHelpers";
+import { isUltracodeSupported } from "./modelCapabilities";
 import {
   buildSendFailureSystemMessage,
   shouldRecordSendFailureInChat,
@@ -73,6 +74,11 @@ export async function dispatchChatMessage({
     const effort = resolveUltrathinkEffort(trimmed, state.effortLevel[sessionId]);
     const chromeEnabled = state.chromeEnabled[sessionId] || false;
     const disable1mContext = shouldDisable1mContext(selectedModel);
+    // Ultracode is gated to Opus 4.8 in the composer. Re-check the model here
+    // so a lingering toggle (e.g. the user switched away from 4.8) never sends
+    // ultracode to a non-xhigh-capable model.
+    const ultracode =
+      (state.ultracode[sessionId] || false) && isUltracodeSupported(selectedModel ?? "");
 
     if (workspace.remote_connection_id) {
       await sendRemoteCommand(workspace.remote_connection_id, "send_chat_message", {
@@ -88,6 +94,7 @@ export async function dispatchChatMessage({
         effort: effort ?? null,
         chrome_enabled: chromeEnabled,
         disable_1m_context: disable1mContext,
+        ultracode,
       });
     } else {
       await sendChatMessage(
@@ -105,6 +112,7 @@ export async function dispatchChatMessage({
         selectedProvider ?? undefined,
         attachments,
         messageId,
+        ultracode || undefined,
       );
     }
   } catch (e) {

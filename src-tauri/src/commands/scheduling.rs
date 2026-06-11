@@ -244,19 +244,20 @@ pub async fn dispatch_prompt_to_session(
     let state = app.state::<AppState>();
     crate::commands::chat::send::send_chat_message(
         chat_session_id,
-        None,
+        None, // message_id
         prompt,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        None, // mentioned_files
+        None, // permission_level
+        None, // model
+        None, // fast_mode
+        None, // thinking_enabled
+        None, // plan_mode
+        None, // effort
+        None, // chrome_enabled
+        None, // disable_1m_context
+        None, // ultracode
+        None, // backend_id
+        None, // attachments
         app.clone(),
         state,
     )

@@ -9,6 +9,7 @@ interface MockState {
   selectedModelProvider: Record<string, string>;
   disable1mContext: boolean;
   planMode: Record<string, boolean>;
+  ultracode: Record<string, boolean>;
   modelSelectorOpen: boolean;
   keybindings: Record<string, unknown>;
   claudeFlagsByWorkspace: Record<string, { resolved: string[] } | undefined>;
@@ -18,6 +19,7 @@ interface MockState {
   setPlanMode: ReturnType<typeof vi.fn>;
   setEffortLevel: ReturnType<typeof vi.fn>;
   setChromeEnabled: ReturnType<typeof vi.fn>;
+  setUltracode: ReturnType<typeof vi.fn>;
   setShowThinkingBlocks: ReturnType<typeof vi.fn>;
   setModelSelectorOpen: ReturnType<typeof vi.fn>;
   loadWorkspaceClaudeFlags: ReturnType<typeof vi.fn>;
@@ -30,6 +32,7 @@ const appStore = vi.hoisted(
       selectedModelProvider: { s1: "anthropic" },
       disable1mContext: false,
       planMode: { s1: false },
+      ultracode: { s1: false },
       modelSelectorOpen: false,
       keybindings: {},
       claudeFlagsByWorkspace: { w1: { resolved: [] } },
@@ -39,6 +42,7 @@ const appStore = vi.hoisted(
       setPlanMode: vi.fn(),
       setEffortLevel: vi.fn(),
       setChromeEnabled: vi.fn(),
+      setUltracode: vi.fn(),
       setShowThinkingBlocks: vi.fn(),
       setModelSelectorOpen: vi.fn(),
       loadWorkspaceClaudeFlags: vi.fn(),
@@ -47,6 +51,8 @@ const appStore = vi.hoisted(
 
 const serviceMocks = vi.hoisted(() => ({
   getAppSetting: vi.fn((_key: string) => Promise.resolve(null as string | null)),
+  setAppSetting: vi.fn(() => Promise.resolve()),
+  resetAgentSession: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../../../stores/useAppStore", () => ({
@@ -55,6 +61,8 @@ vi.mock("../../../stores/useAppStore", () => ({
 
 vi.mock("../../../services/tauri", () => ({
   getAppSetting: serviceMocks.getAppSetting,
+  setAppSetting: serviceMocks.setAppSetting,
+  resetAgentSession: serviceMocks.resetAgentSession,
 }));
 
 vi.mock("../useModelRegistry", () => ({
@@ -163,11 +171,15 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
 
 beforeEach(() => {
   serviceMocks.getAppSetting.mockClear();
+  serviceMocks.setAppSetting.mockClear();
+  serviceMocks.resetAgentSession.mockClear();
   appStore.setSelectedModel.mockClear();
   appStore.setPlanMode.mockClear();
+  appStore.setUltracode.mockClear();
   appStore.selectedModel = { s1: "opus" };
   appStore.selectedModelProvider = { s1: "anthropic" };
   appStore.planMode = { s1: false };
+  appStore.ultracode = { s1: false };
 });
 
 afterEach(async () => {
@@ -209,5 +221,46 @@ describe("ComposerToolbar disable semantics", () => {
     expect(buttonByText(container, "Opus").disabled).toBe(true);
     expect(buttonByText(container, "Plan").disabled).toBe(true);
     expect(buttonByText(container, "Thinking").disabled).toBe(true);
+  });
+});
+
+describe("ComposerToolbar Ultracode toggle", () => {
+  function maybeButtonByText(
+    container: HTMLElement,
+    text: string,
+  ): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes(text),
+    );
+  }
+
+  it("offers Ultracode on Opus 4.8", async () => {
+    appStore.selectedModel = { s1: "claude-opus-4-8" };
+    const { container } = await renderToolbar({});
+    expect(maybeButtonByText(container, "Ultracode")).toBeDefined();
+  });
+
+  it("hides Ultracode on models other than Opus 4.8", async () => {
+    appStore.selectedModel = { s1: "sonnet" };
+    const { container } = await renderToolbar({});
+    expect(maybeButtonByText(container, "Ultracode")).toBeUndefined();
+  });
+
+  it("persists and resets the session when toggled on", async () => {
+    appStore.selectedModel = { s1: "opus" };
+    appStore.ultracode = { s1: false };
+    const { container } = await renderToolbar({});
+
+    await act(async () => {
+      buttonByText(container, "Ultracode").click();
+      await Promise.resolve();
+    });
+
+    expect(appStore.setUltracode).toHaveBeenCalledWith("s1", true);
+    expect(serviceMocks.setAppSetting).toHaveBeenCalledWith(
+      "ultracode_enabled:s1",
+      "true",
+    );
+    expect(serviceMocks.resetAgentSession).toHaveBeenCalledWith("s1");
   });
 });

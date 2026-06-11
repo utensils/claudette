@@ -50,6 +50,7 @@ struct RemoteControlLaunchOptions {
     effort: Option<String>,
     chrome_enabled: Option<bool>,
     disable_1m_context: Option<bool>,
+    ultracode: Option<bool>,
     backend_id: Option<String>,
 }
 
@@ -78,6 +79,7 @@ pub async fn set_claude_remote_control(
     effort: Option<String>,
     chrome_enabled: Option<bool>,
     disable_1m_context: Option<bool>,
+    ultracode: Option<bool>,
     backend_id: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
@@ -91,6 +93,7 @@ pub async fn set_claude_remote_control(
         effort,
         chrome_enabled,
         disable_1m_context,
+        ultracode,
         backend_id,
     };
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -568,6 +571,7 @@ async fn ensure_persistent_session_for_remote_control(
         chrome_enabled: launch_options.chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: launch_options.disable_1m_context.unwrap_or(false),
+        ultracode: launch_options.ultracode.unwrap_or(false),
         team_agent_session_tabs_enabled,
         backend_runtime,
         hook_bridge: None,

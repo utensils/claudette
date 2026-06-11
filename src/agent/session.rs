@@ -113,6 +113,14 @@ impl PersistentSession {
         if settings.disable_1m_context {
             cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
         }
+        // Ultracode is the top effort tier; Claudette drives normal effort via
+        // the `--effort` flag, so the env var is reserved for ultracode and we
+        // clear any inherited value when the toggle is off for deterministic
+        // behavior.
+        cmd.env_remove("CLAUDE_CODE_EFFORT_LEVEL");
+        if settings.ultracode {
+            cmd.env("CLAUDE_CODE_EFFORT_LEVEL", "ultracode");
+        }
         if let Some(ref bridge) = settings.hook_bridge {
             cmd.env(
                 crate::agent_mcp::server::ENV_SOCKET_ADDR,
