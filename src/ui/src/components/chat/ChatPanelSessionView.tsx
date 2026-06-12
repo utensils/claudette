@@ -26,12 +26,14 @@ import { ChatSearchBar } from "./ChatSearchBar";
 import { CliInvocationBanner } from "./CliInvocationBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { MessagesWithTurns } from "./MessagesWithTurns";
+import { DashboardChatView } from "./dashboard/DashboardChatView";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { PlanApprovalCard } from "./PlanApprovalCard";
 import { setPlanModeAndPersist } from "./planModePersistence";
 import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
 import { ScrollContext } from "./ScrollContext";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
+import { useAppStore } from "../../stores/useAppStore";
 import { SetupScriptBanner } from "./SetupScriptBanner";
 import { StreamingMessage } from "./StreamingMessage";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
@@ -185,6 +187,10 @@ export function ChatPanelSessionView({
   const { t } = useTranslation("chat");
   const cliInvocation = activeChatSessionRecord?.cli_invocation ?? null;
   const formatElapsed = formatElapsedSeconds;
+  // Experimental: when on, summarize each turn's activity into a dashboard
+  // instead of streaming the per-message transcript. Plan-review / question /
+  // approval cards below render identically either way.
+  const dashboardModeEnabled = useAppStore((s) => s.dashboardModeEnabled);
 
   return (
     <>
@@ -234,47 +240,60 @@ export function ChatPanelSessionView({
                     Loading older messages…
                   </div>
                 )}
-                {activeSessionId && selectedWorkspaceId && (
-                  <MessagesWithTurns
-                    key={activeSessionId}
-                    messages={messages}
-                    workspaceId={selectedWorkspaceId}
-                    sessionId={activeSessionId}
-                    isRunning={isRunning}
-                    onForkTurn={isRemote ? undefined : onForkTurn}
-                    onAttachmentContextMenu={onAttachmentContextMenu}
-                    onAttachmentClick={onAttachmentClick}
-                    onOpenFileLink={rememberChatScrollPosition}
-                    searchQuery={searchQuery}
-                    globalOffset={globalOffset}
-                    toolDisplayMode={toolDisplayMode}
-                    liveTaskProgressNode={
-                      activitiesCount > 0 ? (
-                        <CurrentTurnTaskProgress sessionId={activeSessionId} />
-                      ) : null
-                    }
-                    streamingThinkingNode={
-                      hasThinking && showThinkingBlocks ? (
-                        <StreamingThinkingBlock
-                          sessionId={activeSessionId}
-                          isStreaming={isRunning ?? false}
-                          inline={toolDisplayMode === "inline"}
-                          searchQuery={searchQuery}
-                        />
-                      ) : null
-                    }
-                    streamingMessageNode={
-                      hasStreaming || hasPendingTypewriter ? (
-                        <StreamingMessage
-                          sessionId={activeSessionId}
-                          workspaceId={selectedWorkspaceId}
-                          isStreaming={isRunning ?? false}
-                          searchQuery={searchQuery}
-                        />
-                      ) : null
-                    }
-                  />
-                )}
+                {activeSessionId &&
+                  selectedWorkspaceId &&
+                  (dashboardModeEnabled ? (
+                    <DashboardChatView
+                      key={activeSessionId}
+                      messages={messages}
+                      workspaceId={selectedWorkspaceId}
+                      sessionId={activeSessionId}
+                      isRunning={isRunning}
+                      searchQuery={searchQuery}
+                      globalOffset={globalOffset}
+                      toolDisplayMode={toolDisplayMode}
+                    />
+                  ) : (
+                    <MessagesWithTurns
+                      key={activeSessionId}
+                      messages={messages}
+                      workspaceId={selectedWorkspaceId}
+                      sessionId={activeSessionId}
+                      isRunning={isRunning}
+                      onForkTurn={isRemote ? undefined : onForkTurn}
+                      onAttachmentContextMenu={onAttachmentContextMenu}
+                      onAttachmentClick={onAttachmentClick}
+                      onOpenFileLink={rememberChatScrollPosition}
+                      searchQuery={searchQuery}
+                      globalOffset={globalOffset}
+                      toolDisplayMode={toolDisplayMode}
+                      liveTaskProgressNode={
+                        activitiesCount > 0 ? (
+                          <CurrentTurnTaskProgress sessionId={activeSessionId} />
+                        ) : null
+                      }
+                      streamingThinkingNode={
+                        hasThinking && showThinkingBlocks ? (
+                          <StreamingThinkingBlock
+                            sessionId={activeSessionId}
+                            isStreaming={isRunning ?? false}
+                            inline={toolDisplayMode === "inline"}
+                            searchQuery={searchQuery}
+                          />
+                        ) : null
+                      }
+                      streamingMessageNode={
+                        hasStreaming || hasPendingTypewriter ? (
+                          <StreamingMessage
+                            sessionId={activeSessionId}
+                            workspaceId={selectedWorkspaceId}
+                            isStreaming={isRunning ?? false}
+                            searchQuery={searchQuery}
+                          />
+                        ) : null
+                      }
+                    />
+                  ))}
 
                 {showChatAuthLoginPanel && (
                   <ChatAuthFailureCallout

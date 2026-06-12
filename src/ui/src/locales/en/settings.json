@@ -480,6 +480,9 @@
   "experimental_claude_code_usage": "Claude Code Usage",
   "experimental_claude_code_usage_desc": "Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the chat composer's usage meter. Requires a standard Pro or Max login — does not apply to API-key sessions or to Codex / OpenAI / OpenRouter / Pi backends, which already show local-aggregate token totals.",
   "experimental_claude_code_usage_aria": "Claude Code Usage",
+  "experimental_dashboard_mode": "Dashboard mode (chat)",
+  "experimental_dashboard_mode_desc": "Replace the streamed agent transcript with a live activity dashboard. Each turn shows counts of thoughts, questions, plans, tool calls, and tasks (plus a session rollup) instead of individual messages — only your prompt and the agent's final reply stay visible. Plan reviews and questions are unaffected. Expand any turn card to see the full detail.",
+  "experimental_dashboard_mode_aria": "Dashboard mode",
   "usage_indicator_disabled_tooltip": "Claude Code Usage is off — click to enable",
 
   "plugins_title": "Plugins",

@@ -17,6 +17,8 @@ export function ExperimentalSettings() {
   const clearSettingsFocus = useAppStore((s) => s.clearSettingsFocus);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
+  const dashboardModeEnabled = useAppStore((s) => s.dashboardModeEnabled);
+  const setDashboardModeEnabled = useAppStore((s) => s.setDashboardModeEnabled);
   const [error, setError] = useState<string | null>(null);
   const [usageConfirmOpen, setUsageConfirmOpen] = useState(false);
   const usageRowRef = useRef<HTMLDivElement>(null);
@@ -64,6 +66,18 @@ export function ExperimentalSettings() {
     await applyUsageInsights(false);
   };
 
+  const handleDashboardToggle = async () => {
+    const next = !dashboardModeEnabled;
+    setDashboardModeEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting("dashboard_mode_enabled", next ? "true" : "false");
+    } catch (e) {
+      setDashboardModeEnabled(!next);
+      setError(String(e));
+    }
+  };
+
   return (
     <div>
       <h2 className={styles.sectionTitle}>{t("experimental_title")}</h2>
@@ -91,6 +105,29 @@ export function ExperimentalSettings() {
             aria-label={t("experimental_claude_code_usage_aria")}
             data-checked={usageInsightsEnabled}
             onClick={handleUsageToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("experimental_dashboard_mode")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("experimental_dashboard_mode_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={dashboardModeEnabled}
+            aria-label={t("experimental_dashboard_mode_aria")}
+            data-checked={dashboardModeEnabled}
+            onClick={handleDashboardToggle}
           >
             <div className={styles.toggleKnob} />
           </button>
