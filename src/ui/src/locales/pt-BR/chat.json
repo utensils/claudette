@@ -102,6 +102,8 @@
   "model_picker_no_results": "Nenhum modelo corresponde",
   "model_picker_clear_search": "Limpar busca",
   "you_label": "Você",
+  "scheduled_badge": "Agendado",
+  "scheduled_badge_title": "Este prompt foi enviado por uma tarefa agendada (ícone de relógio na barra lateral).",
   "agent_question_title": "Pergunta do agente",
   "agent_question_submit_answer": "Enviar resposta",
   "agent_question_or_type": "Ou digite sua resposta abaixo",

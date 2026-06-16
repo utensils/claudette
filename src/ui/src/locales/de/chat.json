@@ -106,6 +106,8 @@
   "model_picker_no_results": "Keine Modelle gefunden",
   "model_picker_clear_search": "Suche zurücksetzen",
   "you_label": "Du",
+  "scheduled_badge": "Geplant",
+  "scheduled_badge_title": "Dieser Prompt wurde von einer geplanten Aufgabe gesendet (Uhr-Symbol in der Seitenleiste).",
   "agent_question_title": "Agent-Frage",
   "agent_question_submit_answer": "Antwort absenden",
   "agent_question_or_type": "Oder tippe deine Antwort unten",

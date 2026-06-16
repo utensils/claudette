@@ -102,6 +102,8 @@
   "model_picker_no_results": "没有匹配的模型",
   "model_picker_clear_search": "清除搜索",
   "you_label": "你",
+  "scheduled_badge": "已计划",
+  "scheduled_badge_title": "此提示由计划任务发送（侧边栏中的时钟图标）。",
   "agent_question_title": "智能体提问",
   "agent_question_submit_answer": "提交回答",
   "agent_question_or_type": "或在下方输入你的回应",
