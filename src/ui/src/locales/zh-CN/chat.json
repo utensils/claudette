@@ -106,6 +106,8 @@
   "model_picker_routing_via_codex": "经由 Codex app-server",
   "model_picker_routing_tooltip": "由此卡片在“设置 → 模型”中的 Runtime 选项决定的分发路径。",
   "you_label": "你",
+  "scheduled_badge": "已计划",
+  "scheduled_badge_title": "此提示由计划任务发送（侧边栏中的时钟图标）。",
   "agent_question_title": "智能体提问",
   "agent_question_submit_answer": "提交回答",
   "agent_question_or_type": "或在下方输入你的回应",

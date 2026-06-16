@@ -106,6 +106,8 @@
   "model_picker_routing_via_codex": "vía Codex app-server",
   "model_picker_routing_tooltip": "Ruta de envío elegida por la opción Runtime de esta tarjeta en Ajustes → Modelos.",
   "you_label": "Tú",
+  "scheduled_badge": "Programado",
+  "scheduled_badge_title": "Esta indicación fue enviada por una tarea programada (icono de reloj en la barra lateral).",
   "agent_question_title": "Pregunta del agente",
   "agent_question_submit_answer": "Enviar respuesta",
   "agent_question_or_type": "O escribe tu respuesta abajo",

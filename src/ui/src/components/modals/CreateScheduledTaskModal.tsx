@@ -51,6 +51,10 @@ export function CreateScheduledTaskModal() {
     typeof modalData.fireAt === "string" ? (modalData.fireAt as string) : null;
   const prefillCron =
     typeof modalData.cronExpr === "string" ? (modalData.cronExpr as string) : "";
+  const prefillMode =
+    modalData.mode === "cron" || modalData.mode === "wakeup"
+      ? (modalData.mode as TaskType)
+      : null;
 
   // Active (non-archived) workspaces for a repo, in sidebar order.
   const workspacesForRepo = (repoId: string) =>
@@ -91,7 +95,9 @@ export function CreateScheduledTaskModal() {
     () => prefillSessionId ?? activeSessionId ?? NEW_SESSION,
   );
 
-  const [type, setType] = useState<TaskType>(() => (prefillCron ? "cron" : "wakeup"));
+  const [type, setType] = useState<TaskType>(
+    () => prefillMode ?? (prefillCron ? "cron" : "wakeup"),
+  );
   const [fireAt, setFireAt] = useState<string>(() => {
     if (prefillFireAt) {
       const d = new Date(prefillFireAt);

@@ -74,6 +74,6 @@ In a chat, you can create tasks for the current session without opening the dial
 /schedule write the weekly status update  # opens the dialog, prompt prefilled
 ```
 
-`/loop <interval> <prompt>` translates whole-minute intervals that evenly divide their unit (1m/2m/5m/10m/15m/20m/30m, 1h/2h/3h/4h/6h/8h/12h, 1d) to a cron expression and creates a recurring routine in the current session. Sub-minute or odd intervals open the dialog instead so you can write the cron expression directly.
+`/loop <interval> <prompt>` translates an interval into a cron expression and creates a recurring routine in the current session. The interval must evenly divide its unit: minutes that divide an hour (e.g. `1m`, `5m`, `15m`, `30m`), hours that divide a day (e.g. `1h`, `2h`, `6h`, `12h`), or `1d`. Any other interval (sub-minute, or one that doesn't divide evenly) opens the dialog in cron mode so you can write the expression directly.
 
-`/schedule <when> <prompt>` accepts a leading `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM` timestamp. If both the time and prompt are present, it creates the wakeup inline; otherwise it opens the dialog prefilled with whatever you provided.
+`/schedule <when> <prompt>` accepts a leading timestamp — `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`, or a date and time as two tokens (`YYYY-MM-DD HH:MM`) — interpreted in your local time. If both the time and prompt are present, it creates the wakeup inline; otherwise it opens the dialog prefilled with whatever you provided.

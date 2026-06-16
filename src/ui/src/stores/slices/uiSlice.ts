@@ -83,13 +83,16 @@ export interface UiSlice {
 
   // Scheduler page ("Loops and Schedules" — main's `agent_scheduled_tasks`).
   schedulerOpen: boolean;
-  /** When called with `prefill`, also opens the create-task modal with
-   *  those fields pre-populated (used by the `/schedule` slash command). */
+  /** Opens the Loops and Schedules view. Passing ANY `prefill` object (even
+   *  empty / session-only) also opens the create-task modal, pre-populated —
+   *  that's how `/schedule` and `/loop` request the dialog. The sidebar clock
+   *  button calls it with no argument to open just the page. */
   openScheduler: (prefill?: {
     sessionId?: string;
     prompt?: string;
     fireAt?: string;
     cronExpr?: string;
+    mode?: "wakeup" | "cron";
   }) => void;
   closeScheduler: () => void;
   pushSettingsOverlay: () => void;
@@ -309,12 +312,13 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   // Scheduler page
   schedulerOpen: false,
   openScheduler: (prefill) => {
-    const wantsModal =
-      !!prefill && (!!prefill.prompt || !!prefill.fireAt || !!prefill.cronExpr);
+    // Any prefill object (even session-only, e.g. no-args `/schedule`) is a
+    // request to open the create-task dialog. The sidebar clock button passes
+    // nothing, opening just the page.
     set({
       schedulerOpen: true,
       settingsOpen: false,
-      ...(wantsModal
+      ...(prefill !== undefined
         ? { activeModal: "createScheduledTask", modalData: { ...prefill } }
         : {}),
     });

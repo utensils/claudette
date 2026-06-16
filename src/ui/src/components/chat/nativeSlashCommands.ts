@@ -70,6 +70,7 @@ export interface NativeCommandContext {
     prompt?: string;
     fireAt?: string;
     cronExpr?: string;
+    mode?: "wakeup" | "cron";
   }) => void;
   agentStatus: string | null;
   selectedModel: string;
@@ -766,7 +767,7 @@ function intervalToCron(token: string): string | null {
 }
 
 const LOOP_USAGE =
-  "/loop: usage — `/loop <interval> <prompt>` (e.g. `/loop 5m run the tests`). Whole-minute intervals up to 1d that evenly divide their unit (1m/2m/5m/10m/15m/20m/30m, 1h/2h/3h/4h/6h/8h/12h, 1d). Sub-minute or odd intervals: write a cron expression in the New scheduled task dialog.";
+  "/loop: usage — `/loop <interval> <prompt>` (e.g. `/loop 5m run the tests`). The interval must evenly divide its unit: minutes that divide an hour (e.g. 1m, 5m, 15m, 30m), hours that divide a day (e.g. 1h, 2h, 6h, 12h), or 1d. For anything else, write a cron expression in the New scheduled task dialog.";
 
 const loopHandler: NativeHandler = {
   name: "loop",
@@ -786,9 +787,12 @@ const loopHandler: NativeHandler = {
     const cronExpr = intervalToCron(tokens[0]);
     const prompt = tokens.slice(1).join(" ").trim();
     if (!cronExpr) {
+      // Interval can't be expressed as cron — open the create dialog in cron
+      // mode so the user can write the expression directly.
       ctx.openScheduler({
         sessionId: ctx.sessionId,
         prompt: prompt || undefined,
+        mode: "cron",
       });
       ctx.addLocalMessage(LOOP_USAGE);
       return handled;
@@ -818,9 +822,60 @@ const loopHandler: NativeHandler = {
   },
 };
 
-/** Strict-ish leading-timestamp matcher so we don't mistake a prompt that
- *  starts with a date for an explicit schedule time. */
-const SCHEDULE_TIME_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?$/;
+const SCHEDULE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const SCHEDULE_DATETIME_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?$/;
+const SCHEDULE_TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
+
+/**
+ * Parse a leading schedule time from the args tokens, in **local** time.
+ *
+ * Accepts `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM[:SS]`, or a date and time as two
+ * whitespace-separated tokens (`YYYY-MM-DD HH:MM[:SS]`). Returns the resolved
+ * `Date` plus how many tokens it consumed, or `null` when the first token
+ * isn't a date.
+ *
+ * Built from components via `new Date(y, mo-1, d, h, mi, s)` rather than
+ * `new Date(string)` on purpose: a bare `YYYY-MM-DD` string parses as UTC
+ * midnight (wrong local day in most zones), and the space-separated form isn't
+ * reliably supported across JS engines / WebViews.
+ */
+function parseLeadingSchedule(
+  tokens: string[],
+): { date: Date; consumed: number } | null {
+  const first = tokens[0] ?? "";
+  let datePart: string;
+  let timePart = "";
+  let consumed: number;
+  if (SCHEDULE_DATETIME_RE.test(first)) {
+    const [d, t] = first.split(/[T ]/);
+    datePart = d;
+    timePart = t;
+    consumed = 1;
+  } else if (SCHEDULE_DATE_RE.test(first)) {
+    datePart = first;
+    consumed = 1;
+    // A bare time as the next token completes the timestamp ("2026-06-01 09:00").
+    if (tokens[1] && SCHEDULE_TIME_RE.test(tokens[1])) {
+      timePart = tokens[1];
+      consumed = 2;
+    }
+  } else {
+    return null;
+  }
+  const [y, mo, da] = datePart.split("-").map(Number);
+  let h = 0;
+  let mi = 0;
+  let s = 0;
+  if (timePart) {
+    const [th, tm, ts] = timePart.split(":").map(Number);
+    h = th;
+    mi = tm;
+    s = ts ?? 0;
+  }
+  const date = new Date(y, mo - 1, da, h, mi, s, 0);
+  if (Number.isNaN(date.getTime())) return null;
+  return { date, consumed };
+}
 
 const scheduleHandler: NativeHandler = {
   name: "schedule",
@@ -830,24 +885,23 @@ const scheduleHandler: NativeHandler = {
     const handled = { kind: "handled" as const, canonicalName: "schedule" };
     const trimmed = args.trim();
     if (!trimmed) {
-      // No args — open the modal in its default state (one-shot).
-      ctx.openScheduler({ sessionId: ctx.sessionId ?? undefined });
+      // No args — open the create dialog (one-shot/wakeup by default).
+      ctx.openScheduler({ sessionId: ctx.sessionId ?? undefined, mode: "wakeup" });
       return handled;
     }
-    const firstTok = trimmed.split(/\s+/, 1)[0] ?? "";
-    if (SCHEDULE_TIME_RE.test(firstTok)) {
-      const parsed = new Date(firstTok);
-      const rest = trimmed.slice(firstTok.length).trim();
-      if (!Number.isNaN(parsed.getTime()) && ctx.sessionId && rest) {
-        // Inline schedule: known time, known prompt, known session — fire
-        // the wakeup directly instead of opening the modal. Pin the
-        // toolbar's backend + model so the cron fires on the runtime the
-        // user picked. Confirmation message is persisted by the host
-        // command (one path for all 3 backends).
+    const tokens = trimmed.split(/\s+/);
+    const parsed = parseLeadingSchedule(tokens);
+    if (parsed) {
+      const rest = tokens.slice(parsed.consumed).join(" ").trim();
+      if (ctx.sessionId && rest) {
+        // Inline schedule: known time, known prompt, known session — fire the
+        // wakeup directly. Pin the toolbar's backend + model so the wakeup
+        // fires on the runtime the user picked. Confirmation message is
+        // persisted by the host command (one path for all 3 backends).
         try {
           await scheduleWakeup({
             sessionId: ctx.sessionId,
-            fireAt: parsed.toISOString(),
+            fireAt: parsed.date.toISOString(),
             prompt: rest,
             backendId: ctx.selectedModelProvider || undefined,
             model: ctx.selectedModel || undefined,
@@ -857,18 +911,19 @@ const scheduleHandler: NativeHandler = {
         }
         return handled;
       }
-      // Time parsed but missing prompt or session — open the modal
-      // prefilled with what we have.
+      // Time parsed but missing prompt or session — open the dialog prefilled.
       ctx.openScheduler({
         sessionId: ctx.sessionId ?? undefined,
+        mode: "wakeup",
         prompt: rest || undefined,
-        fireAt: Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString(),
+        fireAt: parsed.date.toISOString(),
       });
       return handled;
     }
     // No leading timestamp — treat all of args as the prompt.
     ctx.openScheduler({
       sessionId: ctx.sessionId ?? undefined,
+      mode: "wakeup",
       prompt: trimmed,
     });
     return handled;

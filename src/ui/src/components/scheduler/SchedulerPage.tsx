@@ -8,6 +8,7 @@ import { BoundedScrollPane } from "../shared/BoundedScrollPane";
 import {
   type ScheduledTask,
   deleteScheduledRoutine,
+  listChatSessions,
   runScheduledRoutine,
 } from "../../services/tauri";
 import styles from "./SchedulerPage.module.css";
@@ -24,7 +25,9 @@ function formatCountdown(iso: string | null, now: number): string {
   const target = new Date(iso).getTime();
   if (Number.isNaN(target)) return iso;
   let delta = Math.round((target - now) / 1000);
-  if (delta <= 0) return "due now";
+  // Return a duration ("0s") rather than a phrase, so callers that wrap this
+  // in t("next_in"/"fires_in") read "next in 0s" — not "next in due now".
+  if (delta <= 0) return "0s";
   const d = Math.floor(delta / 86400);
   delta -= d * 86400;
   const h = Math.floor(delta / 3600);
@@ -43,9 +46,11 @@ export function SchedulerPage() {
   const { t } = useTranslation("scheduler");
   const scheduledTasks = useAppStore((s) => s.scheduledTasks);
   const loadScheduledTasks = useAppStore((s) => s.loadScheduledTasks);
-  const setScheduledTasks = useAppStore((s) => s.setScheduledTasks);
   const openModal = useAppStore((s) => s.openModal);
   const workspaces = useAppStore((s) => s.workspaces);
+  const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
+  const sessionsLoadedByWorkspace = useAppStore((s) => s.sessionsLoadedByWorkspace);
+  const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
 
   // 1s ticker for the countdown labels.
   const [now, setNow] = useState(() => Date.now());
@@ -60,6 +65,35 @@ export function SchedulerPage() {
   useEffect(() => {
     void loadScheduledTasks();
   }, [loadScheduledTasks]);
+
+  // Load sessions for the workspaces of reuse-mode tasks so each row can name
+  // its target session (new-session tasks have none). Runs once per workspace.
+  useEffect(() => {
+    const pending = new Set<string>();
+    for (const task of scheduledTasks) {
+      if (
+        !task.create_new_session &&
+        task.chat_session_id &&
+        !sessionsLoadedByWorkspace[task.workspace_id]
+      ) {
+        pending.add(task.workspace_id);
+      }
+    }
+    if (pending.size === 0) return;
+    let cancelled = false;
+    for (const wsId of pending) {
+      listChatSessions(wsId)
+        .then((list) => {
+          if (!cancelled) setSessionsForWorkspace(wsId, list);
+        })
+        .catch(() => {
+          // Row falls back to a short session id; not worth surfacing.
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [scheduledTasks, sessionsLoadedByWorkspace, setSessionsForWorkspace]);
 
   const { loops, schedules } = useMemo(() => {
     const sorted = [...scheduledTasks].sort((a, b) =>
@@ -76,6 +110,18 @@ export function SchedulerPage() {
     return ws ? ws.branch_name : id.slice(0, 8);
   };
 
+  // Human label for where a task fires: the target session's name (reuse
+  // mode) or "new session each run". Falls back to a short id until the
+  // workspace's sessions resolve.
+  const targetLabel = (task: ScheduledTask): string => {
+    if (task.create_new_session) return t("target_new_session");
+    if (!task.chat_session_id) return "—";
+    const session = sessionsByWorkspace[task.workspace_id]?.find(
+      (s) => s.id === task.chat_session_id,
+    );
+    return session?.name ?? task.chat_session_id.slice(0, 8);
+  };
+
   const runNow = async (id: string) => {
     setBusyId(id);
     setError(null);
@@ -85,6 +131,8 @@ export function SchedulerPage() {
       setError(String(e));
     } finally {
       setBusyId(null);
+      // Run-now updates last_fired_at / next_fire_at server-side; resync.
+      void loadScheduledTasks();
     }
   };
 
@@ -93,11 +141,14 @@ export function SchedulerPage() {
     setError(null);
     try {
       await deleteScheduledRoutine(id);
-      setScheduledTasks(scheduledTasks.filter((task) => task.id !== id));
     } catch (e) {
       setError(String(e));
     } finally {
       setBusyId(null);
+      // Reload from the backend rather than filtering a render-time snapshot,
+      // so a concurrent refresh can't reintroduce the deleted row or drop a
+      // newly-loaded one.
+      void loadScheduledTasks();
     }
   };
 
@@ -151,6 +202,7 @@ export function SchedulerPage() {
                   task={task}
                   now={now}
                   workspaceLabel={workspaceLabel}
+                  targetLabel={targetLabel}
                   busyId={busyId}
                   onRun={runNow}
                   onDelete={onDelete}
@@ -178,6 +230,7 @@ export function SchedulerPage() {
                   task={task}
                   now={now}
                   workspaceLabel={workspaceLabel}
+                  targetLabel={targetLabel}
                   busyId={busyId}
                   onRun={runNow}
                   onDelete={onDelete}
@@ -196,13 +249,23 @@ interface TaskRowProps {
   task: ScheduledTask;
   now: number;
   workspaceLabel: (id: string) => string;
+  targetLabel: (task: ScheduledTask) => string;
   busyId: string | null;
   onRun: (id: string) => void;
   onDelete: (id: string) => void;
   t: ReturnType<typeof useTranslation<"scheduler">>["t"];
 }
 
-function TaskRow({ task, now, workspaceLabel, busyId, onRun, onDelete, t }: TaskRowProps) {
+function TaskRow({
+  task,
+  now,
+  workspaceLabel,
+  targetLabel,
+  busyId,
+  onRun,
+  onDelete,
+  t,
+}: TaskRowProps) {
   const isWakeup = task.kind === "wakeup";
   const schedule = isWakeup
     ? formatLocalDateTime(task.fire_at) ?? t("fire_at_unknown")
@@ -226,8 +289,8 @@ function TaskRow({ task, now, workspaceLabel, busyId, onRun, onDelete, t }: Task
         <div className={styles.rowTitle}>{task.name || task.prompt}</div>
         <div className={styles.rowMeta}>
           {schedule}
-          {mode ? ` · ${mode}` : ""} · {next} {last} · {workspaceLabel(task.workspace_id)}
-          {task.create_new_session ? ` · ${t("target_new_session")}` : ""}
+          {mode ? ` · ${mode}` : ""} · {next} {last} ·{" "}
+          {workspaceLabel(task.workspace_id)} · {targetLabel(task)}
         </div>
         {task.name && <div className={styles.rowPrompt}>{task.prompt}</div>}
         {task.reason && <div className={styles.rowReason}>{task.reason}</div>}
