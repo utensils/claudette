@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Play, RefreshCw, Trash2 } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { useAppStore } from "../../../stores/useAppStore";
 import {
   deleteScheduledRoutine,
-  listScheduledRoutines,
   runScheduledRoutine,
   type ScheduledTask,
 } from "../../../services/tauri";
@@ -61,7 +61,10 @@ function routineDescription(task: ScheduledTask, t: TFunction<"settings">): stri
 
 export function AutomationSettings() {
   const { t } = useTranslation("settings");
-  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+  // Shared source of truth with the Loops and Schedules view (schedulingSlice),
+  // so creating/deleting/firing from either surface keeps both in sync.
+  const tasks = useAppStore((s) => s.scheduledTasks);
+  const loadScheduledTasks = useAppStore((s) => s.loadScheduledTasks);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +73,7 @@ export function AutomationSettings() {
     setLoading(true);
     setError(null);
     try {
-      setTasks(await listScheduledRoutines());
+      await loadScheduledTasks();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -80,6 +83,7 @@ export function AutomationSettings() {
 
   useEffect(() => {
     void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const sorted = useMemo(
@@ -99,6 +103,7 @@ export function AutomationSettings() {
       setError(String(err));
     } finally {
       setBusyId(null);
+      void loadScheduledTasks();
     }
   };
 
@@ -107,11 +112,11 @@ export function AutomationSettings() {
     setError(null);
     try {
       await deleteScheduledRoutine(id);
-      setTasks((current) => current.filter((task) => task.id !== id));
     } catch (err) {
       setError(String(err));
     } finally {
       setBusyId(null);
+      void loadScheduledTasks();
     }
   };
 

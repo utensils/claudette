@@ -371,6 +371,7 @@ fn copy_history(
             output_tokens: msg.output_tokens,
             cache_read_tokens: msg.cache_read_tokens,
             cache_creation_tokens: msg.cache_creation_tokens,
+            scheduled_task_id: msg.scheduled_task_id.clone(),
         };
         db.insert_chat_message(&copied)?;
     }
@@ -677,6 +678,7 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            scheduled_task_id: None,
         }
     }
 
@@ -1218,6 +1220,7 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            scheduled_task_id: None,
         })
         .unwrap();
         db.insert_checkpoint(&ConversationCheckpoint {

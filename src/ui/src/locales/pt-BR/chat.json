@@ -106,6 +106,8 @@
   "model_picker_routing_via_codex": "via Codex app-server",
   "model_picker_routing_tooltip": "Caminho de envio escolhido pela opção Runtime deste cartão em Configurações → Modelos.",
   "you_label": "Você",
+  "scheduled_badge": "Agendado",
+  "scheduled_badge_title": "Este prompt foi enviado por uma tarefa agendada (ícone de relógio na barra lateral).",
   "agent_question_title": "Pergunta do agente",
   "agent_question_submit_answer": "Enviar resposta",
   "agent_question_or_type": "Ou digite sua resposta abaixo",

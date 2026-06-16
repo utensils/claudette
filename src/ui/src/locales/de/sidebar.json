@@ -32,6 +32,7 @@
   "add_repository": "Repository hinzufügen",
   "add_remote": "Remote hinzufügen",
   "back_to_dashboard": "Zurück zum Dashboard",
+  "scheduler": "Schleifen und Zeitpläne",
   "expand_repo_aria": "{{name}} ausklappen",
   "collapse_repo_aria": "{{name}} einklappen",
   "filter_workspaces": "Workspaces filtern",

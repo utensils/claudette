@@ -1,5 +1,10 @@
 import type { PluginSettingsIntent } from "../../types/plugins";
-import type { NativeSlashKind, SlashCommand } from "../../services/tauri";
+import {
+  type NativeSlashKind,
+  type SlashCommand,
+  scheduleWakeup,
+  createCronRoutine,
+} from "../../services/tauri";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { parsePluginSlashCommand } from "./pluginSlashCommand";
 import { buildModelRegistry, resolveModelSelection } from "./modelRegistry";
@@ -54,6 +59,19 @@ export interface NativeCommandContext {
   // -- Per-workspace state read by workspace-control commands
   // (/clear, /plan, /model, /permissions, /status). --
   workspaceId: string | null;
+  /** Active chat session id (read by `/loop` and `/schedule` so a new
+   *  scheduled task is bound to the same session the user typed in). */
+  sessionId: string | null;
+  /** Open the Loops and Schedules view, optionally prefilling the
+   *  create-task modal (used by `/schedule` and `/loop` when their args
+   *  can't be turned into a concrete task on the spot). */
+  openScheduler: (prefill?: {
+    sessionId?: string;
+    prompt?: string;
+    fireAt?: string;
+    cronExpr?: string;
+    mode?: "wakeup" | "cron";
+  }) => void;
   agentStatus: string | null;
   selectedModel: string;
   selectedModelProvider: string;
@@ -723,6 +741,195 @@ const initHandler: NativeHandler = {
   },
 };
 
+/** Map a friendly interval token (e.g. `5m`, `1h`, `1d`) to a standard
+ *  5-field cron expression. Returns `null` for sub-minute or odd intervals
+ *  that cron can't represent cleanly. */
+function intervalToCron(token: string): string | null {
+  const m = /^(\d+)(s|m|h|d)$/i.exec(token.trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = m[2].toLowerCase();
+  if (unit === "s") return null; // sub-minute — cron can't express
+  if (unit === "m") {
+    if (n >= 60) return null;
+    if (60 % n !== 0) return null; // odd intervals don't tile the hour
+    return `*/${n} * * * *`;
+  }
+  if (unit === "h") {
+    if (n >= 24) return null;
+    if (24 % n !== 0) return null;
+    return n === 1 ? `0 * * * *` : `0 */${n} * * *`;
+  }
+  // unit === "d"
+  if (n !== 1) return null;
+  return `0 0 * * *`;
+}
+
+const LOOP_USAGE =
+  "/loop: usage — `/loop <interval> <prompt>` (e.g. `/loop 5m run the tests`). The interval must evenly divide its unit: minutes that divide an hour (e.g. 1m, 5m, 15m, 30m), hours that divide a day (e.g. 1h, 2h, 6h, 12h), or 1d. For anything else, write a cron expression in the New scheduled task dialog.";
+
+const loopHandler: NativeHandler = {
+  name: "loop",
+  aliases: [],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = { kind: "handled" as const, canonicalName: "loop" };
+    if (!ctx.workspaceId || !ctx.sessionId) {
+      ctx.addLocalMessage("/loop: no active workspace");
+      return handled;
+    }
+    const tokens = args.trim().split(/\s+/);
+    if (tokens.length === 0 || tokens[0] === "") {
+      ctx.addLocalMessage(LOOP_USAGE);
+      return handled;
+    }
+    const cronExpr = intervalToCron(tokens[0]);
+    const prompt = tokens.slice(1).join(" ").trim();
+    if (!cronExpr) {
+      // Interval can't be expressed as cron — open the create dialog in cron
+      // mode so the user can write the expression directly.
+      ctx.openScheduler({
+        sessionId: ctx.sessionId,
+        prompt: prompt || undefined,
+        mode: "cron",
+      });
+      ctx.addLocalMessage(LOOP_USAGE);
+      return handled;
+    }
+    if (!prompt) {
+      ctx.addLocalMessage(LOOP_USAGE);
+      return handled;
+    }
+    try {
+      // Pin the toolbar's current backend + model on the row so the cron
+      // fires on the runtime the user picked, not on whatever happens to
+      // be the global default at fire time. The host-side command now
+      // also writes a System chat message announcing the schedule (one
+      // persisted note for all 3 backends — no per-backend wiring here).
+      await createCronRoutine({
+        sessionId: ctx.sessionId,
+        cronExpr,
+        prompt,
+        recurring: true,
+        backendId: ctx.selectedModelProvider || undefined,
+        model: ctx.selectedModel || undefined,
+      });
+    } catch (e) {
+      ctx.addLocalMessage(`/loop failed: ${String(e)}`);
+    }
+    return handled;
+  },
+};
+
+const SCHEDULE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const SCHEDULE_DATETIME_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?$/;
+const SCHEDULE_TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
+
+/**
+ * Parse a leading schedule time from the args tokens, in **local** time.
+ *
+ * Accepts `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM[:SS]`, or a date and time as two
+ * whitespace-separated tokens (`YYYY-MM-DD HH:MM[:SS]`). Returns the resolved
+ * `Date` plus how many tokens it consumed, or `null` when the first token
+ * isn't a date.
+ *
+ * Built from components via `new Date(y, mo-1, d, h, mi, s)` rather than
+ * `new Date(string)` on purpose: a bare `YYYY-MM-DD` string parses as UTC
+ * midnight (wrong local day in most zones), and the space-separated form isn't
+ * reliably supported across JS engines / WebViews.
+ */
+function parseLeadingSchedule(
+  tokens: string[],
+): { date: Date; consumed: number } | null {
+  const first = tokens[0] ?? "";
+  let datePart: string;
+  let timePart = "";
+  let consumed: number;
+  if (SCHEDULE_DATETIME_RE.test(first)) {
+    const [d, t] = first.split(/[T ]/);
+    datePart = d;
+    timePart = t;
+    consumed = 1;
+  } else if (SCHEDULE_DATE_RE.test(first)) {
+    datePart = first;
+    consumed = 1;
+    // A bare time as the next token completes the timestamp ("2026-06-01 09:00").
+    if (tokens[1] && SCHEDULE_TIME_RE.test(tokens[1])) {
+      timePart = tokens[1];
+      consumed = 2;
+    }
+  } else {
+    return null;
+  }
+  const [y, mo, da] = datePart.split("-").map(Number);
+  let h = 0;
+  let mi = 0;
+  let s = 0;
+  if (timePart) {
+    const [th, tm, ts] = timePart.split(":").map(Number);
+    h = th;
+    mi = tm;
+    s = ts ?? 0;
+  }
+  const date = new Date(y, mo - 1, da, h, mi, s, 0);
+  if (Number.isNaN(date.getTime())) return null;
+  return { date, consumed };
+}
+
+const scheduleHandler: NativeHandler = {
+  name: "schedule",
+  aliases: [],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = { kind: "handled" as const, canonicalName: "schedule" };
+    const trimmed = args.trim();
+    if (!trimmed) {
+      // No args — open the create dialog (one-shot/wakeup by default).
+      ctx.openScheduler({ sessionId: ctx.sessionId ?? undefined, mode: "wakeup" });
+      return handled;
+    }
+    const tokens = trimmed.split(/\s+/);
+    const parsed = parseLeadingSchedule(tokens);
+    if (parsed) {
+      const rest = tokens.slice(parsed.consumed).join(" ").trim();
+      if (ctx.sessionId && rest) {
+        // Inline schedule: known time, known prompt, known session — fire the
+        // wakeup directly. Pin the toolbar's backend + model so the wakeup
+        // fires on the runtime the user picked. Confirmation message is
+        // persisted by the host command (one path for all 3 backends).
+        try {
+          await scheduleWakeup({
+            sessionId: ctx.sessionId,
+            fireAt: parsed.date.toISOString(),
+            prompt: rest,
+            backendId: ctx.selectedModelProvider || undefined,
+            model: ctx.selectedModel || undefined,
+          });
+        } catch (e) {
+          ctx.addLocalMessage(`/schedule failed: ${String(e)}`);
+        }
+        return handled;
+      }
+      // Time parsed but missing prompt or session — open the dialog prefilled.
+      ctx.openScheduler({
+        sessionId: ctx.sessionId ?? undefined,
+        mode: "wakeup",
+        prompt: rest || undefined,
+        fireAt: parsed.date.toISOString(),
+      });
+      return handled;
+    }
+    // No leading timestamp — treat all of args as the prompt.
+    ctx.openScheduler({
+      sessionId: ctx.sessionId ?? undefined,
+      mode: "wakeup",
+      prompt: trimmed,
+    });
+    return handled;
+  },
+};
+
 function formatCommandLine(
   cmd: SlashCommand,
   shadowedAliases: ReadonlySet<string>,
@@ -915,6 +1122,8 @@ export const NATIVE_HANDLERS: NativeHandler[] = [
   statusHandler,
   helpHandler,
   initHandler,
+  loopHandler,
+  scheduleHandler,
 ];
 
 /** Resolve a slash command token (no leading `/`) against the native handler table. */

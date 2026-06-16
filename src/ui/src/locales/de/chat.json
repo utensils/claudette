@@ -110,6 +110,8 @@
   "model_picker_routing_via_codex": "via Codex App-Server",
   "model_picker_routing_tooltip": "Dispatch-Pfad gewählt von der Runtime-Einstellung dieser Card in Einstellungen → Modelle.",
   "you_label": "Du",
+  "scheduled_badge": "Geplant",
+  "scheduled_badge_title": "Dieser Prompt wurde von einer geplanten Aufgabe gesendet (Uhr-Symbol in der Seitenleiste).",
   "agent_question_title": "Agent-Frage",
   "agent_question_submit_answer": "Antwort absenden",
   "agent_question_or_type": "Oder tippe deine Antwort unten",

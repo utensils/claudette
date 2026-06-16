@@ -110,6 +110,8 @@
   "model_picker_routing_via_codex": "via Codex app-server",
   "model_picker_routing_tooltip": "Dispatch path picked by this card's Runtime setting in Settings → Models.",
   "you_label": "You",
+  "scheduled_badge": "Scheduled",
+  "scheduled_badge_title": "This prompt was sent by a scheduled task (clock icon in the sidebar).",
   "agent_question_title": "Agent Question",
   "agent_question_submit_answer": "Submit answer",
   "agent_question_or_type": "Or type your response below",

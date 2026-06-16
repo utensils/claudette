@@ -106,6 +106,8 @@
   "model_picker_routing_via_codex": "Codex app-server 経由",
   "model_picker_routing_tooltip": "このカードの [Runtime] 設定（設定 → モデル）で選ばれた配信経路。",
   "you_label": "あなた",
+  "scheduled_badge": "スケジュール",
+  "scheduled_badge_title": "このプロンプトはスケジュールタスクによって送信されました（サイドバーの時計アイコン）。",
   "agent_question_title": "エージェントからの質問",
   "agent_question_submit_answer": "回答を送信",
   "agent_question_or_type": "または下に返答を入力",

@@ -7,15 +7,17 @@ Claudette can persist agent wakeups and recurring routines in its app database. 
 
 ## Agent Tools
 
-When the built-in Claudette MCP bridge is available, agents can use these native tools:
+Agents can schedule their own wakeups and routines through native tools:
 
-| Tool | Purpose |
-|---|---|
-| `ScheduleWakeup` | Schedule a one-shot wakeup with `delaySeconds` or `fireAt`, plus a prompt and optional reason. |
-| `CronCreate` | Create a routine from a standard 5-field cron expression in local time. |
-| `CronList` | List persisted wakeups and routines. |
-| `CronDelete` | Delete a routine by id or name. |
-| `Monitor` | Subscribe to future output lines from a background Bash task instead of polling. |
+| Tool | Purpose | Backends |
+|---|---|---|
+| `ScheduleWakeup` | Schedule a one-shot wakeup with `delaySeconds` or `fireAt`, plus a prompt and optional reason. | Claude, Codex, Pi |
+| `CronCreate` | Create a routine from a standard 5-field cron expression in local time. | Claude, Codex, Pi |
+| `CronList` | List persisted wakeups and routines. | Claude, Codex, Pi |
+| `CronDelete` | Delete a routine by id or name. | Claude, Codex, Pi |
+| `Monitor` | Subscribe to future output lines from a background Bash task instead of polling. | Claude, Codex |
+
+Claude and Codex agents reach these tools over the built-in Claudette MCP bridge. The Pi backend has no MCP bridge, so its scheduling tools are registered natively in the Pi sidecar — `Monitor` is unavailable there. Scheduling stays available regardless of the **Agent Attachments** plugin toggle.
 
 Wakeups and routines survive app restarts. If a fire time passes while Claudette is closed, the scheduler fires the overdue task when the app starts again.
 
@@ -34,3 +36,44 @@ claudette routine delete weekday-prs
 ```
 
 `routine create` accepts literal prompts, `@file` prompts, and `-` for stdin, matching `chat send`.
+
+## Loops and Schedules view
+
+You can drive the same scheduling backend from the GUI without the agent involved.
+
+Click the **clock icon** next to the dashboard icon in the sidebar header to open the **Loops and Schedules** view. Like the Dashboard, it keeps the sidebar and header (panel toggles) in place — click the clock again, the dashboard icon, or a workspace to leave it.
+
+The page lists every persisted task, split into two sections:
+
+- **Loops** — cron routines (`kind: cron`). Shows the human-readable schedule, recurring/one-shot mode, target workspace, and next-fire countdown.
+- **Schedules** — one-shot wakeups (`kind: wakeup`). Shows the fire time, countdown, and target workspace.
+
+Each row shows its target workspace, and is annotated **new session each run** when the task creates a fresh session rather than reusing one. Each row has **Run now** (fires immediately, same as the CLI's `routine run`) and **Delete** buttons. The same list also appears under **Settings → Automation**.
+
+### Creating a task from the GUI
+
+The **New scheduled task** button at the top of the page opens a dialog with two modes:
+
+- **One-shot (wakeup)** — pick a target, a date/time, and a prompt.
+- **Recurring (cron)** — pick a target, write a standard 5-field cron expression (e.g. `0 9 * * 1-5`), optionally name the routine, choose recurring or one-shot, and write the prompt.
+
+**Choosing a target.** The dialog has a cascading picker: select a **repository**, then a **workspace** in it, then either an existing **session** in that workspace *or* **✦ New session each run**. New-session tasks create a brand-new chat session in the workspace every time they fire — so a recurring loop gets a clean session per run instead of piling onto one. (The cascade can target any workspace, not just the one you currently have open.)
+
+### Seeing what fired
+
+When a task fires, the triggering prompt renders in the target session as a normal user message, tagged with a **Scheduled** badge so it's clear the agent's work was kicked off by the scheduler and not typed by you. The badge persists across reloads and survives session forking.
+
+### Slash commands
+
+In a chat, you can create tasks for the current session without opening the dialog:
+
+```
+/loop 5m run the test suite
+/schedule 2026-06-01T09:00 cut the release branch
+/schedule                              # opens the dialog (no args)
+/schedule write the weekly status update  # opens the dialog, prompt prefilled
+```
+
+`/loop <interval> <prompt>` translates an interval into a cron expression and creates a recurring routine in the current session. The interval must evenly divide its unit: minutes that divide an hour (e.g. `1m`, `5m`, `15m`, `30m`), hours that divide a day (e.g. `1h`, `2h`, `6h`, `12h`), or `1d`. Any other interval (sub-minute, or one that doesn't divide evenly) opens the dialog in cron mode so you can write the expression directly.
+
+`/schedule <when> <prompt>` accepts a leading timestamp — `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`, or a date and time as two tokens (`YYYY-MM-DD HH:MM`) — interpreted in your local time. If both the time and prompt are present, it creates the wakeup inline; otherwise it opens the dialog prefilled with whatever you provided.

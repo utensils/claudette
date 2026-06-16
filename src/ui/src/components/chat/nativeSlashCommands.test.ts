@@ -1,7 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PluginSettingsIntent } from "../../types/plugins";
 import type { SlashCommand } from "../../services/tauri";
+
+// /loop and /schedule call these two services on the happy path; stub them so
+// the handler logic (interval→cron, local-time parsing, modal fallback) is
+// observable without a Tauri host. Everything else in the barrel is real.
+const schedulerMocks = vi.hoisted(() => ({
+  scheduleWakeup: vi.fn<(args: Record<string, unknown>) => Promise<unknown>>(
+    () => Promise.resolve({}),
+  ),
+  createCronRoutine: vi.fn<(args: Record<string, unknown>) => Promise<unknown>>(
+    () => Promise.resolve({}),
+  ),
+}));
+vi.mock("../../services/tauri", async (importActual) => ({
+  ...(await importActual<typeof import("../../services/tauri")>()),
+  scheduleWakeup: schedulerMocks.scheduleWakeup,
+  createCronRoutine: schedulerMocks.createCronRoutine,
+}));
 import {
   CONFIG_SECTIONS,
   NATIVE_HANDLERS,
@@ -33,6 +50,13 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     openUsageSettingsExternal: vi.fn<() => void>(),
     openReleaseNotes: vi.fn<() => void>(),
     workspaceId: "ws-1",
+    sessionId: "sess-1",
+    openScheduler: vi.fn<(prefill?: {
+      sessionId?: string;
+      prompt?: string;
+      fireAt?: string;
+      cronExpr?: string;
+    }) => void>(),
     agentStatus: "Idle",
     selectedModel: "opus",
     selectedModelProvider: "anthropic",
@@ -1615,5 +1639,136 @@ describe("repo-bootstrap picker filtering", () => {
   it("/help and /init expose no aliases", () => {
     expect(NATIVE_HANDLERS.find((h) => h.name === "help")!.aliases).toEqual([]);
     expect(NATIVE_HANDLERS.find((h) => h.name === "init")!.aliases).toEqual([]);
+  });
+});
+
+describe("/loop handler", () => {
+  beforeEach(() => {
+    schedulerMocks.createCronRoutine.mockClear();
+    schedulerMocks.scheduleWakeup.mockClear();
+  });
+
+  const loop = () => NATIVE_HANDLERS.find((h) => h.name === "loop")!;
+
+  it.each([
+    ["5m run the tests", "*/5 * * * *"],
+    ["1m ping", "*/1 * * * *"],
+    ["30m ping", "*/30 * * * *"],
+    ["1h ping", "0 * * * *"],
+    ["2h ping", "0 */2 * * *"],
+    ["12h ping", "0 */12 * * *"],
+    ["1d ping", "0 0 * * *"],
+  ])("translates %s to a cron routine (%s)", async (args, cron) => {
+    const ctx = makeCtx();
+    const res = await loop().execute(ctx, args);
+    expect(res.kind).toBe("handled");
+    expect(schedulerMocks.createCronRoutine).toHaveBeenCalledTimes(1);
+    expect(schedulerMocks.createCronRoutine).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-1",
+        cronExpr: cron,
+        recurring: true,
+      }),
+    );
+  });
+
+  it.each(["30s do it", "7m do it", "5h do it", "2d do it"])(
+    "opens the dialog in cron mode for non-cron interval %s",
+    async (args) => {
+      const ctx = makeCtx();
+      const res = await loop().execute(ctx, args);
+      expect(res.kind).toBe("handled");
+      expect(schedulerMocks.createCronRoutine).not.toHaveBeenCalled();
+      expect(ctx.openScheduler).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "cron" }),
+      );
+    },
+  );
+
+  it("requires an active session", async () => {
+    const ctx = makeCtx({ sessionId: null });
+    await loop().execute(ctx, "5m do it");
+    expect(schedulerMocks.createCronRoutine).not.toHaveBeenCalled();
+    expect(ctx.addLocalMessage).toHaveBeenCalled();
+  });
+});
+
+describe("/schedule handler", () => {
+  beforeEach(() => {
+    schedulerMocks.scheduleWakeup.mockClear();
+    schedulerMocks.createCronRoutine.mockClear();
+  });
+
+  const schedule = () => NATIVE_HANDLERS.find((h) => h.name === "schedule")!;
+
+  it("opens the create dialog with no args", async () => {
+    const ctx = makeCtx();
+    await schedule().execute(ctx, "");
+    expect(schedulerMocks.scheduleWakeup).not.toHaveBeenCalled();
+    expect(ctx.openScheduler).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "sess-1", mode: "wakeup" }),
+    );
+  });
+
+  it("fires a wakeup inline for a leading ISO timestamp + prompt", async () => {
+    const ctx = makeCtx();
+    await schedule().execute(ctx, "2026-06-01T09:00 cut the release");
+    expect(schedulerMocks.scheduleWakeup).toHaveBeenCalledTimes(1);
+    const arg = schedulerMocks.scheduleWakeup.mock.calls[0][0] as {
+      fireAt: string;
+      prompt: string;
+    };
+    expect(arg.prompt).toBe("cut the release");
+    // Parsed in LOCAL time, not UTC midnight.
+    const d = new Date(arg.fireAt);
+    expect(d.getFullYear()).toBe(2026);
+    expect(d.getMonth()).toBe(5); // June
+    expect(d.getDate()).toBe(1);
+    expect(d.getHours()).toBe(9);
+    expect(d.getMinutes()).toBe(0);
+  });
+
+  it("accepts a space-separated date and time as two tokens without leaking the time into the prompt", async () => {
+    const ctx = makeCtx();
+    await schedule().execute(ctx, "2026-06-01 09:30 cut the release");
+    expect(schedulerMocks.scheduleWakeup).toHaveBeenCalledTimes(1);
+    const arg = schedulerMocks.scheduleWakeup.mock.calls[0][0] as {
+      fireAt: string;
+      prompt: string;
+    };
+    expect(arg.prompt).toBe("cut the release");
+    const d = new Date(arg.fireAt);
+    expect(d.getHours()).toBe(9);
+    expect(d.getMinutes()).toBe(30);
+  });
+
+  it("treats a bare date as local midnight", async () => {
+    const ctx = makeCtx();
+    await schedule().execute(ctx, "2026-06-01 do the thing");
+    expect(schedulerMocks.scheduleWakeup).toHaveBeenCalledTimes(1);
+    const arg = schedulerMocks.scheduleWakeup.mock.calls[0][0] as {
+      fireAt: string;
+    };
+    const d = new Date(arg.fireAt);
+    expect(d.getDate()).toBe(1);
+    expect(d.getHours()).toBe(0);
+  });
+
+  it("opens the dialog (prefilled time) when a timestamp has no prompt", async () => {
+    const ctx = makeCtx();
+    await schedule().execute(ctx, "2026-06-01T09:00");
+    expect(schedulerMocks.scheduleWakeup).not.toHaveBeenCalled();
+    expect(ctx.openScheduler).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "wakeup", fireAt: expect.any(String) }),
+    );
+  });
+
+  it("treats a non-timestamp arg as the whole prompt", async () => {
+    const ctx = makeCtx();
+    await schedule().execute(ctx, "write the weekly status update");
+    expect(schedulerMocks.scheduleWakeup).not.toHaveBeenCalled();
+    expect(ctx.openScheduler).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "write the weekly status update" }),
+    );
   });
 });

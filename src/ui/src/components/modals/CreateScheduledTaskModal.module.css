@@ -1,0 +1,24 @@
+.typeRow {
+  display: flex;
+  gap: 16px;
+}
+
+.typeOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* Repo + workspace selects sit side by side; each field flexes to fill. */
+.targetRow {
+  display: flex;
+  gap: 12px;
+}
+
+.targetRow > * {
+  flex: 1;
+  min-width: 0;
+}
