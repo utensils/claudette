@@ -20,13 +20,15 @@ use std::time::Duration;
 use base64::Engine;
 use claudette::agent_mcp::bridge::Sink;
 use claudette::agent_mcp::protocol::{BridgePayload, BridgeResponse};
+use claudette::agent_mcp::tools::interaction;
 use claudette::agent_mcp::tools::send_to_user::policy;
 use claudette::db::Database;
-use claudette::model::{Attachment, AttachmentOrigin};
+use claudette::model::{AgentConclusion, Attachment, AttachmentOrigin};
 use serde::Serialize;
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::state::AppState;
+use crate::state::{AppState, AttentionKind, PendingPermission};
 
 /// Tauri-side implementation of [`Sink`] — one per persistent agent session.
 ///
@@ -169,6 +171,305 @@ async fn handle_payload(
             monitor_background_task(app, db_path, workspace_id, chat_session_id, task_id, until)
                 .await
         }
+        BridgePayload::AskUser { questions } => {
+            ask_user(app, workspace_id, chat_session_id, questions).await
+        }
+        BridgePayload::RequestReview {
+            summary,
+            detail,
+            options: _,
+        } => request_review(app, workspace_id, chat_session_id, summary, detail).await,
+        BridgePayload::PresentConclusion {
+            title,
+            summary,
+            artifacts,
+        } => {
+            present_conclusion(
+                app,
+                db_path,
+                workspace_id,
+                chat_session_id,
+                title,
+                summary,
+                artifacts,
+            )
+            .await
+        }
+    }
+}
+
+/// Block until the user answers an `ask_user` prompt. Renders through the
+/// existing `AgentQuestionCard` (keyed by `questions`), so a Pi / Codex / Claude
+/// agent all surface the same UI. The user's answers are returned as the tool
+/// result.
+async fn ask_user(
+    app: AppHandle,
+    workspace_id: String,
+    chat_session_id: String,
+    questions: Value,
+) -> BridgeResponse {
+    let input = interaction::ask_card_input(questions);
+    match block_on_interactive(
+        &app,
+        &workspace_id,
+        &chat_session_id,
+        "ask_user",
+        "AskUserQuestion",
+        input,
+        AttentionKind::Ask,
+    )
+    .await
+    {
+        Ok(answer) => BridgeResponse::data("The user answered.".to_string(), answer),
+        Err(resp) => resp,
+    }
+}
+
+/// Block until the user returns a verdict on a `request_review` prompt. Renders
+/// through the existing `PlanApprovalCard` (keyed by `plan`); the
+/// `claudetteReview` marker on the input lets the frontend offer the
+/// approve / deny / suggest verdicts. Returns `{ verdict, note }`.
+async fn request_review(
+    app: AppHandle,
+    workspace_id: String,
+    chat_session_id: String,
+    summary: String,
+    detail: Option<String>,
+) -> BridgeResponse {
+    let input = interaction::review_card_input(&summary, detail.as_deref());
+    match block_on_interactive(
+        &app,
+        &workspace_id,
+        &chat_session_id,
+        "request_review",
+        "ExitPlanMode",
+        input,
+        AttentionKind::Plan,
+    )
+    .await
+    {
+        Ok(answer) => {
+            let verdict = answer
+                .get("verdict")
+                .and_then(Value::as_str)
+                .unwrap_or("respond");
+            BridgeResponse::data(format!("The user's verdict: {verdict}."), answer)
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// Register an interactive control and await the user's reply.
+///
+/// This reuses the same `pending_permissions` + attention machinery the Claude
+/// CLI control requests use, but the reply comes back through a oneshot (not a
+/// `control_response` to a CLI), since the agent is suspended inside its MCP
+/// tool call rather than on the CLI's stdin. Returns the answer value on
+/// success, or a ready-made error `BridgeResponse` if the session is gone or
+/// the interaction is cancelled.
+async fn block_on_interactive(
+    app: &AppHandle,
+    workspace_id: &str,
+    chat_session_id: &str,
+    mcp_tool: &str,
+    tool_name: &str,
+    input: Value,
+    kind: AttentionKind,
+) -> Result<Value, BridgeResponse> {
+    let tool_use_id = uuid::Uuid::new_v4().to_string();
+    let state = app.state::<AppState>();
+
+    // Register the pending control on the session so the existing card renders
+    // and the existing CLI responders (`claudette chat answer/approve-plan`)
+    // can resolve it too. Bail if the session vanished between turn start and
+    // this tool call.
+    {
+        let mut agents = state.agents.write().await;
+        let Some(session) = agents.get_mut(chat_session_id) else {
+            return Err(BridgeResponse::err(
+                "chat session is no longer active".to_string(),
+            ));
+        };
+        session.needs_attention = true;
+        session.attention_kind = Some(kind);
+        session.pending_permissions.insert(
+            tool_use_id.clone(),
+            PendingPermission {
+                // MCP-origin requests have no CLI control_request to answer; the
+                // request_id is unused for routing but kept stable for the
+                // notification dedup check below.
+                request_id: tool_use_id.clone(),
+                tool_name: tool_name.to_string(),
+                original_input: input.clone(),
+            },
+        );
+    }
+
+    // Register the reply channel *after* the pending control exists but
+    // *before* the frontend can see the prompt — so the user can't answer
+    // before there's a sender to route to.
+    let rx = state
+        .register_mcp_reply(tool_use_id.clone(), chat_session_id.to_string())
+        .await;
+
+    // Surface to the UI like a CLI control request, but carry an `origin`
+    // discriminator so the frontend / `/claudette-debug` / anyone tailing the
+    // event stream can tell a Claudette MCP-tool prompt from a native
+    // `AskUserQuestion` / `ExitPlanMode` (which omit these fields). `mcp_tool`
+    // names the exact tool the agent called.
+    let payload = serde_json::json!({
+        "workspace_id": workspace_id,
+        "chat_session_id": chat_session_id,
+        "tool_use_id": tool_use_id,
+        "tool_name": tool_name,
+        "input": input,
+        "origin": "claudette_mcp",
+        "mcp_tool": mcp_tool,
+    });
+    let _ = app.emit("agent-permission-prompt", &payload);
+
+    // One info-level line per invocation on a dedicated target. This is the
+    // unambiguous "our tool ran, not the native one" signal: native controls
+    // log on `claudette::chat`, never here. Tail with
+    // `grep claudette::agent_mcp ~/.claudette/logs/claudette.<date>.log`.
+    tracing::info!(
+        target: "claudette::agent_mcp",
+        mcp_tool = %mcp_tool,
+        chat_session_id = %chat_session_id,
+        tool_use_id = %tool_use_id,
+        "MCP interactive prompt registered — awaiting user response"
+    );
+
+    spawn_attention_notification(app, workspace_id, chat_session_id, &tool_use_id, kind);
+
+    // Block until the user responds (no timeout — the human takes as long as
+    // they take). A dropped sender (session torn down) lands in the Err arm.
+    match rx.await {
+        Ok(answer) => {
+            tracing::info!(
+                target: "claudette::agent_mcp",
+                mcp_tool = %mcp_tool,
+                tool_use_id = %tool_use_id,
+                "MCP interactive prompt answered — resuming agent"
+            );
+            Ok(answer)
+        }
+        Err(_) => {
+            // The reply channel was dropped (stop / reset / migrate). Clear any
+            // lingering pending entry so the card doesn't stick around, then
+            // tell the agent the interaction was abandoned.
+            let mut agents = state.agents.write().await;
+            if let Some(session) = agents.get_mut(chat_session_id) {
+                session.pending_permissions.remove(&tool_use_id);
+                if session.pending_permissions.is_empty() {
+                    session.reset_attention();
+                }
+            }
+            tracing::info!(
+                target: "claudette::agent_mcp",
+                mcp_tool = %mcp_tool,
+                tool_use_id = %tool_use_id,
+                "MCP interactive prompt cancelled (session stopped or reset)"
+            );
+            Err(BridgeResponse::err(
+                "the interaction was cancelled (the session was stopped or reset)".to_string(),
+            ))
+        }
+    }
+}
+
+/// Fire the attention notification after the frontend has had a moment to paint
+/// the card, mirroring `route_turn_control_request`. Detached + re-checks the
+/// pending entry so a fast answer or a stacked prompt doesn't double-notify.
+fn spawn_attention_notification(
+    app: &AppHandle,
+    workspace_id: &str,
+    chat_session_id: &str,
+    tool_use_id: &str,
+    kind: AttentionKind,
+) {
+    let app = app.clone();
+    let workspace_id = workspace_id.to_string();
+    let chat_session_id = chat_session_id.to_string();
+    let tool_use_id = tool_use_id.to_string();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(
+            crate::commands::chat::ATTENTION_NOTIFY_DELAY_MS,
+        ))
+        .await;
+        let state = app.state::<AppState>();
+        let should_notify = {
+            let mut agents = state.agents.write().await;
+            let Some(session) = agents.get_mut(&chat_session_id) else {
+                return;
+            };
+            if session.attention_notification_sent {
+                false
+            } else {
+                let still_pending = session.pending_permissions.contains_key(&tool_use_id);
+                if still_pending {
+                    session.attention_notification_sent = true;
+                }
+                still_pending
+            }
+        };
+        if should_notify {
+            crate::tray::notify_attention(&app, &workspace_id, kind);
+        }
+    });
+}
+
+/// Persist and surface a finished-work conclusion. Non-blocking: writes the
+/// `agent_conclusions` row, emits `agent-conclusion-created` so the chat
+/// surface can render it live, and returns immediately.
+async fn present_conclusion(
+    app: AppHandle,
+    db_path: PathBuf,
+    workspace_id: String,
+    chat_session_id: String,
+    title: Option<String>,
+    summary: String,
+    artifacts: Option<Vec<String>>,
+) -> BridgeResponse {
+    if let Err(reason) = interaction::validate_summary(&summary, "summary") {
+        return BridgeResponse::err(reason);
+    }
+
+    // Anchor to the in-flight turn's user message when there is one, so a
+    // rollback removes the conclusion with the turn. `None` is fine — the row
+    // still persists and sorts by created_at.
+    let message_id = {
+        let state = app.state::<AppState>();
+        let agents = state.agents.read().await;
+        agents
+            .get(&chat_session_id)
+            .and_then(|s| s.last_user_msg_id.clone())
+    };
+
+    let conclusion = AgentConclusion {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_session_id: chat_session_id.clone(),
+        workspace_id: workspace_id.clone(),
+        message_id,
+        title,
+        summary,
+        artifacts: artifacts.unwrap_or_default(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    match Database::open(&db_path).and_then(|db| db.insert_agent_conclusion(&conclusion)) {
+        Ok(()) => {
+            tracing::info!(
+                target: "claudette::agent_mcp",
+                mcp_tool = "present_conclusion",
+                chat_session_id = %chat_session_id,
+                conclusion_id = %conclusion.id,
+                "MCP conclusion recorded"
+            );
+            let _ = app.emit("agent-conclusion-created", &conclusion);
+            BridgeResponse::message("Conclusion recorded and shown to the user.".to_string())
+        }
+        Err(err) => BridgeResponse::err(format!("persist conclusion: {err}")),
     }
 }
 

@@ -7,7 +7,9 @@
 
 use rusqlite::{OptionalExtension, params};
 
-use crate::model::{AgentStatus, Attachment, AttachmentOrigin, ChatMessage, ChatSession};
+use crate::model::{
+    AgentConclusion, AgentStatus, Attachment, AttachmentOrigin, ChatMessage, ChatSession,
+};
 
 use super::Database;
 
@@ -57,6 +59,73 @@ impl Database {
             ],
         )?;
         Ok(())
+    }
+
+    // --- Agent conclusions ---
+
+    /// Persist a conclusion presented by the agent via `present_conclusion`.
+    /// `artifacts` is stored as a JSON array string in `artifacts_json`.
+    pub fn insert_agent_conclusion(
+        &self,
+        conclusion: &AgentConclusion,
+    ) -> Result<(), rusqlite::Error> {
+        let artifacts_json = if conclusion.artifacts.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&conclusion.artifacts)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            )
+        };
+        self.conn.execute(
+            "INSERT INTO agent_conclusions (
+                id, chat_session_id, workspace_id, message_id, title, summary,
+                artifacts_json, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                conclusion.id,
+                conclusion.chat_session_id,
+                conclusion.workspace_id,
+                conclusion.message_id,
+                conclusion.title,
+                conclusion.summary,
+                artifacts_json,
+                conclusion.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// List conclusions for a chat session, oldest first (transcript order).
+    pub fn list_agent_conclusions_for_session(
+        &self,
+        chat_session_id: &str,
+    ) -> Result<Vec<AgentConclusion>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, chat_session_id, workspace_id, message_id, title, summary, \
+                    artifacts_json, created_at \
+             FROM agent_conclusions WHERE chat_session_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![chat_session_id], Self::parse_agent_conclusion_row)?;
+        rows.collect()
+    }
+
+    fn parse_agent_conclusion_row(row: &rusqlite::Row) -> rusqlite::Result<AgentConclusion> {
+        let artifacts_json: Option<String> = row.get(6)?;
+        let artifacts = artifacts_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .unwrap_or_default();
+        Ok(AgentConclusion {
+            id: row.get(0)?,
+            chat_session_id: row.get(1)?,
+            workspace_id: row.get(2)?,
+            message_id: row.get(3)?,
+            title: row.get(4)?,
+            summary: row.get(5)?,
+            artifacts,
+            created_at: row.get(7)?,
+        })
     }
 
     pub(super) fn parse_chat_message_row(row: &rusqlite::Row) -> rusqlite::Result<ChatMessage> {
@@ -822,7 +891,7 @@ impl Database {
 mod tests {
     use super::*;
     use crate::db::test_support::*;
-    use crate::model::ChatRole;
+    use crate::model::{AgentConclusion, ChatRole};
 
     fn make_attachment(id: &str, message_id: &str, filename: &str) -> Attachment {
         Attachment {
@@ -859,6 +928,85 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].content, "hello");
         assert_eq!(msgs[1].content, "hi there");
+    }
+
+    // --- Agent conclusion tests ---
+
+    #[test]
+    fn insert_and_list_agent_conclusions() {
+        let db = setup_db_with_workspace();
+        let sid = db.default_session_id_for_workspace("w1").unwrap().unwrap();
+        // Anchor message (FK to chat_messages).
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m1",
+            "w1",
+            ChatRole::User,
+            "do the thing",
+        ))
+        .unwrap();
+
+        let c = AgentConclusion {
+            id: "c1".into(),
+            chat_session_id: sid.clone(),
+            workspace_id: "w1".into(),
+            message_id: Some("m1".into()),
+            title: Some("Done".into()),
+            summary: "Refactored 3 files.".into(),
+            artifacts: vec!["/tmp/report.md".into()],
+            created_at: "2026-06-11T00:00:00Z".into(),
+        };
+        db.insert_agent_conclusion(&c).unwrap();
+
+        let rows = db.list_agent_conclusions_for_session(&sid).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].summary, "Refactored 3 files.");
+        assert_eq!(rows[0].artifacts, vec!["/tmp/report.md".to_string()]);
+        assert_eq!(rows[0].title.as_deref(), Some("Done"));
+        assert_eq!(rows[0].message_id.as_deref(), Some("m1"));
+    }
+
+    #[test]
+    fn conclusion_without_artifacts_round_trips_empty() {
+        let db = setup_db_with_workspace();
+        let sid = db.default_session_id_for_workspace("w1").unwrap().unwrap();
+        let c = AgentConclusion {
+            id: "c1".into(),
+            chat_session_id: sid.clone(),
+            workspace_id: "w1".into(),
+            message_id: None,
+            title: None,
+            summary: "Nothing produced.".into(),
+            artifacts: vec![],
+            created_at: "2026-06-11T00:00:00Z".into(),
+        };
+        db.insert_agent_conclusion(&c).unwrap();
+
+        let rows = db.list_agent_conclusions_for_session(&sid).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].artifacts.is_empty());
+        assert!(rows[0].message_id.is_none());
+    }
+
+    #[test]
+    fn conclusion_cascades_when_session_deleted() {
+        let db = setup_db_with_workspace();
+        let sid = db.default_session_id_for_workspace("w1").unwrap().unwrap();
+        db.insert_agent_conclusion(&AgentConclusion {
+            id: "c1".into(),
+            chat_session_id: sid.clone(),
+            workspace_id: "w1".into(),
+            message_id: None,
+            title: None,
+            summary: "done".into(),
+            artifacts: vec![],
+            created_at: "2026-06-11T00:00:00Z".into(),
+        })
+        .unwrap();
+        // Deleting the workspace cascades chat_sessions → agent_conclusions.
+        db.delete_workspace("w1").unwrap();
+        let rows = db.list_agent_conclusions_for_session(&sid).unwrap();
+        assert!(rows.is_empty());
     }
 
     #[test]

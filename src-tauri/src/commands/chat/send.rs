@@ -1461,23 +1461,33 @@ pub async fn send_chat_message(
     }
     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
 
-    // The `send_to_user` built-in plugin is user-toggleable in Settings →
-    // Plugins. When disabled we skip both the synthetic MCP injection
-    // (further down, before spawn) and the system-prompt nudge here, so the
-    // agent has neither the tool nor any hint it exists.
+    // The `send_to_user` and `agent_interaction` built-in plugins are
+    // user-toggleable in Settings → Plugins. They share one MCP server, so the
+    // server is injected (further down, before spawn) when *either* is enabled;
+    // each feature's system-prompt nudge is gated on its own toggle so
+    // disabling one doesn't strip the other's guidance.
     let send_to_user_enabled = claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user");
+    let agent_interaction_enabled = claudette::agent_mcp::is_builtin_plugin_enabled(
+        &db,
+        claudette::agent_mcp::AGENT_INTERACTION_PLUGIN,
+    );
+    let claudette_mcp_enabled = send_to_user_enabled || agent_interaction_enabled;
 
     // Compose the system prompt for fresh spawns: bundled global prompt →
-    // MCP nudge (so the model reaches for `mcp__claudette__send_to_user`
-    // when asked to deliver a file) → per-repo instructions. Resume turns
-    // reuse the persistent CLI process and never re-pass the prompt.
-    let nudge = send_to_user_enabled.then_some(claudette::agent_mcp::SYSTEM_PROMPT_NUDGE);
+    // MCP nudges (so the model reaches for `mcp__claudette__send_to_user` and
+    // the interaction tools when appropriate) → per-repo instructions. Resume
+    // turns reuse the persistent CLI process and never re-pass the prompt.
+    let nudge =
+        claudette::agent_mcp::compose_mcp_nudge(send_to_user_enabled, agent_interaction_enabled);
+    // Claude CLI exposes the interactive tools via the Claudette MCP bridge, so
+    // the rule block steers to ours (`mcp__claudette__ask_user`, …) when the
+    // Agent Interaction builtin is on, falling back to the native mandate when
+    // it's off.
+    let claude_mcp_rules = claudette::agent_mcp::claude_code_mcp_rules(agent_interaction_enabled);
     let custom_instructions = claudette::global_prompt::compose_system_prompt(
         session.custom_instructions.as_deref(),
-        nudge,
-        // Claude CLI exposes `AskUserQuestion` / `ExitPlanMode` via the
-        // Claudette MCP bridge, so those rules apply here.
-        Some(claudette::agent_mcp::CLAUDE_CODE_MCP_RULES),
+        nudge.as_deref(),
+        Some(claude_mcp_rules.as_str()),
     );
     // Pi runs without the Claudette MCP bridge, so we strip both the
     // send_to_user nudge *and* the AskUserQuestion / ExitPlanMode
@@ -2168,7 +2178,7 @@ pub async fn send_chat_message(
 
                 let mut respawn_settings = agent_settings.clone();
                 let bridge = match respawn_settings.backend_runtime.harness {
-                    AgentBackendRuntimeHarness::ClaudeCode => Some(if send_to_user_enabled {
+                    AgentBackendRuntimeHarness::ClaudeCode => Some(if claudette_mcp_enabled {
                         let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                             &app,
                             &state.db_path,
@@ -2183,7 +2193,7 @@ pub async fn send_chat_message(
                         start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id)
                             .await?
                     }),
-                    AgentBackendRuntimeHarness::CodexAppServer if send_to_user_enabled => {
+                    AgentBackendRuntimeHarness::CodexAppServer if claudette_mcp_enabled => {
                         let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                             &app,
                             &state.db_path,
@@ -2356,7 +2366,7 @@ pub async fn send_chat_message(
         // persistent CLI process.
         let mut spawn_settings = agent_settings.clone();
         let bridge = match spawn_settings.backend_runtime.harness {
-            AgentBackendRuntimeHarness::ClaudeCode => Some(if send_to_user_enabled {
+            AgentBackendRuntimeHarness::ClaudeCode => Some(if claudette_mcp_enabled {
                 let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                     &app,
                     &state.db_path,
@@ -2370,7 +2380,7 @@ pub async fn send_chat_message(
             } else {
                 start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
             }),
-            AgentBackendRuntimeHarness::CodexAppServer if send_to_user_enabled => {
+            AgentBackendRuntimeHarness::CodexAppServer if claudette_mcp_enabled => {
                 let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                     &app,
                     &state.db_path,

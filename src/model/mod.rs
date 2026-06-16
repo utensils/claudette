@@ -1,3 +1,4 @@
+mod agent_conclusion;
 mod attachment;
 pub mod cesp;
 mod chat_message;
@@ -12,6 +13,7 @@ mod repository_input;
 mod terminal_tab;
 mod workspace;
 
+pub use agent_conclusion::AgentConclusion;
 pub use attachment::{Attachment, AttachmentOrigin};
 pub use cesp::{
     CespCategorySounds, CespManifest, CespSound, InstalledPack, InstalledPackMeta, RegistryIndex,

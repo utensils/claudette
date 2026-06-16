@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use claudette::agent::AgentSession;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{RwLock, Semaphore, oneshot};
 
 use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
@@ -70,6 +70,24 @@ pub struct PendingPermission {
     /// Original tool input sent by the model — used verbatim as the base for
     /// `updatedInput` when approving (we layer user-collected answers on top).
     pub original_input: serde_json::Value,
+}
+
+/// A blocking interactive request that originated from a Claudette MCP tool
+/// (`ask_user` / `request_review`) rather than from a Claude-CLI control
+/// request. The agent's MCP tool call is suspended inside the bridge handler,
+/// which holds the paired [`oneshot::Receiver`]; the user's answer is delivered
+/// here by `submit_agent_answer` / `submit_plan_approval`, which routes to this
+/// sender instead of writing a `control_response` to the CLI's stdin.
+///
+/// Lives in [`AppState::mcp_pending_replies`] (keyed by `tool_use_id`) rather
+/// than on `AgentSessionState` so adding it doesn't churn the dozen-plus
+/// `AgentSessionState` construction sites. `chat_session_id` is retained so a
+/// session teardown can drop the matching senders, which unblocks the awaiting
+/// bridge handler with a `RecvError` (surfaced to the agent as a cancelled
+/// interaction).
+pub struct McpPendingReply {
+    pub chat_session_id: String,
+    pub reply: oneshot::Sender<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -735,6 +753,10 @@ pub struct AppState {
     /// deleted, or manually fired so the polling loop can recompute its next
     /// deadline immediately instead of waiting for the fallback tick.
     pub scheduler_notify: Arc<tokio::sync::Notify>,
+    /// In-flight blocking interactive requests from Claudette MCP tools
+    /// (`ask_user` / `request_review`), keyed by `tool_use_id`. See
+    /// [`McpPendingReply`].
+    pub mcp_pending_replies: RwLock<HashMap<String, McpPendingReply>>,
 }
 
 impl AppState {
@@ -791,6 +813,7 @@ impl AppState {
             bulk_cleanup_cancels: RwLock::new(HashMap::new()),
             workspace_creates_in_flight: Mutex::new(HashSet::new()),
             scheduler_notify: Arc::new(tokio::sync::Notify::new()),
+            mcp_pending_replies: RwLock::new(HashMap::new()),
         }
     }
 
@@ -838,6 +861,53 @@ impl AppState {
     /// the Plugins settings page from stalling while env loads.
     pub async fn plugins_snapshot(&self) -> Arc<PluginRegistry> {
         Arc::clone(&*self.plugins.read().await)
+    }
+
+    /// Register a blocking MCP interactive request and return the receiver the
+    /// bridge handler awaits. The matching answer is delivered by
+    /// [`Self::take_mcp_reply`]; an abandoned request is cleaned up by
+    /// [`Self::drain_mcp_replies_for_session`].
+    pub async fn register_mcp_reply(
+        &self,
+        tool_use_id: String,
+        chat_session_id: String,
+    ) -> oneshot::Receiver<serde_json::Value> {
+        let (tx, rx) = oneshot::channel();
+        self.mcp_pending_replies.write().await.insert(
+            tool_use_id,
+            McpPendingReply {
+                chat_session_id,
+                reply: tx,
+            },
+        );
+        rx
+    }
+
+    /// Non-destructive check used by the submit handlers to decide whether a
+    /// pending control is MCP-originated (reply via oneshot) or CLI-originated
+    /// (reply via `control_response`).
+    pub async fn is_mcp_pending(&self, tool_use_id: &str) -> bool {
+        self.mcp_pending_replies
+            .read()
+            .await
+            .contains_key(tool_use_id)
+    }
+
+    /// Remove and return the reply sender for `tool_use_id`, if present.
+    pub async fn take_mcp_reply(&self, tool_use_id: &str) -> Option<McpPendingReply> {
+        self.mcp_pending_replies.write().await.remove(tool_use_id)
+    }
+
+    /// Drop every pending MCP reply sender belonging to a session. Dropping the
+    /// sender unblocks the awaiting bridge handler with a `RecvError`, which it
+    /// surfaces to the agent as a cancelled interaction. Called from the
+    /// session teardown paths (stop / reset / migrate) so a blocked `ask_user`
+    /// can't hang after the user abandons it.
+    pub async fn drain_mcp_replies_for_session(&self, chat_session_id: &str) {
+        self.mcp_pending_replies
+            .write()
+            .await
+            .retain(|_, v| v.chat_session_id != chat_session_id);
     }
 }
 
@@ -1077,5 +1147,50 @@ mod create_slot_tests {
 
         // Releasing a repo that holds no slot is a harmless no-op.
         state.end_workspace_create("never-claimed");
+    }
+
+    #[tokio::test]
+    async fn mcp_reply_round_trip_delivers_answer() {
+        let (state, _dir) = test_state();
+        let rx = state.register_mcp_reply("tu1".into(), "sess".into()).await;
+        assert!(state.is_mcp_pending("tu1").await);
+
+        // The submit handler takes the sender and delivers the answer.
+        let pending = state.take_mcp_reply("tu1").await.expect("registered");
+        assert_eq!(pending.chat_session_id, "sess");
+        pending
+            .reply
+            .send(serde_json::json!({ "verdict": "approve" }))
+            .unwrap();
+
+        // The bridge handler awaiting `rx` receives it, and the entry is gone.
+        assert_eq!(rx.await.unwrap()["verdict"], "approve");
+        assert!(!state.is_mcp_pending("tu1").await);
+    }
+
+    #[tokio::test]
+    async fn drain_cancels_session_replies_but_spares_others() {
+        let (state, _dir) = test_state();
+        let rx_target = state
+            .register_mcp_reply("tu_target".into(), "sess".into())
+            .await;
+        let rx_other = state
+            .register_mcp_reply("tu_other".into(), "other".into())
+            .await;
+
+        // Tearing down "sess" drops its sender → the awaiting handler errors
+        // (surfaced to the agent as a cancelled interaction)…
+        state.drain_mcp_replies_for_session("sess").await;
+        assert!(rx_target.await.is_err());
+        assert!(!state.is_mcp_pending("tu_target").await);
+
+        // …while an unrelated session's pending reply is untouched.
+        assert!(state.is_mcp_pending("tu_other").await);
+        let pending = state.take_mcp_reply("tu_other").await.unwrap();
+        pending
+            .reply
+            .send(serde_json::json!({ "ok": true }))
+            .unwrap();
+        assert_eq!(rx_other.await.unwrap()["ok"], true);
     }
 }

@@ -10,7 +10,7 @@ pub const GLOBAL_SYSTEM_PROMPT: &str = include_str!("global-system-prompt.md");
 /// when no layer contributes content, so the caller can skip the CLI
 /// flag entirely rather than pass an empty string.
 ///
-/// `claude_code_rules` should be `Some(CLAUDE_CODE_MCP_RULES)` for Claude
+/// `claude_code_rules` should be `Some(&claude_code_mcp_rules(...))` for Claude
 /// CLI runs and `None` for harnesses that don't expose those MCP tools
 /// (Pi SDK, Codex app-server) — telling a qwen / GPT model to call
 /// `AskUserQuestion` or `ExitPlanMode` instructs it to use tools that
@@ -155,10 +155,25 @@ mod tests {
     }
 
     #[test]
-    fn claude_cli_path_includes_claude_code_rules() {
-        let rules = crate::agent_mcp::CLAUDE_CODE_MCP_RULES;
-        let composed = compose_system_prompt(Some("REPO"), None, Some(rules)).unwrap();
-        assert!(composed.contains("AskUserQuestion"));
+    fn claude_cli_rules_steer_to_claudette_tools_when_enabled() {
+        // Default (Agent Interaction on): the question/decision mandate points
+        // at our MCP tools, not the look-alike native AskUserQuestion. The
+        // plan-mode lifecycle rule (ExitPlanMode) is always present.
+        let rules = crate::agent_mcp::claude_code_mcp_rules(true);
+        let composed = compose_system_prompt(Some("REPO"), None, Some(&rules)).unwrap();
+        assert!(composed.contains("mcp__claudette__ask_user"));
+        assert!(composed.contains("mcp__claudette__request_review"));
+        assert!(composed.contains("ExitPlanMode"));
+    }
+
+    #[test]
+    fn claude_cli_rules_fall_back_to_native_when_disabled() {
+        // With our interaction tools disabled, fall back to mandating the
+        // native AskUserQuestion so the model still asks via a tool.
+        let rules = crate::agent_mcp::claude_code_mcp_rules(false);
+        let composed = compose_system_prompt(Some("REPO"), None, Some(&rules)).unwrap();
+        assert!(composed.contains("`AskUserQuestion`"));
+        assert!(!composed.contains("mcp__claudette__ask_user"));
         assert!(composed.contains("ExitPlanMode"));
     }
 

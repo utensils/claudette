@@ -54,6 +54,20 @@ pub async fn submit_agent_answer(
     annotations: Option<serde_json::Value>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    // MCP-origin branch: when the question came from the `ask_user` MCP tool
+    // the agent is suspended inside its tool call (not on the CLI's stdin), so
+    // the answer must be routed to the awaiting oneshot, not a control_response.
+    if state.is_mcp_pending(&tool_use_id).await {
+        return submit_mcp_answer(
+            state.inner(),
+            &session_id,
+            &tool_use_id,
+            "AskUserQuestion",
+            serde_json::json!({ "answers": answers, "annotations": annotations }),
+        )
+        .await;
+    }
+
     // Validate everything BEFORE removing the pending entry: if the session
     // has been torn down or the entry maps to the wrong tool, the entry must
     // stay so the user (or the correct submit_* command) can still see it.
@@ -123,6 +137,50 @@ pub async fn submit_agent_answer(
         .await
 }
 
+/// Resolve a pending control that originated from a Claudette MCP tool
+/// (`ask_user` / `request_review`) by sending `answer` to the awaiting bridge
+/// handler's oneshot. Mirrors the validate-before-remove discipline of the CLI
+/// path, but there is no `persistent_session` to reply to — the agent is
+/// suspended inside its MCP tool call.
+async fn submit_mcp_answer(
+    state: &AppState,
+    session_id: &str,
+    tool_use_id: &str,
+    expected_tool: &str,
+    answer: serde_json::Value,
+) -> Result<(), String> {
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(session) = agents.get_mut(session_id) {
+            if let Some(p) = session.pending_permissions.get(tool_use_id)
+                && p.tool_name != expected_tool
+            {
+                return Err(format!(
+                    "Pending tool for {tool_use_id} is {}, not {expected_tool}",
+                    p.tool_name
+                ));
+            }
+            session.pending_permissions.remove(tool_use_id);
+            session.reset_attention();
+        }
+    }
+    let Some(pending) = state.take_mcp_reply(tool_use_id).await else {
+        return Err(format!(
+            "No pending MCP interaction for tool_use_id {tool_use_id}"
+        ));
+    };
+    tracing::info!(
+        target: "claudette::agent_mcp",
+        tool_use_id = %tool_use_id,
+        expected_tool = %expected_tool,
+        "routing user response to MCP interactive prompt"
+    );
+    // Send failing means the agent's tool call already returned (e.g. the
+    // session was torn down and the receiver dropped) — nothing left to do.
+    let _ = pending.reply.send(answer);
+    Ok(())
+}
+
 fn build_attention_response(
     pending: &PendingPermission,
     approved: bool,
@@ -178,6 +236,22 @@ async fn submit_approval_response(
     reason: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    // MCP-origin branch: a `request_review` verdict routes to the awaiting
+    // oneshot. `approved` maps to approve/deny today; the third "suggest"
+    // verdict arrives once the frontend card exposes it (the answer shape
+    // already carries an explicit `verdict` string for that).
+    if state.is_mcp_pending(&tool_use_id).await {
+        let verdict = if approved { "approve" } else { "deny" };
+        return submit_mcp_answer(
+            state.inner(),
+            &session_id,
+            &tool_use_id,
+            "ExitPlanMode",
+            serde_json::json!({ "verdict": verdict, "note": reason }),
+        )
+        .await;
+    }
+
     // Same validate-before-remove pattern as submit_agent_answer — see that
     // function for the rationale.
     let (pending, ps) = {
