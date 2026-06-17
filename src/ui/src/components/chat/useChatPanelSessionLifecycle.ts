@@ -12,6 +12,7 @@ import {
 import {
   getAppSetting,
   listCheckpoints,
+  loadAgentConclusionsForSession,
   loadChatHistoryPage,
   loadCompletedTurns,
   sendRemoteCommand,
@@ -247,6 +248,19 @@ export function useChatPanelSessionLifecycle({
             });
           })
           .catch((e) => console.error("Failed to load chat history:", e));
+        // Agent-presented conclusions persist in their own table; load them
+        // alongside history so the inline conclusion cards survive reload.
+        // Live conclusions append separately via `agent-conclusion-created`.
+        // Gated on the experimental "Claudette MCP" flag so the feature stays
+        // fully dark when off (no card renders, even for past conclusions).
+        if (useAppStore.getState().claudetteMcpEnabled) {
+          loadAgentConclusionsForSession(sessionId)
+            .then((conclusions) => {
+              if (cancelled || !isCurrentHistoryLoad()) return;
+              useAppStore.getState().setChatConclusions(sessionId, conclusions);
+            })
+            .catch((e) => console.error("Failed to load conclusions:", e));
+        }
       }
     } else {
       sendRemoteCommand(currentWs!.remote_connection_id!, "load_chat_history", {

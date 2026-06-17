@@ -1,5 +1,6 @@
 pub mod attachments;
 pub mod checkpoint;
+pub mod conclusions;
 pub mod interaction;
 pub mod lifecycle;
 mod naming;
@@ -198,9 +199,10 @@ pub(crate) async fn start_bridge_and_inject_mcp(
     workspace_id: &str,
     chat_session_id: &str,
     base_mcp_config: Option<String>,
+    interaction_enabled: bool,
 ) -> Result<(Arc<McpBridgeSession>, Option<String>), String> {
     let bridge = start_chat_bridge(app, db_path, workspace_id, chat_session_id).await?;
-    let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle())?;
+    let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle(), interaction_enabled)?;
     Ok((bridge, merged))
 }
 
@@ -275,6 +277,7 @@ fn windows_command_arg_quote(value: &str) -> String {
 fn inject_claudette_mcp_entry(
     base: Option<String>,
     handle: &BridgeHandle,
+    interaction_enabled: bool,
 ) -> Result<Option<String>, String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("current_exe: {e}"))?
@@ -288,6 +291,10 @@ fn inject_claudette_mcp_entry(
         "env": {
             claudette::agent_mcp::server::ENV_SOCKET_ADDR: handle.socket_addr,
             claudette::agent_mcp::server::ENV_TOKEN: handle.token,
+            // Tells the grandchild whether to advertise + accept the
+            // experimental interaction tools (it has no DB access of its own).
+            claudette::agent_mcp::server::ENV_INTERACTION_ENABLED:
+                if interaction_enabled { "true" } else { "false" },
         }
     });
 
@@ -365,7 +372,7 @@ mod mcp_inject_tests {
 
     #[test]
     fn inject_into_empty_config_creates_wrapper() {
-        let merged = inject_claudette_mcp_entry(None, &handle())
+        let merged = inject_claudette_mcp_entry(None, &handle(), true)
             .unwrap()
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
@@ -375,6 +382,21 @@ mod mcp_inject_tests {
         let env = &v["mcpServers"]["claudette"]["env"];
         assert_eq!(env["CLAUDETTE_MCP_SOCKET"], "/tmp/cmcp/abc.sock");
         assert_eq!(env["CLAUDETTE_MCP_TOKEN"], "secret");
+        assert_eq!(env["CLAUDETTE_MCP_INTERACTION"], "true");
+    }
+
+    #[test]
+    fn inject_marks_interaction_disabled_when_off() {
+        // The experimental flag flows to the grandchild via env. Off => "false",
+        // which the server reads to hide the interaction tools.
+        let merged = inject_claudette_mcp_entry(None, &handle(), false)
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(
+            v["mcpServers"]["claudette"]["env"]["CLAUDETTE_MCP_INTERACTION"],
+            "false"
+        );
     }
 
     #[test]
@@ -385,7 +407,7 @@ mod mcp_inject_tests {
             }
         })
         .to_string();
-        let merged = inject_claudette_mcp_entry(Some(base), &handle())
+        let merged = inject_claudette_mcp_entry(Some(base), &handle(), true)
             .unwrap()
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
@@ -407,7 +429,7 @@ mod mcp_inject_tests {
             }
         })
         .to_string();
-        let merged = inject_claudette_mcp_entry(Some(base), &handle())
+        let merged = inject_claudette_mcp_entry(Some(base), &handle(), true)
             .unwrap()
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
@@ -417,7 +439,7 @@ mod mcp_inject_tests {
 
     #[test]
     fn inject_rejects_malformed_base_json() {
-        let res = inject_claudette_mcp_entry(Some("not-json".into()), &handle());
+        let res = inject_claudette_mcp_entry(Some("not-json".into()), &handle(), true);
         assert!(res.is_err());
     }
 

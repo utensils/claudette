@@ -72,6 +72,10 @@ export interface SettingsSlice {
   // Experimental
   usageInsightsEnabled: boolean;
   setUsageInsightsEnabled: (enabled: boolean) => void;
+  /** Experimental "Claudette MCP": agent-initiated interaction tools
+   *  (ask_user / request_review / present_conclusion). Off by default. */
+  claudetteMcpEnabled: boolean;
+  setClaudetteMcpEnabled: (enabled: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
   alternativeBackendsAvailable: boolean;
@@ -201,6 +205,8 @@ export const createSettingsSlice: StateCreator<
     set({ projectViewIssuesPrsEnabled: enabled }),
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
+  claudetteMcpEnabled: false,
+  setClaudetteMcpEnabled: (enabled) => set({ claudetteMcpEnabled: enabled }),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   alternativeBackendsAvailable: false,

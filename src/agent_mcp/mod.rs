@@ -22,10 +22,8 @@ use serde::Serialize;
 /// discovery) so the settings UI has a stable, hand-curated list.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct BuiltinPlugin {
-    /// Stable id, used as the setting-key suffix and the settings-UI key.
-    /// For single-tool plugins this is also the MCP tool name
-    /// (e.g. `send_to_user`); for a grouped plugin (e.g. `agent_interaction`)
-    /// it covers several related tools that toggle together.
+    /// Stable id, used as the setting-key suffix, the settings-UI key, and the
+    /// MCP tool name (each builtin plugin maps to one always-available tool).
     pub name: &'static str,
     /// One-line title for the settings UI.
     pub title: &'static str,
@@ -33,36 +31,35 @@ pub struct BuiltinPlugin {
     pub description: &'static str,
 }
 
-/// Setting-key suffix for the grouped interactive-prompt tools
-/// (`ask_user`, `request_review`, `present_conclusion`). Toggling it gates the
-/// system-prompt nudge; the tools are injected whenever any Claudette builtin
-/// is enabled (see [`claudette_mcp_server_enabled`]).
-pub const AGENT_INTERACTION_PLUGIN: &str = "agent_interaction";
+/// `app_settings` key for the experimental "Claudette MCP" feature, which gates
+/// the agent-initiated interaction tools (`ask_user`, `request_review`,
+/// `present_conclusion`) plus the system-prompt steering toward them. **Off by
+/// default** — only the literal string `"true"` enables it — so the feature can
+/// ship without changing behavior for anyone who hasn't opted in. Lives in the
+/// Experimental settings section (not Plugins).
+pub const CLAUDETTE_MCP_SETTING: &str = "claudette_mcp_enabled";
 
 /// All built-in plugins shipped with Claudette. Add new ones here as the
 /// agent-tool surface grows.
-pub const BUILTIN_PLUGINS: &[BuiltinPlugin] = &[
-    BuiltinPlugin {
-        name: "send_to_user",
-        title: "Agent Attachments",
-        description: "Lets the agent deliver images, screenshots, PDFs, and text/data \
+pub const BUILTIN_PLUGINS: &[BuiltinPlugin] = &[BuiltinPlugin {
+    name: "send_to_user",
+    title: "Agent Attachments",
+    description: "Lets the agent deliver images, screenshots, PDFs, and text/data \
                   artifacts (plain text, CSV, JSON, Markdown) inline in chat. The agent \
                   reaches for this whenever you ask it to send, share, or show you a \
                   file — including artifacts produced by other tools (e.g. a Playwright \
                   screenshot, a generated CSV). Each type renders with a type-aware \
                   preview. Disable to remove the tool and stop the system prompt from \
                   nudging the agent to use it.",
-    },
-    BuiltinPlugin {
-        name: AGENT_INTERACTION_PLUGIN,
-        title: "Agent Interaction",
-        description: "Lets the agent ask you questions, request approval / feedback on a \
-                  plan or decision (approve, deny, or suggest changes), and present a \
-                  conclusion of completed work — each surfaced as an interactive card in \
-                  chat. Works across agent backends, not just Claude. Disable to stop \
-                  the system prompt from nudging the agent toward these tools.",
-    },
-];
+}];
+
+/// Whether the experimental "Claudette MCP" feature is enabled. **Off by
+/// default**: absent or any value other than `"true"` reads as disabled, so the
+/// agent-interaction tools and their prompt steering stay dark until the user
+/// opts in via Settings → Experimental.
+pub fn claudette_mcp_enabled(db: &crate::db::Database) -> bool {
+    matches!(db.get_app_setting(CLAUDETTE_MCP_SETTING), Ok(Some(v)) if v == "true")
+}
 
 /// Settings key pattern: `builtin_plugin:{name}:enabled`. Absent key = enabled
 /// (the default), the literal string `"false"` = disabled. Mirrors the
@@ -138,20 +135,10 @@ shown to the user as a conclusion card. \
 `ask_user` and `request_review` block on the user, so only call them when you \
 genuinely need input — do not call them to narrate progress.";
 
-/// Whether the Claudette MCP server should be injected into a spawned agent at
-/// all — true when *any* built-in plugin that lives on that server is enabled.
-/// The server lists all its tools together, so injection is all-or-nothing;
-/// per-feature toggles gate the system-prompt nudges (see
-/// [`compose_mcp_nudge`]).
-pub fn claudette_mcp_server_enabled(db: &crate::db::Database) -> bool {
-    BUILTIN_PLUGINS
-        .iter()
-        .any(|p| is_builtin_plugin_enabled(db, p.name))
-}
-
-/// Build the combined system-prompt nudge for the Claudette MCP tools, each
-/// section gated on its own builtin toggle. Returns `None` when every relevant
-/// builtin is disabled so the caller passes no nudge at all.
+/// Build the combined system-prompt nudge for the Claudette MCP tools. The
+/// attachment section is gated on the `send_to_user` builtin toggle and the
+/// interaction section on the experimental `claudette_mcp_enabled` flag, so each
+/// is steered only when actually available. Returns `None` when neither is on.
 pub fn compose_mcp_nudge(
     send_to_user_enabled: bool,
     agent_interaction_enabled: bool,
@@ -170,14 +157,16 @@ pub fn compose_mcp_nudge(
 /// Codex pass `None` — they don't expose these tools, and pointing a qwen / GPT
 /// model at tools that aren't registered confuses its capability self-model).
 ///
-/// The question / decision mandate is gated on `agent_interaction_enabled`:
-/// - **enabled** (default): the model is told to use *our* tools
+/// The question / decision mandate is gated on `agent_interaction_enabled`
+/// (sourced from the experimental [`CLAUDETTE_MCP_SETTING`], **off by default**):
+/// - **enabled** (opt-in): the model is told to use *our* tools
 ///   (`mcp__claudette__ask_user` / `request_review` / `present_conclusion`) and
 ///   explicitly NOT the look-alike native `AskUserQuestion`. The model defaults
 ///   hard to its native tool, so we both amend the old native mandate and state
 ///   the new one imperatively here (and again in [`INTERACTION_PROMPT_NUDGE`]).
-/// - **disabled**: falls back to the native `AskUserQuestion` mandate so the
-///   model still asks via a tool rather than plain text.
+/// - **disabled** (default): falls back to the native `AskUserQuestion` mandate
+///   so the model still asks via a tool rather than plain text — i.e. exactly
+///   the pre-feature behavior.
 ///
 /// The plan-mode rule is always present: `ExitPlanMode` is the real mechanism
 /// for leaving the CLI's `--permission-mode plan`, independent of (and not
@@ -244,11 +233,18 @@ mod builtin_tests {
             assert!(!p.description.is_empty());
         }
         assert!(BUILTIN_PLUGINS.iter().any(|p| p.name == "send_to_user"));
-        assert!(
-            BUILTIN_PLUGINS
-                .iter()
-                .any(|p| p.name == AGENT_INTERACTION_PLUGIN)
-        );
+    }
+
+    #[test]
+    fn claudette_mcp_experimental_flag_defaults_off() {
+        let db = Database::open_in_memory().unwrap();
+        // Absent setting → feature is OFF (the whole point of the experimental gate).
+        assert!(!claudette_mcp_enabled(&db));
+        // Only the literal "true" turns it on.
+        db.set_app_setting(CLAUDETTE_MCP_SETTING, "false").unwrap();
+        assert!(!claudette_mcp_enabled(&db));
+        db.set_app_setting(CLAUDETTE_MCP_SETTING, "true").unwrap();
+        assert!(claudette_mcp_enabled(&db));
     }
 
     #[test]
@@ -270,25 +266,5 @@ mod builtin_tests {
 
         // Neither → no nudge at all.
         assert!(compose_mcp_nudge(false, false).is_none());
-    }
-
-    #[test]
-    fn server_enabled_when_any_builtin_enabled() {
-        let db = Database::open_in_memory().unwrap();
-        // All default-enabled → server should inject.
-        assert!(claudette_mcp_server_enabled(&db));
-        // Disable everything → server should not inject.
-        for p in BUILTIN_PLUGINS {
-            db.set_app_setting(&builtin_plugin_setting_key(p.name), "false")
-                .unwrap();
-        }
-        assert!(!claudette_mcp_server_enabled(&db));
-        // Re-enabling just one is enough to inject the shared server.
-        db.set_app_setting(
-            &builtin_plugin_setting_key(AGENT_INTERACTION_PLUGIN),
-            "true",
-        )
-        .unwrap();
-        assert!(claudette_mcp_server_enabled(&db));
     }
 }

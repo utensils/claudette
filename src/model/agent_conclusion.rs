@@ -3,8 +3,11 @@ use serde::Serialize;
 /// A finished-work conclusion the agent presented via the `present_conclusion`
 /// MCP tool. Persisted in `agent_conclusions` so it survives reload/export and
 /// can be rendered inline in the transcript as a conclusion card.
+///
+/// Serialized snake_case to match the rest of the chat domain (`ChatMessage`,
+/// `Attachment`) so the frontend `AgentConclusion` type and the
+/// `agent-conclusion-created` event payload share one field convention.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AgentConclusion {
     pub id: String,
     pub chat_session_id: String,

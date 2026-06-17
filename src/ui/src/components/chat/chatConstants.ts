@@ -1,5 +1,5 @@
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
-import type { ChatAttachment } from "../../types/chat";
+import type { AgentConclusion, ChatAttachment } from "../../types/chat";
 import type { ConversationCheckpoint } from "../../types/checkpoint";
 
 // Stable empty arrays to avoid Zustand selector re-renders when data is undefined.
@@ -12,6 +12,7 @@ import type { ConversationCheckpoint } from "../../types/checkpoint";
 export const EMPTY_COMPLETED_TURNS: readonly CompletedTurn[] = Object.freeze([]);
 export const EMPTY_ACTIVITIES: readonly ToolActivity[] = Object.freeze([]);
 export const EMPTY_ATTACHMENTS: readonly ChatAttachment[] = Object.freeze([]);
+export const EMPTY_CONCLUSIONS: readonly AgentConclusion[] = Object.freeze([]);
 export const EMPTY_CHECKPOINTS: readonly ConversationCheckpoint[] = Object.freeze([]);
 
 export type RollbackModalData = {

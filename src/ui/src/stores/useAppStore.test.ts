@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useAppStore } from "./useAppStore";
 import type { AgentApproval, AgentQuestion, PlanApproval } from "./useAppStore";
-import type { ChatMessage, ChatSession } from "../types/chat";
+import type { AgentConclusion, ChatMessage, ChatSession } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import type { Workspace } from "../types/workspace";
 import { applyPlanModeMountDefault } from "../components/chat/planModePersistence";
@@ -122,6 +122,48 @@ describe("Claudette terminal setting", () => {
 
     useAppStore.getState().setClaudetteTerminalEnabled(true);
     expect(useAppStore.getState().claudetteTerminalEnabled).toBe(true);
+  });
+});
+
+describe("chat conclusions", () => {
+  beforeEach(() => {
+    useAppStore.setState({ chatConclusions: {} });
+  });
+
+  const makeConclusion = (id: string): AgentConclusion => ({
+    id,
+    chat_session_id: "s1",
+    workspace_id: "w1",
+    message_id: "m1",
+    title: null,
+    summary: "done",
+    artifacts: [],
+    created_at: "2026-06-16T00:00:00Z",
+  });
+
+  it("setChatConclusions replaces the session list", () => {
+    useAppStore.getState().setChatConclusions("s1", [makeConclusion("c1")]);
+    useAppStore.getState().setChatConclusions("s1", [makeConclusion("c2")]);
+    expect(
+      useAppStore.getState().chatConclusions["s1"].map((c) => c.id),
+    ).toEqual(["c2"]);
+  });
+
+  it("addChatConclusions appends and dedupes by id", () => {
+    useAppStore.getState().setChatConclusions("s1", [makeConclusion("c1")]);
+    useAppStore
+      .getState()
+      .addChatConclusions("s1", [makeConclusion("c1"), makeConclusion("c2")]);
+    expect(
+      useAppStore.getState().chatConclusions["s1"].map((c) => c.id),
+    ).toEqual(["c1", "c2"]);
+  });
+
+  it("keeps sessions independent", () => {
+    useAppStore.getState().addChatConclusions("s1", [makeConclusion("c1")]);
+    useAppStore.getState().addChatConclusions("s2", [makeConclusion("c1")]);
+    expect(useAppStore.getState().chatConclusions["s1"]).toHaveLength(1);
+    expect(useAppStore.getState().chatConclusions["s2"]).toHaveLength(1);
   });
 });
 

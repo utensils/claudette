@@ -16,6 +16,8 @@ export type {
   SessionStatus,
   SessionAttentionKind,
   SessionAgentStatus,
+  AgentConclusion,
+  AgentConclusionEvent,
 } from "./chat";
 export type {
   DiffFile,
