@@ -110,17 +110,20 @@ pub fn ask_card_input(questions: Value) -> Value {
 }
 
 /// Shape a `request_review` request into the `original_input` the existing
-/// `PlanApprovalCard` renders (which keys off `plan`). The `claudetteReview`
-/// marker lets the frontend distinguish a Claudette-native review (which
-/// offers the approve/deny/**suggest** verdicts) from a native `ExitPlanMode`
-/// (approve/deny only).
+/// `PlanApprovalCard` renders. The card's inline preview reads the plan text
+/// from `codexPlanContent` (see the `ExitPlanMode` branch in
+/// `useAgentStream.ts`), so the merged summary/detail goes there — using `plan`
+/// would leave the card with no visible content. The `claudetteReview` marker
+/// lets the frontend distinguish a Claudette-native review (approve / deny /
+/// suggest) from a native `ExitPlanMode`. Note we do NOT set `codexSyntheticPlan`,
+/// so the card keeps `source: "claude"` and skips Codex's auto-message flow.
 pub fn review_card_input(summary: &str, detail: Option<&str>) -> Value {
     let plan = match detail {
         Some(d) if !d.trim().is_empty() => format!("{summary}\n\n{d}"),
         _ => summary.to_string(),
     };
     json!({
-        "plan": plan,
+        "codexPlanContent": plan,
         "claudetteReview": true,
     })
 }
@@ -188,14 +191,17 @@ mod tests {
 
     #[test]
     fn review_card_input_merges_detail_and_marks_native() {
+        // The plan text must land in `codexPlanContent` — the field the existing
+        // PlanApprovalCard inline preview actually renders. Using `plan` would
+        // leave the card blank.
         let input = review_card_input("Summary", Some("Detail"));
         assert_eq!(input["claudetteReview"], true);
-        let plan = input["plan"].as_str().unwrap();
+        let plan = input["codexPlanContent"].as_str().unwrap();
         assert!(plan.contains("Summary"));
         assert!(plan.contains("Detail"));
 
-        // No detail → plan is just the summary.
+        // No detail → content is just the summary.
         let input = review_card_input("Only summary", None);
-        assert_eq!(input["plan"], "Only summary");
+        assert_eq!(input["codexPlanContent"], "Only summary");
     }
 }

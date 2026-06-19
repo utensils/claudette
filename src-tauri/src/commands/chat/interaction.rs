@@ -58,12 +58,15 @@ pub async fn submit_agent_answer(
     // the agent is suspended inside its tool call (not on the CLI's stdin), so
     // the answer must be routed to the awaiting oneshot, not a control_response.
     if state.is_mcp_pending(&tool_use_id).await {
+        // Return the answers map directly (keyed by question text), matching the
+        // `ask_user` tool's documented contract. `annotations` is always null on
+        // the MCP path (the card never sends it), so there's nothing to carry.
         return submit_mcp_answer(
             state.inner(),
             &session_id,
             &tool_use_id,
             "AskUserQuestion",
-            serde_json::json!({ "answers": answers, "annotations": annotations }),
+            serde_json::to_value(&answers).unwrap_or(serde_json::Value::Null),
         )
         .await;
     }
@@ -237,11 +240,18 @@ async fn submit_approval_response(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // MCP-origin branch: a `request_review` verdict routes to the awaiting
-    // oneshot. `approved` maps to approve/deny today; the third "suggest"
-    // verdict arrives once the frontend card exposes it (the answer shape
-    // already carries an explicit `verdict` string for that).
+    // oneshot. The existing plan card surfaces "Approve" or a feedback textarea;
+    // that feedback path is semantically "suggest changes", so map
+    // approved=false WITH a non-empty note to `suggest` and reserve `deny` for
+    // an explicit deny-without-note (not reachable from today's card, but kept
+    // for completeness so the agent can tell the two apart).
     if state.is_mcp_pending(&tool_use_id).await {
-        let verdict = if approved { "approve" } else { "deny" };
+        let has_note = reason.as_deref().is_some_and(|r| !r.trim().is_empty());
+        let verdict = match (approved, has_note) {
+            (true, _) => "approve",
+            (false, true) => "suggest",
+            (false, false) => "deny",
+        };
         return submit_mcp_answer(
             state.inner(),
             &session_id,
