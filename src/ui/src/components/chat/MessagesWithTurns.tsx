@@ -164,6 +164,11 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const chatConclusions = useAppStore(
     (s) => s.chatConclusions[sessionId] ?? EMPTY_CONCLUSIONS,
   );
+  // Conclusions only render when the experimental "Claudette MCP" flag is on.
+  // History load already skips fetching them when off, but a session that had
+  // them loaded (flag toggled off mid-session) or a stray live event must also
+  // stay dark — so we gate the render below, not just the fetch.
+  const claudetteMcpEnabled = useAppStore((s) => s.claudetteMcpEnabled);
   const worktreePath = useAppStore(
     (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
   );
@@ -253,9 +258,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   // *user* message that triggered the turn; re-route each to that turn's
   // *assistant* message so the card renders at the end of the turn. Mirrors the
   // attachment routing above (kept separate so its dependency set is just
-  // conclusions + messages).
+  // conclusions + messages + the experimental flag gate).
   const conclusionsByMessage = useMemo(() => {
-    if (chatConclusions.length === 0)
+    if (!claudetteMcpEnabled || chatConclusions.length === 0)
       return new Map<string, AgentConclusion[]>();
     const userToNextAssistant = new Map<string, string>();
     const loadedMessageIds = new Set<string>();
@@ -297,7 +302,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       else map.set(targetId, [c]);
     }
     return map;
-  }, [chatConclusions, messages]);
+  }, [chatConclusions, messages, claudetteMcpEnabled]);
 
   // CompletedTurn.afterMessageIndex is GLOBAL (counts from message 0 of the
   // session, not from the loaded window). Shift to local before indexing into
