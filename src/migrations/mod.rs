@@ -264,4 +264,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260521212019_agent_scheduled_task_failures.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260611120000_agent_conclusions",
+        sql: include_str!("20260611120000_agent_conclusions.sql"),
+        legacy_version: None,
+    },
 ];

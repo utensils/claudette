@@ -17,6 +17,8 @@ export function ExperimentalSettings() {
   const clearSettingsFocus = useAppStore((s) => s.clearSettingsFocus);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
+  const claudetteMcpEnabled = useAppStore((s) => s.claudetteMcpEnabled);
+  const setClaudetteMcpEnabled = useAppStore((s) => s.setClaudetteMcpEnabled);
   const [error, setError] = useState<string | null>(null);
   const [usageConfirmOpen, setUsageConfirmOpen] = useState(false);
   const usageRowRef = useRef<HTMLDivElement>(null);
@@ -64,6 +66,18 @@ export function ExperimentalSettings() {
     await applyUsageInsights(false);
   };
 
+  const handleClaudetteMcpToggle = async () => {
+    const next = !claudetteMcpEnabled;
+    setClaudetteMcpEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting("claudette_mcp_enabled", next ? "true" : "false");
+    } catch (e) {
+      setClaudetteMcpEnabled(!next); // revert optimistic update on failure
+      setError(String(e));
+    }
+  };
+
   return (
     <div>
       <h2 className={styles.sectionTitle}>{t("experimental_title")}</h2>
@@ -91,6 +105,27 @@ export function ExperimentalSettings() {
             aria-label={t("experimental_claude_code_usage_aria")}
             data-checked={usageInsightsEnabled}
             onClick={handleUsageToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow} id="claudette-mcp-setting">
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>{t("experimental_claudette_mcp")}</div>
+          <div className={styles.settingDescription}>
+            {t("experimental_claudette_mcp_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={claudetteMcpEnabled}
+            aria-label={t("experimental_claudette_mcp_aria")}
+            data-checked={claudetteMcpEnabled}
+            onClick={handleClaudetteMcpToggle}
           >
             <div className={styles.toggleKnob} />
           </button>

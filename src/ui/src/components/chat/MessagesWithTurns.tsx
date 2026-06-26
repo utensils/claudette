@@ -4,7 +4,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import { loadAttachmentData } from "../../services/tauri";
-import type { ChatMessage, ChatAttachment } from "../../types/chat";
+import type { AgentConclusion, ChatMessage, ChatAttachment } from "../../types/chat";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { HighlightedPlainText } from "./HighlightedPlainText";
@@ -67,8 +67,10 @@ import {
   EMPTY_ATTACHMENTS,
   EMPTY_CHECKPOINTS,
   EMPTY_COMPLETED_TURNS,
+  EMPTY_CONCLUSIONS,
   type RollbackModalData,
 } from "./chatConstants";
+import { ConclusionCard } from "./ConclusionCard";
 
 /**
  * Renders all messages interleaved with completed turn summaries at the correct
@@ -159,6 +161,14 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const chatAttachments = useAppStore(
     (s) => s.chatAttachments[sessionId] ?? EMPTY_ATTACHMENTS,
   );
+  const chatConclusions = useAppStore(
+    (s) => s.chatConclusions[sessionId] ?? EMPTY_CONCLUSIONS,
+  );
+  // Conclusions only render when the experimental "Claudette MCP" flag is on.
+  // History load already skips fetching them when off, but a session that had
+  // them loaded (flag toggled off mid-session) or a stray live event must also
+  // stay dark — so we gate the render below, not just the fetch.
+  const claudetteMcpEnabled = useAppStore((s) => s.claudetteMcpEnabled);
   const worktreePath = useAppStore(
     (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
   );
@@ -243,6 +253,56 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     }
     return map;
   }, [chatAttachments, messages]);
+
+  // Conclusions are agent-authored and anchored (like agent attachments) to the
+  // *user* message that triggered the turn; re-route each to that turn's
+  // *assistant* message so the card renders at the end of the turn. Mirrors the
+  // attachment routing above (kept separate so its dependency set is just
+  // conclusions + messages + the experimental flag gate).
+  const conclusionsByMessage = useMemo(() => {
+    if (!claudetteMcpEnabled || chatConclusions.length === 0)
+      return new Map<string, AgentConclusion[]>();
+    const userToNextAssistant = new Map<string, string>();
+    const loadedMessageIds = new Set<string>();
+    let nextAssistantId: string | null = null;
+    let firstAssistantInWindow: string | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      loadedMessageIds.add(m.id);
+      if (m.role === "Assistant") {
+        nextAssistantId = m.id;
+        firstAssistantInWindow = m.id;
+      } else if (m.role === "User" && nextAssistantId) {
+        userToNextAssistant.set(m.id, nextAssistantId);
+      }
+    }
+    const firstNonSystem = messages.find((m) => m.role !== "System");
+    const startsMidTurn = firstNonSystem?.role === "Assistant";
+    const map = new Map<string, AgentConclusion[]>();
+    for (const c of chatConclusions) {
+      // A null anchor (no in-flight turn when presented) or an anchor whose
+      // turn is fully out of view won't route; fall back to the carry-over
+      // assistant on a mid-turn page, else skip (matches attachment behavior).
+      const anchor = c.message_id;
+      let targetId: string | null = null;
+      if (anchor && userToNextAssistant.has(anchor)) {
+        targetId = userToNextAssistant.get(anchor)!;
+      } else if (
+        (!anchor || !loadedMessageIds.has(anchor)) &&
+        firstAssistantInWindow !== null &&
+        startsMidTurn
+      ) {
+        targetId = firstAssistantInWindow;
+      } else if (anchor) {
+        targetId = anchor;
+      }
+      if (targetId === null) continue;
+      const list = map.get(targetId);
+      if (list) list.push(c);
+      else map.set(targetId, [c]);
+    }
+    return map;
+  }, [chatConclusions, messages, claudetteMcpEnabled]);
 
   // CompletedTurn.afterMessageIndex is GLOBAL (counts from message 0 of the
   // session, not from the loaded window). Shift to local before indexing into
@@ -1031,6 +1091,16 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                 </div>
               </div>
             )}
+            {conclusionsByMessage.has(msg.id) &&
+              conclusionsByMessage
+                .get(msg.id)!
+                .map((c) => (
+                  <ConclusionCard
+                    key={c.id}
+                    conclusion={c}
+                    workspaceId={workspaceId}
+                  />
+                ))}
             {renderPlainTurnFooter(idx + 1)}
           </React.Fragment>
         );

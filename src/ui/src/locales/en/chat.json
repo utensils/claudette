@@ -131,6 +131,8 @@
   "plan_approval_or_feedback": "Or provide feedback below",
   "plan_approval_feedback_placeholder": "Request changes or ask for a revision…",
   "plan_approval_send": "Send",
+  "conclusion_label": "Conclusion",
+  "conclusion_artifacts": "Artifacts",
   "agent_approval_label": "Approval Required",
   "agent_approval_details": "Details",
   "agent_approval_commandExecution_title": "Run command",

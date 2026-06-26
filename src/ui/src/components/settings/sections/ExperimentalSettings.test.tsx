@@ -149,13 +149,17 @@ describe("ExperimentalSettings — Usage Insights consent gate", () => {
       "false",
     );
   });
-  it("does not render the removed OpenRouter balance toggle", async () => {
+  it("renders the usage + Claudette MCP toggles (not the removed OpenRouter one)", async () => {
     const container = await renderSettings();
-    const switches = Array.from(container.querySelectorAll('[role="switch"]'));
+    const labels = Array.from(
+      container.querySelectorAll('[role="switch"]'),
+    ).map((s) => s.getAttribute("aria-label"));
 
-    expect(switches).toHaveLength(1);
-    expect(switches[0]?.getAttribute("aria-label")).toBe(
+    // Exactly the two experimental toggles, in render order — the long-removed
+    // OpenRouter balance toggle must not reappear.
+    expect(labels).toEqual([
       "experimental_claude_code_usage_aria",
-    );
+      "experimental_claudette_mcp_aria",
+    ]);
   });
 });

@@ -13,7 +13,7 @@ import type {
   AgentApprovalKind,
   AgentToolCall,
 } from "../stores/useAppStore";
-import type { ChatMessage } from "../types/chat";
+import type { AgentConclusionEvent, ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import type { TerminalTab } from "../types/terminal";
 import { extractToolSummary } from "./toolSummary";
@@ -1193,6 +1193,27 @@ export function useAgentStream() {
       unlisten.then((fn) => fn());
     };
   }, [addChatAttachments]);
+
+  // Listen for agent-presented conclusions delivered via the
+  // `mcp__claudette__present_conclusion` tool. The Rust bridge has already
+  // persisted the row; we mirror it into the store so the inline conclusion
+  // card renders live. The event payload IS the serialized AgentConclusion.
+  const addChatConclusions = useAppStore((s) => s.addChatConclusions);
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<AgentConclusionEvent>(
+      "agent-conclusion-created",
+      (event) => {
+        if (!active) return;
+        const conclusion = event.payload;
+        addChatConclusions(conclusion.chat_session_id, [conclusion]);
+      },
+    );
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [addChatConclusions]);
 
   useEffect(() => {
     let active = true;

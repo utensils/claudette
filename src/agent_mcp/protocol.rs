@@ -128,6 +128,30 @@ pub enum BridgePayload {
         task_id: String,
         until: Option<String>,
     },
+    /// Ask the user one or more questions and block until they answer. The
+    /// parent surfaces these through the same interactive card the native
+    /// `AskUserQuestion` uses, so any backend (not just the Claude CLI) can
+    /// prompt the user. `questions` is the validated question array, shaped
+    /// to match the `AskUserQuestion` tool input the frontend already renders.
+    /// The bridge response carries the user's answers (keyed by question text).
+    AskUser { questions: serde_json::Value },
+    /// Ask the user to review a plan or decision and block until they return a
+    /// verdict (approve / deny / suggest) with an optional note. Rendered
+    /// through the existing plan-approval card. `options` is reserved for a
+    /// future custom-verdict set; `None` means the default three verdicts.
+    RequestReview {
+        summary: String,
+        detail: Option<String>,
+        options: Option<serde_json::Value>,
+    },
+    /// Present a finished-work conclusion to the user. Persisted to the
+    /// transcript (so it survives reload/export) and surfaced as a conclusion
+    /// card. Non-blocking — returns as soon as the row is written.
+    PresentConclusion {
+        title: Option<String>,
+        summary: String,
+        artifacts: Option<Vec<String>>,
+    },
     /// Forward a Claude Code hook payload to the parent UI. Tool hooks fired
     /// inside subagents include `agent_id`, which lets the frontend attach the
     /// nested tool call to the parent Agent activity.
@@ -266,6 +290,87 @@ mod tests {
                 assert_eq!(caption.as_deref(), Some("look"));
             }
             _ => panic!("expected attachment payload"),
+        }
+    }
+
+    #[test]
+    fn bridge_ask_user_round_trips() {
+        let req = BridgeRequest {
+            token: "abc".into(),
+            payload: BridgePayload::AskUser {
+                questions: json!([{
+                    "question": "Ship it?",
+                    "header": "Deploy",
+                    "options": [{"label": "Yes", "description": "go"}],
+                    "multiSelect": false
+                }]),
+            },
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(
+            s.contains("\"kind\":\"ask_user\""),
+            "tag should be snake_case: {s}"
+        );
+        let back: BridgeRequest = serde_json::from_str(&s).unwrap();
+        match back.payload {
+            BridgePayload::AskUser { questions } => {
+                assert_eq!(questions[0]["question"], "Ship it?");
+            }
+            _ => panic!("expected ask_user payload"),
+        }
+    }
+
+    #[test]
+    fn bridge_request_review_round_trips() {
+        let req = BridgeRequest {
+            token: "abc".into(),
+            payload: BridgePayload::RequestReview {
+                summary: "Refactor the auth module".into(),
+                detail: Some("Splits the god-file into three".into()),
+                options: None,
+            },
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"kind\":\"request_review\""), "{s}");
+        let back: BridgeRequest = serde_json::from_str(&s).unwrap();
+        match back.payload {
+            BridgePayload::RequestReview {
+                summary,
+                detail,
+                options,
+            } => {
+                assert_eq!(summary, "Refactor the auth module");
+                assert_eq!(detail.as_deref(), Some("Splits the god-file into three"));
+                assert!(options.is_none());
+            }
+            _ => panic!("expected request_review payload"),
+        }
+    }
+
+    #[test]
+    fn bridge_present_conclusion_round_trips() {
+        let req = BridgeRequest {
+            token: "abc".into(),
+            payload: BridgePayload::PresentConclusion {
+                title: Some("Done".into()),
+                summary: "Migrated 12 call sites and added tests.".into(),
+                artifacts: Some(vec!["/tmp/report.md".into()]),
+            },
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"kind\":\"present_conclusion\""), "{s}");
+        let back: BridgeRequest = serde_json::from_str(&s).unwrap();
+        match back.payload {
+            BridgePayload::PresentConclusion {
+                title,
+                summary,
+                artifacts,
+            } => {
+                assert_eq!(title.as_deref(), Some("Done"));
+                assert!(summary.contains("Migrated"));
+                assert_eq!(artifacts.unwrap().len(), 1);
+            }
+            _ => panic!("expected present_conclusion payload"),
         }
     }
 

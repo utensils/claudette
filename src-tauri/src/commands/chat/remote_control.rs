@@ -467,13 +467,17 @@ async fn ensure_persistent_session_for_remote_control(
             .map_err(|e| e.to_string())?
     };
     let mcp_config = claudette::mcp::cli_config_from_rows(&db_rows);
-    let (send_to_user_enabled, team_agent_session_tabs_enabled) = {
+    let (send_to_user_enabled, interaction_enabled, team_agent_session_tabs_enabled) = {
         let db = Database::open(db_path).map_err(|e| e.to_string())?;
         (
             claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user"),
+            claudette::agent_mcp::claudette_mcp_enabled(&db),
             super::send::team_agent_session_tabs_enabled(&db),
         )
     };
+    // send_to_user (default on) + the experimental interaction tools share one
+    // MCP server; inject it when either is enabled (nudges stay independent).
+    let claudette_server_enabled = send_to_user_enabled || interaction_enabled;
     let instructions = {
         let from_config = repo.as_ref().and_then(|r| {
             let path = r.path.clone();
@@ -484,14 +488,15 @@ async fn ensure_persistent_session_for_remote_control(
         });
         from_config.or_else(|| repo.as_ref().and_then(|r| r.custom_instructions.clone()))
     };
-    let nudge = send_to_user_enabled.then_some(claudette::agent_mcp::SYSTEM_PROMPT_NUDGE);
+    let nudge = claudette::agent_mcp::compose_mcp_nudge(send_to_user_enabled, interaction_enabled);
     // Remote-control sessions always launch through Claude CLI, so the
-    // Claude-Code MCP rule block applies (AskUserQuestion / ExitPlanMode
-    // exist via the Claudette MCP bridge).
+    // Claude-Code MCP rule block applies; it steers to our interaction tools
+    // when the experimental feature is on (else the native AskUserQuestion).
+    let claude_mcp_rules = claudette::agent_mcp::claude_code_mcp_rules(interaction_enabled);
     let custom_instructions = claudette::global_prompt::compose_system_prompt(
         instructions.as_deref(),
-        nudge,
-        Some(claudette::agent_mcp::CLAUDE_CODE_MCP_RULES),
+        nudge.as_deref(),
+        Some(claude_mcp_rules.as_str()),
     );
     let level = launch_options.permission_level.as_deref().unwrap_or("full");
     if !matches!(level, "readonly" | "standard" | "full") {
@@ -573,13 +578,14 @@ async fn ensure_persistent_session_for_remote_control(
         hook_bridge: None,
         extra_claude_flags,
     };
-    let bridge = if send_to_user_enabled {
+    let bridge = if claudette_server_enabled {
         let (bridge, mcp_with_claudette) = start_bridge_and_inject_mcp(
             app,
             &state.db_path,
             &workspace_id,
             &chat_session_id,
             agent_settings.mcp_config.clone(),
+            interaction_enabled,
         )
         .await?;
         agent_settings.mcp_config = mcp_with_claudette;

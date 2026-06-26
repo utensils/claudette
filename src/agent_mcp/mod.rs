@@ -17,18 +17,27 @@ pub mod tools;
 
 use serde::Serialize;
 
-/// A built-in Claudette plugin — a Rust-implemented agent-callable tool
-/// surfaced via the in-process MCP bridge. Registered statically (no
-/// dynamic discovery) so the settings UI has a stable, hand-curated list.
+/// A built-in Claudette plugin — a Rust-implemented agent-callable surface
+/// exposed via the in-process MCP bridge. Registered statically (no dynamic
+/// discovery) so the settings UI has a stable, hand-curated list.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct BuiltinPlugin {
-    /// Stable id, used as the setting key suffix and the MCP tool name.
+    /// Stable id, used as the setting-key suffix, the settings-UI key, and the
+    /// MCP tool name (each builtin plugin maps to one always-available tool).
     pub name: &'static str,
     /// One-line title for the settings UI.
     pub title: &'static str,
     /// Longer description shown alongside the toggle.
     pub description: &'static str,
 }
+
+/// `app_settings` key for the experimental "Claudette MCP" feature, which gates
+/// the agent-initiated interaction tools (`ask_user`, `request_review`,
+/// `present_conclusion`) plus the system-prompt steering toward them. **Off by
+/// default** — only the literal string `"true"` enables it — so the feature can
+/// ship without changing behavior for anyone who hasn't opted in. Lives in the
+/// Experimental settings section (not Plugins).
+pub const CLAUDETTE_MCP_SETTING: &str = "claudette_mcp_enabled";
 
 /// All built-in plugins shipped with Claudette. Add new ones here as the
 /// agent-tool surface grows.
@@ -43,6 +52,14 @@ pub const BUILTIN_PLUGINS: &[BuiltinPlugin] = &[BuiltinPlugin {
                   preview. Disable to remove the tool and stop the system prompt from \
                   nudging the agent to use it.",
 }];
+
+/// Whether the experimental "Claudette MCP" feature is enabled. **Off by
+/// default**: absent or any value other than `"true"` reads as disabled, so the
+/// agent-interaction tools and their prompt steering stay dark until the user
+/// opts in via Settings → Experimental.
+pub fn claudette_mcp_enabled(db: &crate::db::Database) -> bool {
+    matches!(db.get_app_setting(CLAUDETTE_MCP_SETTING), Ok(Some(v)) if v == "true")
+}
 
 /// Settings key pattern: `builtin_plugin:{name}:enabled`. Absent key = enabled
 /// (the default), the literal string `"false"` = disabled. Mirrors the
@@ -90,17 +107,82 @@ Claudette to wake this chat later with a prompt. Use the cron tools for \
 recurring routines. Use `Monitor` to subscribe to future output from a \
 background Bash task instead of polling.";
 
-/// Claude-CLI-only rules that reference MCP tools shipped by the Claude
-/// Code runtime (`AskUserQuestion`, `ExitPlanMode`). These tools do not
-/// exist in the Pi SDK or the Codex app-server harnesses, so the rules
-/// only get appended for Claude CLI sessions — otherwise the model is
-/// told to use tools it doesn't have, which is both confusing for the
-/// model and a small step in the wrong direction for accuracy.
-pub const CLAUDE_CODE_MCP_RULES: &str = "\
-## Rules\n\
-\n\
-- Whenever you have a question for the user — no matter how minor — you MUST use the `AskUserQuestion` tool. No exceptions: do not ask questions in plain text output.\n\
-- Before complaining about a permissions error or denied tool call, check whether you are in plan mode. If you are in plan mode, you must exit plan mode (via `ExitPlanMode`) before retrying — many tools are intentionally blocked while planning.";
+/// System-prompt nudge for the interactive-prompt tools. Kept separate from
+/// [`SYSTEM_PROMPT_NUDGE`] so each feature's toggle gates only its own
+/// guidance — disabling Agent Attachments must not strip the interaction
+/// guidance, and vice versa.
+///
+/// Deliberately reiterates the mandate that [`claude_code_mcp_rules`] also
+/// states: the model strongly defaults to its native `AskUserQuestion`, so the
+/// steering toward our look-alike `mcp__claudette__ask_user` has to be repeated
+/// and explicit to win.
+pub const INTERACTION_PROMPT_NUDGE: &str = "\
+Interactive user prompts (REQUIRED tools): this Claudette workspace exposes \
+the MCP tools `mcp__claudette__ask_user`, `mcp__claudette__request_review`, \
+and `mcp__claudette__present_conclusion` (server `claudette`). These are the \
+required way to interact with the user in Claudette — use them in preference \
+to plain chat text and in preference to any similarly-named built-in tool. \
+- When you need the user to answer a question or choose between options, you \
+MUST call `mcp__claudette__ask_user` (NOT the native `AskUserQuestion`) and \
+wait for the answer; it renders interactive options and blocks until they \
+respond. \
+- Before acting on a plan or a consequential, hard-to-reverse decision, you \
+MUST call `mcp__claudette__request_review` and wait for the user's verdict \
+(approve / deny / suggest). \
+- When you finish a unit of work, call `mcp__claudette__present_conclusion` \
+with a concise summary of what you did — it is recorded in the transcript and \
+shown to the user as a conclusion card. \
+`ask_user` and `request_review` block on the user, so only call them when you \
+genuinely need input — do not call them to narrate progress.";
+
+/// Build the combined system-prompt nudge for the Claudette MCP tools. The
+/// attachment section is gated on the `send_to_user` builtin toggle and the
+/// interaction section on the experimental `claudette_mcp_enabled` flag, so each
+/// is steered only when actually available. Returns `None` when neither is on.
+pub fn compose_mcp_nudge(
+    send_to_user_enabled: bool,
+    agent_interaction_enabled: bool,
+) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    if send_to_user_enabled {
+        parts.push(SYSTEM_PROMPT_NUDGE);
+    }
+    if agent_interaction_enabled {
+        parts.push(INTERACTION_PROMPT_NUDGE);
+    }
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+/// Claude-CLI-only prompt rules, appended for Claude Code sessions only (Pi /
+/// Codex pass `None` — they don't expose these tools, and pointing a qwen / GPT
+/// model at tools that aren't registered confuses its capability self-model).
+///
+/// The question / decision mandate is gated on `agent_interaction_enabled`
+/// (sourced from the experimental [`CLAUDETTE_MCP_SETTING`], **off by default**):
+/// - **enabled** (opt-in): the model is told to use *our* tools
+///   (`mcp__claudette__ask_user` / `request_review` / `present_conclusion`) and
+///   explicitly NOT the look-alike native `AskUserQuestion`. The model defaults
+///   hard to its native tool, so we both amend the old native mandate and state
+///   the new one imperatively here (and again in [`INTERACTION_PROMPT_NUDGE`]).
+/// - **disabled** (default): falls back to the native `AskUserQuestion` mandate
+///   so the model still asks via a tool rather than plain text — i.e. exactly
+///   the pre-feature behavior.
+///
+/// The plan-mode rule is always present: `ExitPlanMode` is the real mechanism
+/// for leaving the CLI's `--permission-mode plan`, independent of (and not
+/// replaced by) our `request_review` tool.
+pub fn claude_code_mcp_rules(agent_interaction_enabled: bool) -> String {
+    let interaction_rules = if agent_interaction_enabled {
+        "- Whenever you need the user to answer a question or choose between options — no matter how minor — you MUST call the `mcp__claudette__ask_user` tool and wait for the answer. Do NOT ask in plain text, and do NOT use the native `AskUserQuestion` tool — `mcp__claudette__ask_user` is the required path.\n\
+- Before acting on a plan or any consequential, hard-to-reverse decision, you MUST call `mcp__claudette__request_review` and wait for the user's verdict (approve / deny / suggest).\n\
+- When you finish a unit of work, call `mcp__claudette__present_conclusion` with a concise summary so it is recorded for the user."
+    } else {
+        "- Whenever you have a question for the user — no matter how minor — you MUST use the `AskUserQuestion` tool. No exceptions: do not ask questions in plain text output."
+    };
+    format!(
+        "## Rules\n\n{interaction_rules}\n- Before complaining about a permissions error or denied tool call, check whether you are in plan mode. If you are in plan mode, you must exit plan mode (via `ExitPlanMode`) before retrying — many tools are intentionally blocked while planning."
+    )
+}
 
 #[cfg(test)]
 mod builtin_tests {
@@ -139,18 +221,50 @@ mod builtin_tests {
 
     #[test]
     fn registered_plugin_has_user_facing_name() {
-        // The settings UI shows `title`, not `name`. Make sure the title is
-        // human-readable (no underscores, capitalized).
-        let p = BUILTIN_PLUGINS
-            .iter()
-            .find(|p| p.name == "send_to_user")
-            .expect("send_to_user must be registered");
-        assert!(
-            !p.title.contains('_'),
-            "title should be human-readable: {}",
-            p.title
-        );
-        assert!(p.title.starts_with(|c: char| c.is_uppercase()));
-        assert!(!p.description.is_empty());
+        // The settings UI shows `title`, not `name`. Make sure every entry's
+        // title is human-readable (no underscores, capitalized).
+        for p in BUILTIN_PLUGINS {
+            assert!(
+                !p.title.contains('_'),
+                "title should be human-readable: {}",
+                p.title
+            );
+            assert!(p.title.starts_with(|c: char| c.is_uppercase()));
+            assert!(!p.description.is_empty());
+        }
+        assert!(BUILTIN_PLUGINS.iter().any(|p| p.name == "send_to_user"));
+    }
+
+    #[test]
+    fn claudette_mcp_experimental_flag_defaults_off() {
+        let db = Database::open_in_memory().unwrap();
+        // Absent setting → feature is OFF (the whole point of the experimental gate).
+        assert!(!claudette_mcp_enabled(&db));
+        // Only the literal "true" turns it on.
+        db.set_app_setting(CLAUDETTE_MCP_SETTING, "false").unwrap();
+        assert!(!claudette_mcp_enabled(&db));
+        db.set_app_setting(CLAUDETTE_MCP_SETTING, "true").unwrap();
+        assert!(claudette_mcp_enabled(&db));
+    }
+
+    #[test]
+    fn compose_mcp_nudge_gates_each_section_independently() {
+        // Both on → both sections present.
+        let both = compose_mcp_nudge(true, true).expect("both enabled");
+        assert!(both.contains("send_to_user"));
+        assert!(both.contains("ask_user"));
+
+        // Only interaction → no attachment nudge.
+        let only_interaction = compose_mcp_nudge(false, true).expect("interaction enabled");
+        assert!(only_interaction.contains("ask_user"));
+        assert!(!only_interaction.contains("Inline file delivery"));
+
+        // Only attachments → no interaction nudge.
+        let only_attach = compose_mcp_nudge(true, false).expect("attachments enabled");
+        assert!(only_attach.contains("send_to_user"));
+        assert!(!only_attach.contains("Interactive user prompts"));
+
+        // Neither → no nudge at all.
+        assert!(compose_mcp_nudge(false, false).is_none());
     }
 }

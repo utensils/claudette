@@ -1,0 +1,103 @@
+/* Conclusion card — shares visual language with PlanApprovalCard, but is
+   purely presentational: the markdown body is always expanded (no
+   click-to-reveal), and there are no permissions or actions.
+
+   Prose styling is intentionally NOT re-cloned here: <MessageMarkdown> ships
+   its own typography (the `.body` wrapper in MessageMarkdown.module.css), so
+   the conclusion renders identically to assistant messages. */
+.card {
+  background: var(--chat-system-bg);
+  border: 1px solid var(--accent-bg-strong);
+  border-left: 3px solid var(--accent-primary);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  padding: var(--space-4) var(--space-5);
+  margin: var(--space-3) 0;
+  box-shadow: var(--shadow-md);
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-primary);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Completion cue — distinguishes a conclusion at a glance from the plan /
+   question cards, which carry no leading glyph (or a "?"). */
+.label::before {
+  content: "\2713"; /* ✓ */
+  font-size: 13px;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+  margin-bottom: 10px;
+}
+
+.content {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.artifacts {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider);
+}
+
+.artifactsLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 6px;
+}
+
+.artifactsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.artifactItem {
+  margin: 0;
+  max-width: 100%;
+}
+
+.artifactLink {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  color: var(--accent-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.artifactLink:hover {
+  border-color: rgba(var(--accent-primary-rgb), 0.3);
+  background: rgba(var(--accent-primary-rgb), 0.05);
+}

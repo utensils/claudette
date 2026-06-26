@@ -82,6 +82,10 @@ pub async fn stop_agent(
     if let Some((ref ps, drained)) = to_deny_stop {
         deny_drained_permissions(drained, ps, "Session stopped by user.").await;
     }
+    // MCP-origin interactive prompts (ask_user / request_review) reply via a
+    // oneshot, not the CLI — drop their channels so a suspended tool call gets a
+    // cancelled result instead of hanging after the user stops the session.
+    state.drain_mcp_replies_for_session(&chat_session_id).await;
     if let Some(ps) = interrupt_session {
         if let Err(err) = ps.interrupt_turn().await {
             tracing::warn!(
@@ -163,6 +167,8 @@ pub async fn reset_agent_session(
     if let Some((ref ps, drained)) = to_deny_reset {
         deny_drained_permissions(drained, ps, "Session reset.").await;
     }
+    // Cancel any in-flight MCP-origin prompts for this session (see stop_agent).
+    state.drain_mcp_replies_for_session(&chat_session_id).await;
     if let Some(pid) = pid_to_kill {
         let _ = agent::stop_agent(pid).await;
     }
@@ -380,6 +386,8 @@ pub async fn prepare_cross_harness_migration(
     if let Some((ps, drained)) = snapshot.drained_permissions {
         deny_drained_permissions(drained, &ps, "Session migrated to a different runtime.").await;
     }
+    // Cancel any in-flight MCP-origin prompts for this session (see stop_agent).
+    state.drain_mcp_replies_for_session(&chat_session_id).await;
     if let Some(pid) = snapshot.pid_to_kill {
         let _ = agent::stop_agent(pid).await;
     }

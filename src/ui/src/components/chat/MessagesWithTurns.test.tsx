@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAppStore, type CompletedTurn, type ToolActivity } from "../../stores/useAppStore";
-import type { ChatMessage } from "../../types/chat";
+import type { AgentConclusion, ChatMessage } from "../../types/chat";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 
 const serviceMocks = vi.hoisted(() => ({
@@ -778,5 +778,69 @@ describe("MessagesWithTurns edit summaries", () => {
     expect(container.textContent).toContain("1 file changed");
     expect(container.textContent).toContain("src/app.ts");
     expect(container.textContent).not.toContain("dirty-from-other-session.ts");
+  });
+});
+
+describe("MessagesWithTurns conclusion gating", () => {
+  function conclusion(summary: string): AgentConclusion {
+    return {
+      id: "conclusion-1",
+      chat_session_id: SESSION_ID,
+      workspace_id: WORKSPACE_ID,
+      // Anchored to the user message that triggered the turn; routes to the
+      // turn's assistant message for rendering (see conclusionsByMessage).
+      message_id: "user-1",
+      title: null,
+      summary,
+      artifacts: [],
+      created_at: "2026-05-08T00:00:00.000Z",
+    };
+  }
+
+  const messages = [
+    message("user-1", "User", "Wrap it up"),
+    message("assistant-1", "Assistant", "On it."),
+  ];
+
+  it("renders conclusion cards when the Claudette MCP flag is on", async () => {
+    useAppStore.setState({
+      claudetteMcpEnabled: true,
+      chatConclusions: { [SESSION_ID]: [conclusion("Shipped the migration.")] },
+    });
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    expect(container.textContent).toContain("Shipped the migration.");
+  });
+
+  it("hides already-loaded conclusion cards when the flag is off", async () => {
+    // Mirrors flipping the experimental flag off mid-session: the conclusions
+    // are still in the store, but the feature must stay fully dark.
+    useAppStore.setState({
+      claudetteMcpEnabled: false,
+      chatConclusions: { [SESSION_ID]: [conclusion("Shipped the migration.")] },
+    });
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    expect(container.textContent).not.toContain("Shipped the migration.");
   });
 });

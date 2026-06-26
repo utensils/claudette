@@ -72,6 +72,30 @@ export interface AgentAttachmentEvent {
   attachment: ChatAttachment & { caption?: string | null };
 }
 
+/** A finished-work conclusion the agent presented via the
+ *  `mcp__claudette__present_conclusion` MCP tool. Persisted in the
+ *  `agent_conclusions` table and rendered inline as a conclusion card.
+ *
+ *  Snake_case to match the rest of the chat domain (`ChatMessage`,
+ *  `ChatAttachment`). `message_id` is the user message that triggered the turn
+ *  (the FK anchor); like agent attachments it's re-routed to that turn's
+ *  assistant message at render time. */
+export interface AgentConclusion {
+  id: string;
+  chat_session_id: string;
+  workspace_id: string;
+  message_id: string | null;
+  title: string | null;
+  summary: string;
+  artifacts: string[];
+  created_at: string;
+}
+
+/** Payload of the `agent-conclusion-created` Tauri event — emitted whenever the
+ *  agent calls `mcp__claudette__present_conclusion`. The payload IS the
+ *  `AgentConclusion` itself (the Rust bridge emits the serialized row). */
+export type AgentConclusionEvent = AgentConclusion;
+
 /** Payload shape for sending attachment data to the backend. */
 export interface AttachmentInput {
   filename: string;

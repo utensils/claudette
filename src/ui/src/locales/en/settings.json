@@ -480,6 +480,9 @@
   "experimental_claude_code_usage": "Claude Code Usage",
   "experimental_claude_code_usage_desc": "Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the chat composer's usage meter. Requires a standard Pro or Max login — does not apply to API-key sessions or to Codex / OpenAI / OpenRouter / Pi backends, which already show local-aggregate token totals.",
   "experimental_claude_code_usage_aria": "Claude Code Usage",
+  "experimental_claudette_mcp": "Claudette MCP",
+  "experimental_claudette_mcp_desc": "Let agents interact with you through Claudette's own UI: ask questions, request approval / feedback on a plan or decision (approve, deny, or suggest changes), and present a conclusion of completed work — each shown as an interactive card in chat. Works across agent backends. Experimental and off by default while the experience is polished.",
+  "experimental_claudette_mcp_aria": "Claudette MCP",
   "usage_indicator_disabled_tooltip": "Claude Code Usage is off — click to enable",
 
   "plugins_title": "Plugins",

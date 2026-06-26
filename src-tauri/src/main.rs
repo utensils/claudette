@@ -1090,6 +1090,7 @@ fn main() {
             commands::chat::attachments::load_attachments_for_session,
             commands::chat::attachments::load_attachment_data,
             commands::chat::attachments::read_file_as_base64,
+            commands::chat::conclusions::load_agent_conclusions_for_session,
             commands::chat::lifecycle::stop_agent,
             commands::chat::lifecycle::reset_agent_session,
             commands::chat::lifecycle::prepare_cross_harness_migration,

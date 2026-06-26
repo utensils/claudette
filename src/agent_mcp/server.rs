@@ -25,18 +25,27 @@ use crate::agent_mcp::protocol::{
     BridgePayload, BridgeRequest, BridgeResponse, JsonRpcRequest, JsonRpcResponse,
     MCP_PROTOCOL_VERSION, error_codes,
 };
+use crate::agent_mcp::tools::interaction;
 use crate::agent_mcp::tools::send_to_user::{
     ALLOWED_DOCUMENT_TYPES, ALLOWED_IMAGE_TYPES, allowed_text_types,
 };
 
 pub const ENV_SOCKET_ADDR: &str = "CLAUDETTE_MCP_SOCKET";
 pub const ENV_TOKEN: &str = "CLAUDETTE_MCP_TOKEN";
+/// Set to `"true"` by the parent when the experimental "Claudette MCP" feature
+/// is on. The grandchild has no DB access, so this env var is how it learns
+/// whether to advertise + accept the interaction tools (`ask_user`,
+/// `request_review`, `present_conclusion`). Absent / any other value = off.
+pub const ENV_INTERACTION_ENABLED: &str = "CLAUDETTE_MCP_INTERACTION";
 pub const SEND_TO_USER_TOOL_NAME: &str = "send_to_user";
 pub const SCHEDULE_WAKEUP_TOOL_NAME: &str = "ScheduleWakeup";
 pub const CRON_CREATE_TOOL_NAME: &str = "CronCreate";
 pub const CRON_LIST_TOOL_NAME: &str = "CronList";
 pub const CRON_DELETE_TOOL_NAME: &str = "CronDelete";
 pub const MONITOR_TOOL_NAME: &str = "Monitor";
+pub const ASK_USER_TOOL_NAME: &str = "ask_user";
+pub const REQUEST_REVIEW_TOOL_NAME: &str = "request_review";
+pub const PRESENT_CONCLUSION_TOOL_NAME: &str = "present_conclusion";
 pub const SERVER_NAME: &str = "claudette";
 
 /// Run the stdio MCP server until stdin EOFs.
@@ -49,10 +58,18 @@ pub async fn run_stdio() -> io::Result<()> {
         .map_err(|_| io::Error::other(format!("{ENV_SOCKET_ADDR} not set")))?;
     let token =
         std::env::var(ENV_TOKEN).map_err(|_| io::Error::other(format!("{ENV_TOKEN} not set")))?;
+    let interaction_enabled = std::env::var(ENV_INTERACTION_ENABLED).as_deref() == Ok("true");
 
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
-    serve(BufReader::new(stdin), &mut stdout, &socket_addr, &token).await
+    serve(
+        BufReader::new(stdin),
+        &mut stdout,
+        &socket_addr,
+        &token,
+        interaction_enabled,
+    )
+    .await
 }
 
 /// Generic server loop, parameterised over the IO so we can unit-test it
@@ -62,6 +79,7 @@ pub async fn serve<R, W>(
     writer: &mut W,
     socket_addr: &str,
     token: &str,
+    interaction_enabled: bool,
 ) -> io::Result<()>
 where
     R: AsyncBufReadExt + Unpin,
@@ -85,7 +103,7 @@ where
                 error_codes::PARSE_ERROR,
                 format!("parse error: {e}"),
             )),
-            Ok(req) => handle_request(req, socket_addr, token).await,
+            Ok(req) => handle_request(req, socket_addr, token, interaction_enabled).await,
         };
 
         if let Some(resp) = response {
@@ -102,14 +120,23 @@ async fn handle_request(
     req: JsonRpcRequest,
     socket_addr: &str,
     token: &str,
+    interaction_enabled: bool,
 ) -> Option<JsonRpcResponse> {
     // Notifications carry no id and expect no response.
     let id = req.id.clone()?;
 
     match req.method.as_str() {
-        "initialize" => Some(JsonRpcResponse::success(id, initialize_result())),
-        "tools/list" => Some(JsonRpcResponse::success(id, tools_list_result())),
-        "tools/call" => Some(handle_tools_call(id, req.params, socket_addr, token).await),
+        "initialize" => Some(JsonRpcResponse::success(
+            id,
+            initialize_result(interaction_enabled),
+        )),
+        "tools/list" => Some(JsonRpcResponse::success(
+            id,
+            tools_list_result(interaction_enabled),
+        )),
+        "tools/call" => {
+            Some(handle_tools_call(id, req.params, socket_addr, token, interaction_enabled).await)
+        }
         _ => Some(JsonRpcResponse::error(
             id,
             error_codes::METHOD_NOT_FOUND,
@@ -118,12 +145,35 @@ async fn handle_request(
     }
 }
 
-fn initialize_result() -> Value {
+fn initialize_result(interaction_enabled: bool) -> Value {
     // The `instructions` field is the spec-blessed channel for telling the
     // host (and through it, the model) when this server is relevant. It
     // complements the per-tool description rather than duplicating it: the
     // tool description covers *how* to call `send_to_user`, this paragraph
     // covers *when* the whole server is the right tool to reach for.
+    let mut instructions = "The Claudette MCP server lets the agent deliver a \
+            file inline in the user's chat surface and gives agents native \
+            scheduling tools. Use `send_to_user` for deliverable artifacts. \
+            Do NOT use it for arbitrary binaries, archives, or oversized \
+            files; for those, tell the user the absolute path on disk. \
+            Use `ScheduleWakeup` for one-shot delayed re-entry, `CronCreate`, \
+            `CronList`, and `CronDelete` for recurring routines, and `Monitor` \
+            to subscribe to background task output without polling."
+        .to_string();
+    // Only advertise the interaction tools when the experimental feature is on
+    // — otherwise they aren't in `tools/list` and steering toward them would
+    // point the model at tools it can't call.
+    if interaction_enabled {
+        instructions.push_str(
+            " For interaction with the user, prefer these Claudette-native tools \
+            over plain chat text (and over harness-specific controls when \
+            present): `ask_user` to ask one or more questions and wait for the \
+            answer, `request_review` to have the user approve / deny / suggest \
+            changes to a plan or decision and wait for their verdict, and \
+            `present_conclusion` to deliver a final summary of completed work \
+            (it is recorded in the transcript).",
+        );
+    }
     json!({
         "protocolVersion": MCP_PROTOCOL_VERSION,
         "capabilities": {
@@ -133,18 +183,11 @@ fn initialize_result() -> Value {
             "name": SERVER_NAME,
             "version": env!("CARGO_PKG_VERSION"),
         },
-        "instructions": "The Claudette MCP server lets the agent deliver a \
-            file inline in the user's chat surface and gives agents native \
-            scheduling tools. Use `send_to_user` for deliverable artifacts. \
-            Do NOT use it for arbitrary binaries, archives, or oversized \
-            files; for those, tell the user the absolute path on disk. \
-            Use `ScheduleWakeup` for one-shot delayed re-entry, `CronCreate`, \
-            `CronList`, and `CronDelete` for recurring routines, and `Monitor` \
-            to subscribe to background task output without polling."
+        "instructions": instructions,
     })
 }
 
-fn tools_list_result() -> Value {
+fn tools_list_result(interaction_enabled: bool) -> Value {
     let allowed_types: Vec<&str> = ALLOWED_IMAGE_TYPES
         .iter()
         .chain(ALLOWED_DOCUMENT_TYPES.iter())
@@ -152,7 +195,7 @@ fn tools_list_result() -> Value {
         .chain(allowed_text_types())
         .collect();
 
-    json!({
+    let mut result = json!({
         "tools": [{
             "name": SEND_TO_USER_TOOL_NAME,
             "description": "Deliver a file to the user inline in the Claudette chat surface. \
@@ -241,8 +284,99 @@ fn tools_list_result() -> Value {
                 },
                 "required": ["task_id"]
             }
+        }, {
+            "name": ASK_USER_TOOL_NAME,
+            "description": "REQUIRED way to ask the user a question in Claudette. Ask one or more \
+                           questions and BLOCK until they answer. Use this instead of asking in \
+                           plain chat text, and instead of any native/built-in question tool \
+                           (e.g. AskUserQuestion) — `mcp__claudette__ask_user` is the correct \
+                           tool here. Renders as interactive option buttons in the Claudette \
+                           chat surface (the user can also type a freeform answer). Returns the \
+                           user's answers keyed by question text.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "description": "1–4 questions to ask.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": { "type": "string", "description": "The full question text." },
+                                "header": { "type": "string", "description": "Short label/chip for the question (optional)." },
+                                "multiSelect": { "type": "boolean", "description": "Allow selecting multiple options (optional)." },
+                                "options": {
+                                    "type": "array",
+                                    "description": "Up to 8 choices (optional). An 'Other'/freeform path always exists.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": { "type": "string", "description": "The choice the user sees." },
+                                            "description": { "type": "string", "description": "Optional explanation of the choice." }
+                                        },
+                                        "required": ["label"]
+                                    }
+                                }
+                            },
+                            "required": ["question"]
+                        }
+                    }
+                },
+                "required": ["questions"]
+            }
+        }, {
+            "name": REQUEST_REVIEW_TOOL_NAME,
+            "description": "REQUIRED way to get the user's sign-off on a plan or decision in \
+                           Claudette. Ask the user to review and BLOCK until they respond with a \
+                           verdict: approve, deny, or suggest changes (with an optional note). \
+                           Call `mcp__claudette__request_review` (not plain chat) before acting \
+                           on a plan or any consequential, hard-to-reverse decision. Returns the \
+                           verdict and any note the user left.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "summary": { "type": "string", "description": "The plan or decision to review, as concise markdown." },
+                    "detail": { "type": "string", "description": "Optional additional detail / rationale shown below the summary." }
+                },
+                "required": ["summary"]
+            }
+        }, {
+            "name": PRESENT_CONCLUSION_TOOL_NAME,
+            "description": "Call `mcp__claudette__present_conclusion` when you finish a unit of \
+                           work to present a final summary. Recorded in the transcript and \
+                           surfaced to the user as a conclusion card. Does NOT block — use it as \
+                           you wrap up, not to ask a question. List any produced files in \
+                           `artifacts` (deliver them separately with send_to_user if the user \
+                           should see them inline).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "summary": { "type": "string", "description": "Markdown summary of what was done." },
+                    "title": { "type": "string", "description": "Optional short headline for the conclusion card." },
+                    "artifacts": {
+                        "type": "array",
+                        "description": "Optional list of file paths produced by the work.",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["summary"]
+            }
         }]
-    })
+    });
+
+    // Hide the interaction tools entirely when the experimental "Claudette MCP"
+    // feature is off, so the model never sees — or tries to call — ask_user /
+    // request_review / present_conclusion. Mirrors the env gate the grandchild
+    // was launched with; the base attachment + scheduling tools always remain.
+    if !interaction_enabled && let Some(tools) = result["tools"].as_array_mut() {
+        tools.retain(|t| {
+            !matches!(
+                t["name"].as_str(),
+                Some(ASK_USER_TOOL_NAME | REQUEST_REVIEW_TOOL_NAME | PRESENT_CONCLUSION_TOOL_NAME)
+            )
+        });
+    }
+    result
 }
 
 async fn handle_tools_call(
@@ -250,6 +384,7 @@ async fn handle_tools_call(
     params: Option<Value>,
     socket_addr: &str,
     token: &str,
+    interaction_enabled: bool,
 ) -> JsonRpcResponse {
     let params = match params {
         Some(p) => p,
@@ -264,6 +399,20 @@ async fn handle_tools_call(
 
     let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+    // Defense in depth: the interaction tools aren't advertised when the
+    // experimental feature is off, but a stale/cached agent could still call
+    // one. Reject with method-not-found so it's treated as a non-existent tool.
+    let is_interaction_tool = matches!(
+        name,
+        ASK_USER_TOOL_NAME | REQUEST_REVIEW_TOOL_NAME | PRESENT_CONCLUSION_TOOL_NAME
+    );
+    if is_interaction_tool && !interaction_enabled {
+        return JsonRpcResponse::error(
+            id,
+            error_codes::METHOD_NOT_FOUND,
+            format!("no tool named {name:?}"),
+        );
+    }
     match name {
         SEND_TO_USER_TOOL_NAME => handle_send_to_user_tool(id, args, socket_addr, token).await,
         SCHEDULE_WAKEUP_TOOL_NAME => {
@@ -275,6 +424,11 @@ async fn handle_tools_call(
         }
         CRON_DELETE_TOOL_NAME => handle_cron_delete_tool(id, args, socket_addr, token).await,
         MONITOR_TOOL_NAME => handle_monitor_tool(id, args, socket_addr, token).await,
+        ASK_USER_TOOL_NAME => handle_ask_user_tool(id, args, socket_addr, token).await,
+        REQUEST_REVIEW_TOOL_NAME => handle_request_review_tool(id, args, socket_addr, token).await,
+        PRESENT_CONCLUSION_TOOL_NAME => {
+            handle_present_conclusion_tool(id, args, socket_addr, token).await
+        }
         _ => JsonRpcResponse::error(
             id,
             error_codes::METHOD_NOT_FOUND,
@@ -443,6 +597,88 @@ async fn handle_monitor_tool(
     .await
 }
 
+async fn handle_ask_user_tool(
+    id: Value,
+    args: Value,
+    socket_addr: &str,
+    token: &str,
+) -> JsonRpcResponse {
+    let questions = match args.get("questions") {
+        Some(q) => q.clone(),
+        None => return generic_tool_error_result(id, "questions is required"),
+    };
+    let questions = match interaction::validate_questions(&questions) {
+        Ok(q) => q,
+        Err(e) => return generic_tool_error_result(id, &e),
+    };
+    handle_simple_bridge_tool(id, BridgePayload::AskUser { questions }, socket_addr, token).await
+}
+
+async fn handle_request_review_tool(
+    id: Value,
+    args: Value,
+    socket_addr: &str,
+    token: &str,
+) -> JsonRpcResponse {
+    let summary = match args.get("summary").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return generic_tool_error_result(id, "summary is required"),
+    };
+    if let Err(e) = interaction::validate_summary(&summary, "summary") {
+        return generic_tool_error_result(id, &e);
+    }
+    let detail = args
+        .get("detail")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    handle_simple_bridge_tool(
+        id,
+        BridgePayload::RequestReview {
+            summary,
+            detail,
+            options: None,
+        },
+        socket_addr,
+        token,
+    )
+    .await
+}
+
+async fn handle_present_conclusion_tool(
+    id: Value,
+    args: Value,
+    socket_addr: &str,
+    token: &str,
+) -> JsonRpcResponse {
+    let summary = match args.get("summary").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return generic_tool_error_result(id, "summary is required"),
+    };
+    if let Err(e) = interaction::validate_summary(&summary, "summary") {
+        return generic_tool_error_result(id, &e);
+    }
+    let title = args
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let artifacts = args.get("artifacts").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+            .collect::<Vec<_>>()
+    });
+    handle_simple_bridge_tool(
+        id,
+        BridgePayload::PresentConclusion {
+            title,
+            summary,
+            artifacts,
+        },
+        socket_addr,
+        token,
+    )
+    .await
+}
+
 async fn handle_simple_bridge_tool(
     id: Value,
     payload: BridgePayload,
@@ -462,9 +698,9 @@ async fn handle_simple_bridge_tool(
         }) => generic_tool_success_result(id, message.unwrap_or_else(|| "ok".to_string()), data),
         Ok(BridgeResponse {
             error: Some(msg), ..
-        }) => tool_error_result(id, &msg),
-        Ok(_) => tool_error_result(id, "bridge returned malformed response"),
-        Err(e) => tool_error_result(id, &format!("bridge IPC failed: {e}")),
+        }) => generic_tool_error_result(id, &msg),
+        Ok(_) => generic_tool_error_result(id, "bridge returned malformed response"),
+        Err(e) => generic_tool_error_result(id, &format!("bridge IPC failed: {e}")),
     }
 }
 
@@ -496,6 +732,19 @@ fn tool_error_result(id: Value, message: &str) -> JsonRpcResponse {
         id,
         json!({
             "content": [{ "type": "text", "text": format!("send_to_user failed: {message}") }],
+            "isError": true,
+        }),
+    )
+}
+
+/// Tool-result error without the `send_to_user`-specific prefix. Used by every
+/// tool that routes through [`handle_simple_bridge_tool`] (cron, scheduling,
+/// monitor, ask/review/conclude) so the message the model sees isn't mislabeled.
+fn generic_tool_error_result(id: Value, message: &str) -> JsonRpcResponse {
+    JsonRpcResponse::success(
+        id,
+        json!({
+            "content": [{ "type": "text", "text": message }],
             "isError": true,
         }),
     )
@@ -580,7 +829,12 @@ mod tests {
     /// Walk `serve` through a scripted set of input lines, collecting the
     /// JSON responses written back. The bridge connection is unused for
     /// inputs that don't reach `tools/call`.
-    async fn drive_serve(input: &str, socket_addr: &str, token: &str) -> Vec<Value> {
+    async fn drive_serve(
+        input: &str,
+        socket_addr: &str,
+        token: &str,
+        interaction_enabled: bool,
+    ) -> Vec<Value> {
         let (mut client, server) = duplex(64 * 1024);
         let (mut server_out, mut client_out) = duplex(64 * 1024);
 
@@ -595,9 +849,15 @@ mod tests {
         let token = token.to_string();
         let server_task = tokio::spawn(async move {
             let mut reader = BufReader::new(server);
-            super::serve(&mut reader, &mut server_out, &socket_addr, &token)
-                .await
-                .unwrap();
+            super::serve(
+                &mut reader,
+                &mut server_out,
+                &socket_addr,
+                &token,
+                interaction_enabled,
+            )
+            .await
+            .unwrap();
         });
 
         // Read all output.
@@ -622,7 +882,7 @@ mod tests {
             "params": {}
         });
         let input = format!("{req}\n");
-        let resps = drive_serve(&input, "ignored", "ignored").await;
+        let resps = drive_serve(&input, "ignored", "ignored", true).await;
         assert_eq!(resps.len(), 1);
         let r = &resps[0];
         assert_eq!(r["id"], 1);
@@ -655,7 +915,7 @@ mod tests {
             "method": "tools/list",
         });
         let input = format!("{req}\n");
-        let resps = drive_serve(&input, "ignored", "ignored").await;
+        let resps = drive_serve(&input, "ignored", "ignored", true).await;
         let tools = &resps[0]["result"]["tools"];
         assert!(tools.is_array());
         let names: Vec<&str> = tools
@@ -671,6 +931,85 @@ mod tests {
         assert!(names.contains(&SCHEDULE_WAKEUP_TOOL_NAME));
         assert!(names.contains(&CRON_CREATE_TOOL_NAME));
         assert!(names.contains(&MONITOR_TOOL_NAME));
+        assert!(names.contains(&ASK_USER_TOOL_NAME));
+        assert!(names.contains(&REQUEST_REVIEW_TOOL_NAME));
+        assert!(names.contains(&PRESENT_CONCLUSION_TOOL_NAME));
+    }
+
+    #[tokio::test]
+    async fn ask_user_rejects_missing_questions() {
+        // Validation happens in the grandchild before any bridge round trip,
+        // so a malformed call returns an isError result without a socket.
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": { "name": ASK_USER_TOOL_NAME, "arguments": {} }
+        });
+        let input = format!("{req}\n");
+        let resps = drive_serve(&input, "ignored", "ignored", true).await;
+        assert_eq!(resps[0]["result"]["isError"], true);
+        let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("questions is required"), "got: {text}");
+    }
+
+    #[tokio::test]
+    async fn request_review_rejects_empty_summary() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": { "name": REQUEST_REVIEW_TOOL_NAME, "arguments": { "summary": "  " } }
+        });
+        let input = format!("{req}\n");
+        let resps = drive_serve(&input, "ignored", "ignored", true).await;
+        assert_eq!(resps[0]["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn tools_list_hides_interaction_tools_when_disabled() {
+        // The whole point of the experimental gate: with interaction OFF, the
+        // 3 tools must not be advertised, but the base tools stay available.
+        let req = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+        let input = format!("{req}\n");
+        let resps = drive_serve(&input, "ignored", "ignored", false).await;
+        let names: Vec<&str> = resps[0]["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(names.contains(&SEND_TO_USER_TOOL_NAME));
+        assert!(names.contains(&MONITOR_TOOL_NAME));
+        assert!(!names.contains(&ASK_USER_TOOL_NAME), "{names:?}");
+        assert!(!names.contains(&REQUEST_REVIEW_TOOL_NAME), "{names:?}");
+        assert!(!names.contains(&PRESENT_CONCLUSION_TOOL_NAME), "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn interaction_tool_rejected_when_disabled() {
+        // Defense in depth: even if a stale agent calls ask_user with the
+        // feature off, it's treated as a non-existent method.
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": { "name": ASK_USER_TOOL_NAME, "arguments": { "questions": [] } }
+        });
+        let input = format!("{req}\n");
+        let resps = drive_serve(&input, "ignored", "ignored", false).await;
+        assert_eq!(resps[0]["error"]["code"], error_codes::METHOD_NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn initialize_omits_interaction_guidance_when_disabled() {
+        let req = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} });
+        let input = format!("{req}\n");
+        let resps = drive_serve(&input, "ignored", "ignored", false).await;
+        let instructions = resps[0]["result"]["instructions"].as_str().unwrap();
+        // Base guidance present, interaction guidance absent.
+        assert!(instructions.contains("send_to_user"));
+        assert!(!instructions.contains("ask_user"), "got: {instructions}");
     }
 
     #[tokio::test]
@@ -681,7 +1020,7 @@ mod tests {
             "method": "no/such/thing",
         });
         let input = format!("{req}\n");
-        let resps = drive_serve(&input, "ignored", "ignored").await;
+        let resps = drive_serve(&input, "ignored", "ignored", true).await;
         assert_eq!(resps[0]["error"]["code"], error_codes::METHOD_NOT_FOUND);
     }
 
@@ -692,14 +1031,14 @@ mod tests {
             "method": "notifications/initialized",
         });
         let input = format!("{req}\n");
-        let resps = drive_serve(&input, "ignored", "ignored").await;
+        let resps = drive_serve(&input, "ignored", "ignored", true).await;
         assert!(resps.is_empty(), "notifications must not get a response");
     }
 
     #[tokio::test]
     async fn parse_error_returns_jsonrpc_parse_error() {
         let input = "not-json\n";
-        let resps = drive_serve(input, "ignored", "ignored").await;
+        let resps = drive_serve(input, "ignored", "ignored", true).await;
         assert_eq!(resps[0]["error"]["code"], error_codes::PARSE_ERROR);
     }
 
@@ -743,7 +1082,7 @@ mod tests {
             }
         });
         let input = format!("{req}\n");
-        let resps = drive_serve(&input, &handle.socket_addr, &handle.token).await;
+        let resps = drive_serve(&input, &handle.socket_addr, &handle.token, true).await;
         assert_eq!(resps.len(), 1);
         let r = &resps[0];
         assert_eq!(r["id"], 7);
@@ -776,7 +1115,7 @@ mod tests {
             }
         });
         let input = format!("{req}\n");
-        let resps = drive_serve(&input, &handle.socket_addr, "wrong-token").await;
+        let resps = drive_serve(&input, &handle.socket_addr, "wrong-token", true).await;
         let r = &resps[0];
         assert_eq!(r["result"]["isError"], true);
         let text = r["result"]["content"][0]["text"].as_str().unwrap();

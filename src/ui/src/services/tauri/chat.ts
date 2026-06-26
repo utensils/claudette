@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AgentConclusion,
   AttachmentInput,
   ChatAttachment,
   ChatHistoryPage,
@@ -83,6 +84,14 @@ export function loadAttachmentData(
   attachmentId: string,
 ): Promise<string> {
   return invoke("load_attachment_data", { attachmentId });
+}
+
+/** Load every conclusion the agent presented in a session (oldest first),
+ *  persisted via the `present_conclusion` MCP tool. */
+export function loadAgentConclusionsForSession(
+  sessionId: string,
+): Promise<AgentConclusion[]> {
+  return invoke("load_agent_conclusions_for_session", { sessionId });
 }
 
 export function readFileAsBase64(path: string): Promise<ChatAttachment> {

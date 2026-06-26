@@ -1,5 +1,10 @@
 import type { StateCreator } from "zustand";
-import type { ChatMessage, ChatAttachment, ChatPaginationState } from "../../types";
+import type {
+  ChatMessage,
+  ChatAttachment,
+  ChatPaginationState,
+  AgentConclusion,
+} from "../../types";
 import type { StoredAttachment } from "../../types/chat";
 import { debugChat } from "../../utils/chatDebug";
 import type { CompactionEvent } from "../../utils/compactionSentinel";
@@ -100,6 +105,12 @@ export interface ChatSlice {
   chatAttachments: Record<string, ChatAttachment[]>;
   setChatAttachments: (sessionId: string, attachments: ChatAttachment[]) => void;
   addChatAttachments: (sessionId: string, attachments: ChatAttachment[]) => void;
+  /** Agent-presented conclusions (`present_conclusion`), keyed by session id.
+   *  Mirrors `chatAttachments`: loaded on session open + appended live from
+   *  the `agent-conclusion-created` event. */
+  chatConclusions: Record<string, AgentConclusion[]>;
+  setChatConclusions: (sessionId: string, conclusions: AgentConclusion[]) => void;
+  addChatConclusions: (sessionId: string, conclusions: AgentConclusion[]) => void;
   streamingContent: Record<string, string>;
   streamingThinking: Record<string, string>;
   pendingTypewriter: Record<string, { messageId: string; text: string } | null>;
@@ -273,6 +284,26 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         [sessionId]: [...(s.chatAttachments[sessionId] ?? []), ...attachments],
       },
     })),
+  chatConclusions: {},
+  setChatConclusions: (sessionId, conclusions) =>
+    set((s) => ({
+      chatConclusions: { ...s.chatConclusions, [sessionId]: conclusions },
+    })),
+  addChatConclusions: (sessionId, conclusions) =>
+    set((s) => {
+      // Dedupe by id so a live event that races the initial load (or a
+      // double-mount) can't render the same conclusion twice.
+      const existing = s.chatConclusions[sessionId] ?? [];
+      const seen = new Set(existing.map((c) => c.id));
+      const fresh = conclusions.filter((c) => !seen.has(c.id));
+      if (fresh.length === 0) return {};
+      return {
+        chatConclusions: {
+          ...s.chatConclusions,
+          [sessionId]: [...existing, ...fresh],
+        },
+      };
+    }),
   chatPagination: {},
   setChatPagination: (sessionId, state) =>
     set((s) => ({
