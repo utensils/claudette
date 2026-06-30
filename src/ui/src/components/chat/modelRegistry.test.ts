@@ -20,11 +20,12 @@ describe("modelRegistry", () => {
     }
   });
 
-  // `"opus"` is the 1M alias of Opus 4.8 whose id lacks the `[1m]` suffix
-  // other 1M variants use. Keep the explicit `id === "opus"` check — removing
-  // it would silently misclassify the alias as a 200k model.
+  // `"opus"` and `"sonnet"` are bare 1M aliases whose ids lack the `[1m]`
+  // suffix other 1M variants use (opus auto-upgrades to 1M; Sonnet 5 is
+  // natively 1M). Keep the explicit id checks — removing either would
+  // silently misclassify the alias as a 200k model.
   it("1M-context variants report 1_000_000", () => {
-    const oneM = MODELS.filter((m) => m.id === "opus" || m.id.endsWith("[1m]"));
+    const oneM = MODELS.filter((m) => m.id === "opus" || m.id === "sonnet" || m.id.endsWith("[1m]"));
     expect(oneM.length).toBeGreaterThan(0);
     for (const m of oneM) {
       expect(m.contextWindowTokens, m.id).toBe(1_000_000);
@@ -32,7 +33,7 @@ describe("modelRegistry", () => {
   });
 
   it("standard variants report 200_000", () => {
-    const standard = MODELS.filter((m) => m.id !== "opus" && !m.id.endsWith("[1m]"));
+    const standard = MODELS.filter((m) => m.id !== "opus" && m.id !== "sonnet" && !m.id.endsWith("[1m]"));
     expect(standard.length).toBeGreaterThan(0);
     for (const m of standard) {
       expect(m.contextWindowTokens, m.id).toBe(200_000);
@@ -66,12 +67,18 @@ describe("modelRegistry", () => {
       expect(get1mFallback("opus")).toBe("claude-opus-4-8");
       expect(get1mFallback("claude-fable-5[1m]")).toBe("claude-fable-5");
       expect(get1mFallback("claude-opus-4-7[1m]")).toBe("claude-opus-4-7");
-      expect(get1mFallback("claude-sonnet-4-6[1m]")).toBe("sonnet");
+      // Sonnet 4.6 1M now falls back to the pinned 200K id, not the `sonnet`
+      // alias (which moved to Sonnet 5).
+      expect(get1mFallback("claude-sonnet-4-6[1m]")).toBe("claude-sonnet-4-6");
       expect(get1mFallback("claude-opus-4-6[1m]")).toBe("claude-opus-4-6");
     });
 
-    it("returns non-1M models unchanged", () => {
+    it("returns the `sonnet` alias unchanged (Sonnet 5 is natively 1M, no 200K variant)", () => {
       expect(get1mFallback("sonnet")).toBe("sonnet");
+    });
+
+    it("returns non-1M models unchanged", () => {
+      expect(get1mFallback("claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
       expect(get1mFallback("claude-opus-4-7")).toBe("claude-opus-4-7");
       expect(get1mFallback("haiku")).toBe("haiku");
     });
@@ -86,7 +93,12 @@ describe("modelRegistry", () => {
         const fallback = get1mFallback(m.id);
         const target = MODELS.find((t) => t.id === fallback);
         expect(target, `${m.id} → ${fallback} not in MODELS`).toBeDefined();
-        expect(target!.contextWindowTokens, `${m.id} → ${fallback} should be non-1M`).toBeLessThan(1_000_000);
+        // The fallback is either a strictly-smaller (200K) model, or the model
+        // itself when it is natively 1M with no 200K variant (Sonnet 5 — the CLI
+        // caps it to 200K under the same id rather than swapping to another model).
+        if (fallback !== m.id) {
+          expect(target!.contextWindowTokens, `${m.id} → ${fallback} should be non-1M`).toBeLessThan(1_000_000);
+        }
       }
     });
   });

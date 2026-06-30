@@ -130,6 +130,18 @@ const PRICING_TABLE: &[(&str, ModelPricing)] = &[
             completion_per_mtok_usd: 75.00,
         },
     ),
+    // Sonnet 5 standard list price ($3/$15 per Mtok) — same as Sonnet 4.6.
+    // (The launch promo of $2/$10 through 2026-08-31 is intentionally not
+    // encoded; this table is a durable reference, not a billing source — the
+    // Anthropic Claude CLI path reports cost directly and bypasses this table.)
+    // A `[1m]`-suffixed gateway form (`claude-sonnet-5[1m]`) matches via `starts_with`.
+    (
+        "claude-sonnet-5",
+        ModelPricing {
+            prompt_per_mtok_usd: 3.00,
+            completion_per_mtok_usd: 15.00,
+        },
+    ),
     (
         "claude-sonnet-4-6",
         ModelPricing {
@@ -164,6 +176,16 @@ mod tests {
         // The 1M variant shares the bare prefix via `starts_with`.
         let one_m = lookup("claude-fable-5[1m]").expect("1M variant resolves to same pricing");
         assert!((one_m.prompt_per_mtok_usd - 30.00).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn lookup_sonnet_5_priced_same_as_sonnet_4_6() {
+        let p = lookup("claude-sonnet-5").expect("claude-sonnet-5 has pricing");
+        assert!((p.prompt_per_mtok_usd - 3.00).abs() < f64::EPSILON);
+        assert!((p.completion_per_mtok_usd - 15.00).abs() < f64::EPSILON);
+        // The 1M variant shares the bare prefix via `starts_with`.
+        let one_m = lookup("claude-sonnet-5[1m]").expect("1M variant resolves to same pricing");
+        assert!((one_m.prompt_per_mtok_usd - 3.00).abs() < f64::EPSILON);
     }
 
     #[test]

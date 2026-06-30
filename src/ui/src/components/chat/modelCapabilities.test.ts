@@ -64,6 +64,10 @@ describe("isEffortSupported", () => {
     expect(isEffortSupported("sonnet")).toBe(true);
   });
 
+  it("returns true for claude-sonnet-4-6 (demoted but still effort-capable)", () => {
+    expect(isEffortSupported("claude-sonnet-4-6")).toBe(true);
+  });
+
   it("returns true for claude-sonnet-4-6[1m]", () => {
     expect(isEffortSupported("claude-sonnet-4-6[1m]")).toBe(true);
   });
@@ -102,8 +106,13 @@ describe("isXhighEffortAllowed", () => {
     expect(isXhighEffortAllowed("claude-opus-4-6[1m]")).toBe(false);
   });
 
-  it("returns false for sonnet", () => {
-    expect(isXhighEffortAllowed("sonnet")).toBe(false);
+  it("returns true for sonnet (Sonnet 5 gained xhigh)", () => {
+    expect(isXhighEffortAllowed("sonnet")).toBe(true);
+  });
+
+  it("returns false for the demoted Sonnet 4.6 ids (no xhigh)", () => {
+    expect(isXhighEffortAllowed("claude-sonnet-4-6")).toBe(false);
+    expect(isXhighEffortAllowed("claude-sonnet-4-6[1m]")).toBe(false);
   });
 
   it("returns false for haiku", () => {
@@ -138,6 +147,10 @@ describe("isMaxEffortAllowed", () => {
 
   it("returns true for sonnet", () => {
     expect(isMaxEffortAllowed("sonnet")).toBe(true);
+  });
+
+  it("returns true for claude-sonnet-4-6", () => {
+    expect(isMaxEffortAllowed("claude-sonnet-4-6")).toBe(true);
   });
 
   it("returns true for claude-sonnet-4-6[1m]", () => {
