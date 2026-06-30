@@ -30,7 +30,7 @@ import {
  *
  * Session-handling rule, by swap kind:
  *
- * - **Same harness** (e.g. Sonnet 4.6 <-> Opus 4.8 on the Anthropic Claude
+ * - **Same harness** (e.g. Sonnet 5 <-> Opus 4.8 on the Anthropic Claude
  *   Code path, or two Pi-routed Ollama models): preserve
  *   `chat_sessions.session_id` so the next turn resumes the prior
  *   transcript via `claude --resume` (Claude CLI) or its harness-native

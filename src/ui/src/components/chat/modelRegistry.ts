@@ -58,9 +58,11 @@ export function is1mContextModel(modelId: string): boolean {
 
 const NON_1M_FALLBACKS: Record<string, string> = {
   "opus": "claude-opus-4-8",
+  // No `sonnet` entry: Sonnet 5 is natively 1M with no 200K variant to fall
+  // back to, so `get1mFallback("sonnet")` correctly returns "sonnet" unchanged.
   "claude-fable-5[1m]": "claude-fable-5",
   "claude-opus-4-7[1m]": "claude-opus-4-7",
-  "claude-sonnet-4-6[1m]": "sonnet",
+  "claude-sonnet-4-6[1m]": "claude-sonnet-4-6",
   "claude-opus-4-6[1m]": "claude-opus-4-6",
 };
 
@@ -70,16 +72,21 @@ export function get1mFallback(modelId: string): string {
 
 export const MODELS: readonly Model[] = [
   // 1M context billing per Anthropic's Claude Code docs (Model configuration → Extended context):
-  //   Max/Team/Enterprise → Opus 1M included with subscription; Sonnet 1M is extra usage.
-  //   Pro                → both Opus 1M and Sonnet 1M are extra usage.
+  //   Max/Team/Enterprise → Opus 1M included with subscription; legacy Sonnet 4.6 1M is extra usage.
+  //   Pro                → both Opus 1M and legacy Sonnet 4.6 1M are extra usage.
+  // Sonnet 5 is the exception: its 1M window is native and included at standard pricing on
+  // every plan, so it carries no `extraUsage` indicator (see the `sonnet` row below).
   // The `extraUsage` flag tracks subscription-quota inclusion, not per-token API price.
-  // We optimize for Max/Team/Enterprise (Claudette's primary audience), so only Sonnet 1M
-  // carries the indicator; Pro users selecting Opus 1M see no warning even though it
-  // counts against their extra-usage allotment.
+  // We optimize for Max/Team/Enterprise (Claudette's primary audience), so only legacy
+  // Sonnet 4.6 1M carries the indicator; Pro users selecting Opus 1M see no warning even
+  // though it counts against their extra-usage allotment.
   { id: "opus", label: "Opus 4.8 1M", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
   { id: "claude-opus-4-8", label: "Opus 4.8", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
-  { id: "sonnet", label: "Sonnet 4.6", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
-  { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M", group: "Claude Code", extraUsage: true, contextWindowTokens: 1_000_000 },
+  // `sonnet` is the bare alias the Claude CLI resolves to the latest Sonnet — now Sonnet 5,
+  // which runs natively at 1M context (no 200K variant, no `[1m]` suffix to select, no usage
+  // credits on any plan — Claude Code model-config docs, "Sonnet 5 context window"). So unlike
+  // Sonnet 4.6, there is no separate 1M row: the alias itself is the 1M model.
+  { id: "sonnet", label: "Sonnet 5", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
   { id: "haiku", label: "Haiku 4.5", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
   // Fable 5 is an Opus-class Anthropic model (effort incl. xhigh/max, 1M variant).
   // It has no bare alias — the concrete id carries through to the Claude CLI `--model`
@@ -92,6 +99,11 @@ export const MODELS: readonly Model[] = [
   { id: "claude-opus-4-6", label: "Opus 4.6", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
   { id: "claude-opus-4-6[1m]", label: "Opus 4.6 1M", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 1_000_000 },
   { id: "claude-opus-4-5", label: "Opus 4.5", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
+  // Sonnet 4.6 demoted to the "More" disclosure when `sonnet` moved to Sonnet 5.
+  // The 200K id is pinned here (the path the `sonnet` alias used to resolve to)
+  // so it survives the alias move; the 1M variant keeps its `extraUsage` flag.
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
+  { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M", group: "Claude Code", extraUsage: true, legacy: true, contextWindowTokens: 1_000_000 },
   { id: "claude-sonnet-4-5", label: "Sonnet 4.5", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
   { id: "claude-haiku-3-5", label: "Haiku 3.5", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
 ];

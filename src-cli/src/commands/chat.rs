@@ -149,7 +149,7 @@ pub enum Action {
         #[arg(long = "no-fast", overrides_with = "fast", hide = true)]
         no_fast: bool,
         /// Effort level: `low`, `medium`, `high`, `xhigh`, `max`
-        /// (`xhigh` requires Opus 4.7+ or Fable 5).
+        /// (`xhigh` requires Opus 4.7+, Fable 5, or Sonnet 5).
         #[arg(long)]
         effort: Option<String>,
         /// Enable Chrome browser mode for this session. Pair: `--no-chrome`
