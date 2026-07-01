@@ -290,9 +290,11 @@ pub(super) fn build_settings_json(settings: &AgentSettings) -> Option<String> {
 
 /// Build a single-line JSON payload for stdin when using `--input-format stream-json`.
 ///
-/// Produces an `SDKUserMessage` with content blocks: one text block for the
-/// prompt, then one block per attachment — text files become `"text"` blocks,
-/// PDFs become `"document"` blocks, and images become `"image"` blocks.
+/// Produces an `SDKUserMessage` with content blocks: one block per attachment
+/// first — text files become `"text"` blocks, PDFs become `"document"` blocks,
+/// and images become `"image"` blocks — followed by a trailing text block for
+/// the prompt. Attachments lead so the model reads the longform data before the
+/// user's query (Anthropic "longform data at the top" guidance).
 pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> String {
     build_stdin_message_with_uuid(prompt, attachments, &uuid::Uuid::new_v4().to_string())
 }
@@ -327,12 +329,11 @@ fn build_stdin_message_inner(
 ) -> String {
     let mut content_blocks = Vec::new();
 
-    // Only add a text block if the prompt is non-empty — the API rejects
-    // empty text content blocks with "text content blocks must be non-empty".
-    if !prompt.trim().is_empty() {
-        content_blocks.push(serde_json::json!({"type": "text", "text": prompt}));
-    }
-
+    // Attachments go BEFORE the prompt text so the model sees the longform data
+    // (documents, images) first and the user's query/instructions last. This
+    // follows Anthropic's prompt-engineering guidance ("put longform data at the
+    // top … above your query") and the vision guidance to place images before
+    // text. See build_codex_user_input for the sibling ordering on the Codex path.
     for att in attachments {
         if let Some(ref text) = att.text_content {
             let label = att.filename.as_deref().unwrap_or("file");
@@ -357,6 +358,12 @@ fn build_stdin_message_inner(
                 }
             }));
         }
+    }
+
+    // Only add a text block if the prompt is non-empty — the API rejects
+    // empty text content blocks with "text content blocks must be non-empty".
+    if !prompt.trim().is_empty() {
+        content_blocks.push(serde_json::json!({"type": "text", "text": prompt}));
     }
 
     let mut payload = serde_json::json!({
@@ -889,12 +896,13 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
         let content = parsed["message"]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
-        assert_eq!(content[0]["type"], "text");
-        assert_eq!(content[0]["text"], "describe this");
-        assert_eq!(content[1]["type"], "image");
-        assert_eq!(content[1]["source"]["type"], "base64");
-        assert_eq!(content[1]["source"]["media_type"], "image/png");
-        assert_eq!(content[1]["source"]["data"], "iVBORw0KGgo=");
+        // Attachment leads, prompt trails (longform data at the top).
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(content[0]["source"]["type"], "base64");
+        assert_eq!(content[0]["source"]["media_type"], "image/png");
+        assert_eq!(content[0]["source"]["data"], "iVBORw0KGgo=");
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "describe this");
     }
 
     #[test]
@@ -922,10 +930,13 @@ mod tests {
         let msg = build_stdin_message("compare these", &attachments);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
         let content = parsed["message"]["content"].as_array().unwrap();
-        assert_eq!(content.len(), 4); // 1 text + 3 images
-        assert_eq!(content[1]["source"]["media_type"], "image/png");
-        assert_eq!(content[2]["source"]["media_type"], "image/jpeg");
-        assert_eq!(content[3]["source"]["media_type"], "image/webp");
+        assert_eq!(content.len(), 4); // 3 images + 1 text prompt
+        assert_eq!(content[0]["source"]["media_type"], "image/png");
+        assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(content[2]["source"]["media_type"], "image/webp");
+        // Prompt trails the attachments.
+        assert_eq!(content[3]["type"], "text");
+        assert_eq!(content[3]["text"], "compare these");
     }
 
     #[test]
@@ -940,12 +951,12 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
         let content = parsed["message"]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
-        assert_eq!(content[0]["type"], "text");
-        // PDFs must use "document" type, not "image".
-        assert_eq!(content[1]["type"], "document");
-        assert_eq!(content[1]["source"]["type"], "base64");
-        assert_eq!(content[1]["source"]["media_type"], "application/pdf");
-        assert_eq!(content[1]["source"]["data"], "JVBERi0xLjQ=");
+        // PDFs must use "document" type, not "image", and lead the prompt.
+        assert_eq!(content[0]["type"], "document");
+        assert_eq!(content[0]["source"]["type"], "base64");
+        assert_eq!(content[0]["source"]["media_type"], "application/pdf");
+        assert_eq!(content[0]["source"]["data"], "JVBERi0xLjQ=");
+        assert_eq!(content[1]["type"], "text");
     }
 
     #[test]
@@ -967,9 +978,10 @@ mod tests {
         let msg = build_stdin_message("here are files", &attachments);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
         let content = parsed["message"]["content"].as_array().unwrap();
-        assert_eq!(content.len(), 3); // 1 text + 1 image + 1 document
-        assert_eq!(content[1]["type"], "image");
-        assert_eq!(content[2]["type"], "document");
+        assert_eq!(content.len(), 3); // 1 image + 1 document + 1 text prompt
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(content[1]["type"], "document");
+        assert_eq!(content[2]["type"], "text");
     }
 
     #[test]
@@ -984,12 +996,13 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
         let content = parsed["message"]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
+        // Attachment (text file) leads, prompt trails.
         assert_eq!(content[0]["type"], "text");
-        assert_eq!(content[0]["text"], "review this");
-        assert_eq!(content[1]["type"], "text");
-        let text = content[1]["text"].as_str().unwrap();
+        let text = content[0]["text"].as_str().unwrap();
         assert!(text.contains("main.rs"));
         assert!(text.contains("fn main() {}"));
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "review this");
     }
 
     #[test]
@@ -1017,13 +1030,34 @@ mod tests {
         let msg = build_stdin_message("check these", &attachments);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
         let content = parsed["message"]["content"].as_array().unwrap();
-        assert_eq!(content.len(), 4); // 1 prompt + 1 text file + 1 image + 1 document
+        assert_eq!(content.len(), 4); // 1 text file + 1 image + 1 document + 1 prompt
+        // Attachments lead in slice order; the prompt trails as the last block.
         assert_eq!(content[0]["type"], "text");
-        assert_eq!(content[0]["text"], "check these");
-        assert_eq!(content[1]["type"], "text");
-        assert!(content[1]["text"].as_str().unwrap().contains("readme.txt"));
-        assert_eq!(content[2]["type"], "image");
-        assert_eq!(content[3]["type"], "document");
+        assert!(content[0]["text"].as_str().unwrap().contains("readme.txt"));
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[2]["type"], "document");
+        assert_eq!(content[3]["type"], "text");
+        assert_eq!(content[3]["text"], "check these");
+    }
+
+    #[test]
+    fn test_build_stdin_message_attachments_precede_prompt() {
+        // Contract: longform attachment blocks come first, the user's prompt is
+        // the trailing block (Anthropic "put longform data at the top" guidance).
+        let attachments = vec![FileAttachment {
+            media_type: "image/png".into(),
+            data_base64: "png_data".into(),
+            text_content: None,
+            filename: None,
+        }];
+        let msg = build_stdin_message("what is in this image?", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "image");
+        let last = content.last().unwrap();
+        assert_eq!(last["type"], "text");
+        assert_eq!(last["text"], "what is in this image?");
     }
 
     #[test]

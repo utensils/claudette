@@ -1811,12 +1811,9 @@ fn validate_codex_attachments(attachments: &[FileAttachment]) -> Result<(), Stri
 fn build_codex_user_input(prompt: &str, attachments: &[FileAttachment]) -> Vec<Value> {
     let mut input = Vec::with_capacity(attachments.len() + 1);
 
-    input.push(json!({
-        "type": "text",
-        "text": prompt,
-        "textElements": [],
-    }));
-
+    // Attachments lead so the model reads the longform data (documents, images)
+    // before the user's query/instructions, per Anthropic's "put longform data
+    // at the top" guidance. Mirrors build_stdin_message_inner on the Claude path.
     for attachment in attachments {
         if let Some(text) = attachment.text_content.as_deref() {
             let label = attachment.filename.as_deref().unwrap_or("file");
@@ -1835,6 +1832,12 @@ fn build_codex_user_input(prompt: &str, attachments: &[FileAttachment]) -> Vec<V
             }));
         }
     }
+
+    input.push(json!({
+        "type": "text",
+        "text": prompt,
+        "textElements": [],
+    }));
 
     input
 }
@@ -3715,18 +3718,20 @@ mod tests {
         });
         let value = serde_json::to_value(request).unwrap();
 
-        assert_eq!(value["params"]["input"][0]["type"], "text");
-        assert_eq!(value["params"]["input"][0]["text"], "inspect this");
-        assert_eq!(value["params"]["input"][1]["type"], "image");
+        // Attachments lead in slice order; the prompt is the trailing block
+        // (longform data at the top, query last).
+        assert_eq!(value["params"]["input"][0]["type"], "image");
         assert_eq!(
-            value["params"]["input"][1]["url"],
+            value["params"]["input"][0]["url"],
             "data:image/png;base64,iVBORw0KGgo="
         );
-        assert_eq!(value["params"]["input"][2]["type"], "text");
+        assert_eq!(value["params"]["input"][1]["type"], "text");
         assert_eq!(
-            value["params"]["input"][2]["text"],
+            value["params"]["input"][1]["text"],
             "Content of `note.txt`:\n```\nhello from a file\n```"
         );
+        assert_eq!(value["params"]["input"][2]["type"], "text");
+        assert_eq!(value["params"]["input"][2]["text"], "inspect this");
     }
 
     #[test]
@@ -3744,12 +3749,13 @@ mod tests {
         assert_eq!(value["method"], "turn/steer");
         assert_eq!(value["params"]["threadId"], "thread-1");
         assert_eq!(value["params"]["expectedTurnId"], "turn-1");
-        assert_eq!(value["params"]["input"][0]["text"], "also inspect this");
-        assert_eq!(value["params"]["input"][1]["type"], "image");
+        // Attachment leads, prompt trails.
+        assert_eq!(value["params"]["input"][0]["type"], "image");
         assert_eq!(
-            value["params"]["input"][1]["url"],
+            value["params"]["input"][0]["url"],
             "data:image/jpeg;base64,/9j/4AAQ"
         );
+        assert_eq!(value["params"]["input"][1]["text"], "also inspect this");
     }
 
     #[test]
