@@ -194,9 +194,18 @@ pub fn apply_denylist(
 /// testability — callers usually go through [`probe_shell_env`] which
 /// resolves `$SHELL` automatically.
 ///
-/// Spawns `<shell> -l -i -c '<emit-script>'` with a 5-second timeout,
-/// stdin closed, no console window. Returns `None` on timeout,
-/// non-zero exit, missing/relative shell path, or parse failure.
+/// First attempts `<shell> -l -i -c '<emit-script>'` (login + interactive)
+/// so that both `.zprofile`/`.bash_profile` (login) and `.zshrc`/`.bashrc`
+/// (interactive) are sourced, capturing tools like `nvm`, `pyenv`, and
+/// `rbenv` that only add themselves to PATH for interactive sessions.
+///
+/// If the interactive probe exits non-zero or times out — which happens on
+/// systems whose `.zshrc` contains terminal-dependent initialization (e.g.
+/// Powerlevel10k instant prompt, `compinit`, or `read` calls) — the probe
+/// falls back to `<shell> -l -c '<emit-script>'` (login-only). The
+/// login-only probe matches the behaviour of the previous
+/// `login_shell_path_probe` implementation and reliably captures PATH
+/// additions from `.zprofile` / `.bash_profile`.
 ///
 /// Fish has no `env -0`, so we build the NUL-delimited stream by
 /// hand using `set -nx` (lists exported var names) and `$$var`
@@ -224,8 +233,24 @@ pub fn probe_shell_env_with_shell(shell: &std::path::Path) -> Option<BTreeMap<St
         r#"printf '\0'; env -0"#
     };
 
+    // Try the interactive+login probe first to capture .zshrc/.bashrc additions.
+    // Fall back to login-only when the interactive probe fails (e.g. .zshrc has
+    // terminal-dependent init that exits non-zero without a real TTY).
+    run_shell_probe(shell, &["-l", "-i", "-c", emit_script]).or_else(|| {
+        tracing::debug!(
+            target: "claudette::env",
+            shell = %shell.display(),
+            "interactive shell probe failed; retrying with login-only probe",
+        );
+        run_shell_probe(shell, &["-l", "-c", emit_script])
+    })
+}
+
+/// Spawn `shell` with `args`, drain stdout, and return the parsed env dump.
+/// Returns `None` on spawn failure, timeout, non-zero exit, or empty parse.
+fn run_shell_probe(shell: &std::path::Path, args: &[&str]) -> Option<BTreeMap<String, String>> {
     let mut child = crate::process::std_command(shell)
-        .args(["-l", "-i", "-c", emit_script])
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -1468,12 +1493,48 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let shim = tmp.path().join("badshell");
+        // Exits 7 regardless of args — both the interactive and login-only
+        // probes will fail, so the function must return None.
         std::fs::write(&shim, "#!/bin/sh\nexit 7\n").unwrap();
         let mut perm = std::fs::metadata(&shim).unwrap().permissions();
         perm.set_mode(0o755);
         std::fs::set_permissions(&shim, perm).unwrap();
         let probed = probe_shell_env_with_shell(shim.as_path());
         assert!(probed.is_none(), "non-zero shell exit must yield None");
+    }
+
+    /// Verify the interactive-probe fallback: a shell that fails when run with
+    /// `-i` (simulating a `.zshrc` that requires a real TTY) but succeeds with
+    /// login-only args must still return valid results via the fallback probe.
+    #[cfg(unix)]
+    #[test]
+    fn probe_falls_back_to_login_only_when_interactive_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let shim = tmp.path().join("pickyshell");
+        // Fails when invoked with -i (interactive), succeeds otherwise.
+        // grep for the literal flag to distinguish the two probe attempts.
+        std::fs::write(
+            &shim,
+            "#!/bin/sh\ncase \"$*\" in *-i*) exit 2;; esac\nprintf 'FALLBACK_VAR=yes\\0PATH=/fallback/bin\\0'\n",
+        )
+        .unwrap();
+        let mut perm = std::fs::metadata(&shim).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&shim, perm).unwrap();
+
+        let probed = probe_shell_env_with_shell(shim.as_path());
+        let env = probed.expect("fallback login-only probe must succeed");
+        assert_eq!(
+            env.get("FALLBACK_VAR").map(String::as_str),
+            Some("yes"),
+            "login-only fallback must capture env vars",
+        );
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some("/fallback/bin"),
+            "login-only fallback must capture PATH",
+        );
     }
 
     #[test]
