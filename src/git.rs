@@ -23,10 +23,11 @@ pub fn resolve_git_path_blocking() -> OsString {
         return cached.clone();
     }
     // On Unix, `enriched_path()` reads the PATH from the cached shell env;
-    // the initial probe spawns `$SHELL -l -i -c env -0` with a 5 s timeout.
-    // `resolve_git_path_blocking` is called inline from async code paths
-    // (every `run_git`), so we must not pay that probe cost on a Tokio
-    // worker. When the cache is cold we fall back to the process PATH —
+    // the initial probe tries `$SHELL -l -i -c '...'` then falls back to
+    // `$SHELL -l -c '...'` (up to 5 s each). `resolve_git_path_blocking`
+    // is called inline from async code paths (every `run_git`), so we must
+    // not pay that probe cost on a Tokio worker. When the cache is cold we
+    // fall back to the process PATH —
     // git is almost always in `/usr/bin` or
     // `/usr/local/bin` (both in process PATH on macOS/Linux), and the
     // well-known fallbacks below cover nix profiles, Homebrew, etc.
