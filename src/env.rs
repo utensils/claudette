@@ -199,13 +199,15 @@ pub fn apply_denylist(
 /// (interactive) are sourced, capturing tools like `nvm`, `pyenv`, and
 /// `rbenv` that only add themselves to PATH for interactive sessions.
 ///
-/// If the interactive probe exits non-zero or times out — which happens on
-/// systems whose `.zshrc` contains terminal-dependent initialization (e.g.
-/// Powerlevel10k instant prompt, `compinit`, or `read` calls) — the probe
-/// falls back to `<shell> -l -c '<emit-script>'` (login-only). The
-/// login-only probe matches the behaviour of the previous
-/// `login_shell_path_probe` implementation and reliably captures PATH
-/// additions from `.zprofile` / `.bash_profile`.
+/// If the interactive probe fails for any reason — spawn error, non-zero
+/// exit, timeout, or an empty/unparseable stdout dump — the probe falls back
+/// to `<shell> -l -c '<emit-script>'` (login-only). The most common trigger
+/// is `.zshrc` containing terminal-dependent initialization (e.g.
+/// Powerlevel10k instant prompt, `compinit`, or `read` calls) that causes
+/// the shell to exit non-zero without a real TTY. The login-only probe
+/// matches the behaviour of the previous `login_shell_path_probe`
+/// implementation and reliably captures PATH additions from
+/// `.zprofile` / `.bash_profile`.
 ///
 /// Fish has no `env -0`, so we build the NUL-delimited stream by
 /// hand using `set -nx` (lists exported var names) and `$$var`
