@@ -290,6 +290,42 @@ impl Database {
         Ok(())
     }
 
+    /// Drop **all** snapshot file rows for a workspace's checkpoints, GC any
+    /// `checkpoint_blobs` that lose their last reference, and drain the freed
+    /// pages. Returns the number of `checkpoint_files` rows deleted.
+    ///
+    /// Keeps `conversation_checkpoints` and `turn_tool_activities` intact, so
+    /// chat history and tool-activity timelines are untouched — only the
+    /// file-restore snapshots go away. `has_file_state` is a derived
+    /// `EXISTS(...)` column over `checkpoint_files`, so it flips to `false`
+    /// for every affected checkpoint and the restore path degrades to the
+    /// git-commit fallback (or a safe no-op) rather than erroring.
+    ///
+    /// Used on archive (#1002): archived workspaces receive no further
+    /// snapshot inserts, so the insert-time retention sweep in
+    /// [`Self::insert_checkpoint_files_and_prune`] never runs for them again
+    /// and their file/blob bytes would otherwise stay frozen in the DB
+    /// forever. Purging here bounds an archived workspace's checkpoint file
+    /// storage to zero while preserving its conversation for restore.
+    pub fn purge_workspace_checkpoint_files(
+        &self,
+        workspace_id: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        let deleted = self.conn.execute(
+            "DELETE FROM checkpoint_files
+             WHERE checkpoint_id IN (
+                 SELECT id FROM conversation_checkpoints WHERE workspace_id = ?1
+             )",
+            params![workspace_id],
+        )?;
+        // Reclaim blobs the purge just orphaned and drain the freelist. Both
+        // short-circuit when nothing was deleted, so an archive of a
+        // file-less workspace is a cheap no-op.
+        self.gc_orphan_blobs_after_delete(deleted);
+        self.best_effort_incremental_vacuum_after_delete(deleted);
+        Ok(deleted)
+    }
+
     fn insert_checkpoint_files_tx(
         tx: &rusqlite::Transaction<'_>,
         files: &[CheckpointFile],
@@ -1657,6 +1693,108 @@ mod tests {
             0,
             "blob bytes must be reclaimed when no checkpoint_files row references them"
         );
+    }
+
+    /// Regression pin for #1002: purging an archived workspace's checkpoint
+    /// files must reclaim both the reference rows and the orphaned blobs,
+    /// while leaving `conversation_checkpoints` + `turn_tool_activities`
+    /// (chat history) intact and flipping `has_file_state` to false.
+    #[test]
+    fn purge_workspace_checkpoint_files_reclaims_bytes_but_keeps_history() {
+        let db = setup_db_with_workspace();
+        for i in 0..3 {
+            let mid = format!("m{i}");
+            let cpid = format!("cp{i}");
+            db.insert_chat_message(&make_chat_msg(&db, &mid, "w1", ChatRole::Assistant, "x"))
+                .unwrap();
+            db.insert_checkpoint(&make_checkpoint(&db, &cpid, "w1", &mid, i))
+                .unwrap();
+            db.insert_turn_tool_activities(&[make_tool_activity(
+                &format!("a{i}"),
+                &cpid,
+                "Read",
+                0,
+            )])
+            .unwrap();
+            // A unique blob per checkpoint so orphan-GC has something to do.
+            db.insert_checkpoint_files(&[raw_file(
+                &format!("f-{i}"),
+                &cpid,
+                "a.bin",
+                format!("bytes-{i}").as_bytes(),
+            )])
+            .unwrap();
+        }
+        assert_eq!(checkpoint_files_count(&db), 3);
+        assert_eq!(blob_count(&db), 3);
+
+        let purged = db.purge_workspace_checkpoint_files("w1").unwrap();
+        assert_eq!(purged, 3, "all three file rows should be purged");
+
+        // File rows and their sole-owned blobs are reclaimed.
+        assert_eq!(checkpoint_files_count(&db), 0);
+        assert_eq!(
+            blob_count(&db),
+            0,
+            "orphaned blobs must be GC'd so archive actually reclaims bytes"
+        );
+
+        // Checkpoint metadata + tool timelines survive: chat history stays.
+        assert_eq!(db.list_checkpoints("w1").unwrap().len(), 3);
+        assert_eq!(db.list_completed_turns("w1").unwrap().len(), 3);
+
+        // Derived `has_file_state` flips to false, so the restore path
+        // short-circuits to the git-commit fallback instead of erroring.
+        for i in 0..3 {
+            let cp = db.get_checkpoint(&format!("cp{i}")).unwrap().unwrap();
+            assert!(!cp.has_file_state, "cp{i} should have no file state left");
+        }
+    }
+
+    /// Purge on archive must not clobber a blob still referenced by another
+    /// (non-archived) workspace. Content-addressed blobs are shared globally,
+    /// so the orphan-GC's `NOT EXISTS` guard has to keep any blob that a
+    /// sibling workspace's `checkpoint_files` row still points at.
+    #[test]
+    fn purge_workspace_checkpoint_files_preserves_cross_workspace_shared_blobs() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "other-work"))
+            .unwrap();
+
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w2", ChatRole::Assistant, "b"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w2", "m2", 0))
+            .unwrap();
+
+        // Identical bytes in both workspaces dedupe to ONE shared blob;
+        // w1 also owns a second, unique blob.
+        let shared = b"shared-bytes".to_vec();
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "shared.bin", &shared)])
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f2", "cp2", "shared.bin", &shared)])
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f3", "cp1", "solo.bin", b"w1-only")])
+            .unwrap();
+        assert_eq!(blob_count(&db), 2, "shared bytes collapse to one blob");
+
+        let purged = db.purge_workspace_checkpoint_files("w1").unwrap();
+        assert_eq!(purged, 2, "both of w1's file rows are purged");
+
+        // w1's sole-owned blob is gone; the shared blob survives for w2.
+        assert_eq!(
+            blob_count(&db),
+            1,
+            "shared blob must survive because w2 still references it"
+        );
+        // w2's file row and its restoreability are untouched.
+        assert_eq!(checkpoint_files_count(&db), 1);
+        let w2_files = db.get_checkpoint_files("cp2").unwrap();
+        assert_eq!(w2_files.len(), 1);
+        assert_eq!(w2_files[0].content.as_deref(), Some(shared.as_slice()));
     }
 
     /// Codex peer-review pin: the retention prune subquery must skip

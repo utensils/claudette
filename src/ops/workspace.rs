@@ -924,6 +924,14 @@ pub async fn archive(
             "workspace_archived",
             "Workspace was archived",
         )?;
+        // Reclaim checkpoint file/blob bytes now. An archived workspace
+        // receives no further snapshot inserts, so the insert-time retention
+        // sweep never fires for it again — without this, its full-tree
+        // snapshots stay frozen in the DB forever (#1002). The conversation
+        // checkpoints and tool timelines survive; only file-restore
+        // snapshots go away, and the restore path degrades gracefully via
+        // the derived `has_file_state` guard.
+        db.purge_workspace_checkpoint_files(&workspace_id)?;
         db.update_workspace_status(&workspace_id, &WorkspaceStatus::Archived, None)?;
     }
 
@@ -1523,6 +1531,91 @@ mod tests {
             kinds,
             vec![WorkspaceChangeKind::Created, WorkspaceChangeKind::Archived,],
             "delete_branch=false must keep emitting Archived"
+        );
+    }
+
+    /// Regression for #1002: archiving (branch kept) must reclaim the
+    /// workspace's checkpoint file snapshots so an archived workspace can't
+    /// grow the DB without bound. The conversation checkpoint row itself
+    /// survives (chat history + restore metadata), only its `checkpoint_files`
+    /// are purged.
+    #[tokio::test]
+    async fn archive_purges_checkpoint_files_but_keeps_conversation() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        let created = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "feature",
+                branch_prefix: "test/",
+                input_values: None,
+            },
+        )
+        .await
+        .unwrap();
+        let ws_id = created.workspace.id.clone();
+
+        // Seed a checkpoint with a file snapshot for the workspace.
+        let sid = db
+            .default_session_id_for_workspace(&ws_id)
+            .unwrap()
+            .expect("created workspace has a default session");
+        db.insert_checkpoint(&crate::model::ConversationCheckpoint {
+            id: "cp1".into(),
+            workspace_id: ws_id.clone(),
+            chat_session_id: sid,
+            message_id: "m1".into(),
+            commit_hash: Some("deadbeef".into()),
+            has_file_state: false,
+            turn_index: 0,
+            message_count: 1,
+            created_at: String::new(),
+        })
+        .unwrap();
+        db.insert_checkpoint_files(&[crate::model::CheckpointFile {
+            id: "f1".into(),
+            checkpoint_id: "cp1".into(),
+            file_path: "a.bin".into(),
+            content: Some(vec![9u8; 4096]),
+            blob_sha256: None,
+            file_mode: 0o100644,
+        }])
+        .unwrap();
+        assert!(
+            db.has_checkpoint_files("cp1").unwrap(),
+            "precondition: the checkpoint has file snapshots before archive"
+        );
+
+        archive(
+            &mut db,
+            &hooks,
+            ArchiveParams {
+                workspace_id: &ws_id,
+                delete_branch: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Row survives as Archived …
+        let ws = db
+            .list_workspaces()
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == ws_id)
+            .expect("archived workspace row still exists");
+        assert_eq!(ws.status, WorkspaceStatus::Archived);
+        // … the checkpoint metadata survives for restore …
+        assert_eq!(db.list_checkpoints(&ws_id).unwrap().len(), 1);
+        // … but its file snapshots are reclaimed.
+        assert!(
+            !db.has_checkpoint_files("cp1").unwrap(),
+            "archive must purge checkpoint file snapshots (#1002)"
         );
     }
 

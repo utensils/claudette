@@ -2373,6 +2373,10 @@ async fn auto_archive_workspace(
             } else {
                 let _ = db.delete_terminal_tabs_for_workspace(&ws_id);
                 let _ = db.delete_scm_status_cache(&ws_id);
+                // Reclaim checkpoint file/blob bytes on archive — archived
+                // workspaces never prune again on their own (#1002). Keeps
+                // the conversation; drops only file-restore snapshots.
+                let _ = db.purge_workspace_checkpoint_files(&ws_id);
                 db.update_workspace_status(
                     &ws_id,
                     &claudette::model::WorkspaceStatus::Archived,
