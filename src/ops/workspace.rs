@@ -924,15 +924,32 @@ pub async fn archive(
             "workspace_archived",
             "Workspace was archived",
         )?;
-        // Reclaim checkpoint file/blob bytes now. An archived workspace
-        // receives no further snapshot inserts, so the insert-time retention
-        // sweep never fires for it again — without this, its full-tree
-        // snapshots stay frozen in the DB forever (#1002). The conversation
-        // checkpoints and tool timelines survive; only file-restore
-        // snapshots go away, and the restore path degrades gracefully via
-        // the derived `has_file_state` guard.
-        db.purge_workspace_checkpoint_files(&workspace_id)?;
         db.update_workspace_status(&workspace_id, &WorkspaceStatus::Archived, None)?;
+        // Reclaim checkpoint file/blob bytes *after* the row is Archived. An
+        // archived workspace receives no further snapshot inserts, so the
+        // insert-time retention sweep never fires for it again — without this,
+        // its full-tree snapshots stay frozen in the DB forever (#1002). The
+        // conversation checkpoints and tool timelines survive; only
+        // file-restore snapshots go away, and the restore path degrades
+        // gracefully via the derived `has_file_state` guard.
+        //
+        // Ordering matters: purging *before* the status flip would strip an
+        // Active workspace of its file-restore state if `update_workspace_status`
+        // then failed (it returns early via `?`). Running after the flip makes
+        // the failure modes safe — and the purge is best-effort because the
+        // archive has already committed, so a reclaim hiccup just defers the
+        // space saving to the next archive/delete or manual vacuum rather than
+        // failing an archive that actually happened. (A single transaction
+        // isn't an option: the purge ends with an incremental vacuum, which
+        // SQLite forbids inside a transaction.)
+        if let Err(e) = db.purge_workspace_checkpoint_files(&workspace_id) {
+            tracing::warn!(
+                target: "claudette::workspace",
+                workspace_id = %workspace_id,
+                error = %e,
+                "failed to reclaim checkpoint files on archive; bytes will be reclaimed on a later archive/delete",
+            );
+        }
     }
 
     let remaining = db.list_workspaces()?;
