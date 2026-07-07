@@ -291,8 +291,17 @@ impl Database {
     }
 
     /// Drop **all** snapshot file rows for a workspace's checkpoints, GC any
-    /// `checkpoint_blobs` that lose their last reference, and drain the freed
-    /// pages. Returns the number of `checkpoint_files` rows deleted.
+    /// `checkpoint_blobs` that lose their last reference, and run a
+    /// best-effort incremental vacuum. Returns the number of
+    /// `checkpoint_files` rows deleted.
+    ///
+    /// The incremental vacuum makes the freed pages reusable, but it is
+    /// bounded (`INCREMENTAL_VACUUM_PAGES_AFTER_DELETE`) and does not
+    /// guarantee the on-disk file shrinks — a fragmented freelist only fully
+    /// compacts under a `VACUUM`. The one-time #1002 sweep pairs its purge
+    /// with exactly that full reclaim (see
+    /// [`Self::purge_archived_workspaces_checkpoint_files`] and the shared
+    /// post-boot reclaim in `checkpoint_backfill`).
     ///
     /// Keeps `conversation_checkpoints` and `turn_tool_activities` intact, so
     /// chat history and tool-activity timelines are untouched — only the
