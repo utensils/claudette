@@ -1,6 +1,19 @@
-//! One-time backfill of legacy `checkpoint_files.content` rows into the
-//! content-addressed `checkpoint_blobs` table. Closes #940 / #942 for users
-//! whose DB filled up before dedupe shipped.
+//! One-time checkpoint-storage maintenance that runs as a post-boot
+//! background task:
+//!
+//! - **Legacy blob backfill** ([`run_backfill`]) migrates legacy
+//!   `checkpoint_files.content` rows into the content-addressed
+//!   `checkpoint_blobs` table. Closes #940 / #942 for users whose DB filled
+//!   up before dedupe shipped.
+//! - **Archived-workspace sweep** ([`run_archived_checkpoint_sweep`]) purges
+//!   checkpoint file snapshots for workspaces that were already archived
+//!   before the per-archive purge shipped. Closes #1002 for existing DB
+//!   bloat — the per-archive path (`ops::workspace::archive`) only reclaims
+//!   on the `Active -> Archived` transition, so pre-existing archived rows
+//!   need this retroactive one-shot.
+//! - **Space reclaim** ([`run_post_backfill_space_reclaim`]) returns the
+//!   freelist pages both of the above freed back to the OS with a single
+//!   post-boot VACUUM.
 //!
 //! The backfill runs as a background tokio task after migrations complete —
 //! it opens its own connection (not `Send`), batches work into small
@@ -24,6 +37,9 @@ const BATCH_ROW_COUNT: usize = 64;
 const BATCH_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const BACKFILL_DONE_KEY: &str = "checkpoint_blob_backfill_done";
 const SPACE_RECLAIM_DONE_KEY: &str = "checkpoint_blob_space_reclaim_done";
+/// One-shot marker for the #1002 retroactive sweep of already-archived
+/// workspaces. Absent/`"false"` means the sweep still needs to run.
+const ARCHIVED_SWEEP_DONE_KEY: &str = "checkpoint_archived_sweep_done";
 const SMALL_FREELIST_INCREMENTAL_VACUUM_PAGES: i64 = 16 * 1024;
 
 /// Failure modes for the backfill task. Kept distinct from `rusqlite::Error`
@@ -98,6 +114,23 @@ pub async fn run_backfill(db_path: &Path) -> Result<(), BackfillError> {
 pub async fn run_post_backfill_space_reclaim(db_path: &Path) -> Result<(), BackfillError> {
     let path = db_path.to_path_buf();
     tokio::task::spawn_blocking(move || run_post_backfill_space_reclaim_blocking(&path))
+        .await
+        .map_err(BackfillError::JoinFailed)?
+}
+
+/// One-time retroactive purge of checkpoint file snapshots for workspaces
+/// that were already `archived` when the #1002 per-archive purge shipped.
+///
+/// Run this AFTER [`run_backfill`] and BEFORE
+/// [`run_post_backfill_space_reclaim`]: when the sweep actually deletes
+/// rows it re-arms the shared space-reclaim marker, so the single post-boot
+/// VACUUM downstream reclaims the freelist this purge creates in the same
+/// pass as any #940 dedup freelist — no second file rewrite. Gated by
+/// `app_settings.checkpoint_archived_sweep_done` so it's a no-op on every
+/// subsequent boot.
+pub async fn run_archived_checkpoint_sweep(db_path: &Path) -> Result<(), BackfillError> {
+    let path = db_path.to_path_buf();
+    tokio::task::spawn_blocking(move || run_archived_checkpoint_sweep_blocking(&path))
         .await
         .map_err(BackfillError::JoinFailed)?
 }
@@ -259,6 +292,36 @@ fn run_post_backfill_space_reclaim_blocking(db_path: &Path) -> Result<(), Backfi
         initial_pages = initial_freelist,
         remaining_pages,
         "checkpoint space reclaim complete after post-boot VACUUM"
+    );
+    Ok(())
+}
+
+fn run_archived_checkpoint_sweep_blocking(db_path: &Path) -> Result<(), BackfillError> {
+    let db = Database::open(db_path)?;
+
+    if db
+        .get_app_setting(ARCHIVED_SWEEP_DONE_KEY)?
+        .is_some_and(|v| v == "true")
+    {
+        return Ok(());
+    }
+
+    let purged = db.purge_archived_workspaces_checkpoint_files()?;
+    db.set_app_setting(ARCHIVED_SWEEP_DONE_KEY, "true")?;
+
+    if purged > 0 {
+        // Re-arm the shared reclaim marker so the downstream post-boot VACUUM
+        // returns the pages this purge just freed. Mirrors `run_backfill`
+        // resetting the same marker after a dedup migration — a single
+        // reclaim pass then covers both freelists.
+        db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "false")?;
+    }
+
+    tracing::info!(
+        target: "claudette::db",
+        issue = 1002,
+        purged_rows = purged,
+        "archived-workspace checkpoint sweep complete"
     );
     Ok(())
 }
@@ -505,6 +568,113 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some("true")
+        );
+    }
+
+    // --- #1002 archived-workspace sweep ---
+
+    /// Seeds one active and one archived workspace, each with one checkpoint.
+    const SWEEP_SEED_SQL: &str = "\
+        INSERT INTO repositories (id, name, path) VALUES ('r1', 'r', '/tmp/r'); \
+        INSERT INTO workspaces (id, repository_id, name, branch_name, status) \
+        VALUES ('active-ws', 'r1', 'a', 'main', 'active'), \
+               ('arch-ws', 'r1', 'b', 'feat', 'archived'); \
+        INSERT INTO chat_sessions (id, workspace_id, name, sort_order, status) \
+        VALUES ('s-a', 'active-ws', 'A', 0, 'active'), \
+               ('s-b', 'arch-ws', 'B', 0, 'active'); \
+        INSERT INTO conversation_checkpoints (id, workspace_id, chat_session_id, message_id, turn_index, message_count) \
+        VALUES ('cp-a', 'active-ws', 's-a', 'm1', 0, 0), \
+               ('cp-b', 'arch-ws', 's-b', 'm2', 0, 0);";
+
+    fn file_row(id: &str, cp: &str, path: &str, bytes: &[u8]) -> CheckpointFile {
+        CheckpointFile {
+            id: id.into(),
+            checkpoint_id: cp.into(),
+            file_path: path.into(),
+            content: Some(bytes.to_vec()),
+            blob_sha256: None,
+            file_mode: 33188,
+        }
+    }
+
+    fn blob_count(db: &Database) -> i64 {
+        db.conn()
+            .query_row("SELECT COUNT(*) FROM checkpoint_blobs", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// The retroactive sweep purges the archived workspace's checkpoint
+    /// files (and its now-orphan blob), keeps the active workspace's
+    /// snapshot, sets its done marker, and re-arms the shared space-reclaim
+    /// marker so the downstream VACUUM drains the pages it freed.
+    #[tokio::test]
+    async fn archived_sweep_purges_archived_keeps_active() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path).unwrap();
+            db.execute_batch(SWEEP_SEED_SQL).unwrap();
+            db.insert_checkpoint_files(&[
+                file_row("fa", "cp-a", "a.bin", b"active-bytes"),
+                file_row("fb", "cp-b", "b.bin", b"archived-bytes"),
+            ])
+            .unwrap();
+            assert_eq!(blob_count(&db), 2);
+        }
+
+        run_archived_checkpoint_sweep(&db_path).await.unwrap();
+
+        let db = Database::open(&db_path).unwrap();
+        // Active workspace keeps its snapshot; archived is purged.
+        assert_eq!(db.get_checkpoint_files("cp-a").unwrap().len(), 1);
+        assert!(db.get_checkpoint_files("cp-b").unwrap().is_empty());
+        // The archived-only blob is GC'd; the active one survives.
+        assert_eq!(blob_count(&db), 1);
+        // Archived checkpoint metadata survives (chat history intact).
+        assert_eq!(db.list_checkpoints("arch-ws").unwrap().len(), 1);
+        // Done marker set; reclaim re-armed because rows were purged.
+        assert_eq!(
+            db.get_app_setting(ARCHIVED_SWEEP_DONE_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            db.get_app_setting(SPACE_RECLAIM_DONE_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("false")
+        );
+    }
+
+    /// The done marker gates the sweep: a DB that already ran it (or a
+    /// second run) leaves archived snapshots untouched and doesn't re-arm
+    /// the reclaim marker.
+    #[tokio::test]
+    async fn archived_sweep_is_marker_gated() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path).unwrap();
+            db.execute_batch(SWEEP_SEED_SQL).unwrap();
+            db.insert_checkpoint_files(&[file_row("fb", "cp-b", "b.bin", b"archived-bytes")])
+                .unwrap();
+            db.set_app_setting(ARCHIVED_SWEEP_DONE_KEY, "true").unwrap();
+        }
+
+        run_archived_checkpoint_sweep(&db_path).await.unwrap();
+
+        let db = Database::open(&db_path).unwrap();
+        assert_eq!(
+            db.get_checkpoint_files("cp-b").unwrap().len(),
+            1,
+            "a set done-marker must make the sweep a no-op"
+        );
+        assert!(
+            db.get_app_setting(SPACE_RECLAIM_DONE_KEY)
+                .unwrap()
+                .is_none(),
+            "a no-op sweep must not re-arm space reclaim"
         );
     }
 }

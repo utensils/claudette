@@ -892,16 +892,20 @@ fn main() {
             // fallback shape as the env watcher above.
             commands::files::watcher::setup_file_watcher(app.handle().clone());
 
-            // One-time backfill of legacy `checkpoint_files.content` rows
-            // into the content-addressed `checkpoint_blobs` store, followed
-            // by post-backfill SQLite space reclaim. Closes GitHub issue
-            // #940 / #942 for users whose DB filled up before dedupe shipped.
+            // One-time checkpoint-storage maintenance: legacy blob backfill
+            // (#940 / #942), a retroactive purge of already-archived
+            // workspaces' checkpoint snapshots (#1002), and a single
+            // post-boot SQLite space reclaim that returns the pages both
+            // freed. Each step is a one-shot gated by its own `app_settings`
+            // marker, so this is a cheap no-op on subsequent boots.
             //
             // Wait for `boot_ok` before doing this maintenance. The updater's
-            // boot-probation rollback window is 20s; draining a multi-GB #940
+            // boot-probation rollback window is 20s; draining a multi-GB
             // freelist can take far longer and can make foreground DB reads
             // wait on SQLite locks. Starting only after boot acknowledgement
-            // keeps a healthy upgrade from being rolled back.
+            // keeps a healthy upgrade from being rolled back. Ordering
+            // matters: the archived sweep runs between backfill and reclaim
+            // so the single VACUUM reclaims both freelists in one rewrite.
             let maintenance_db_path = app.state::<state::AppState>().db_path.clone();
             let maintenance_boot =
                 std::sync::Arc::clone(&app.state::<state::AppState>().boot_probation);
@@ -916,6 +920,21 @@ fn main() {
                         "checkpoint blob backfill failed; will retry on next launch"
                     );
                     return;
+                }
+                // Retroactive #1002 sweep of already-archived workspaces. A
+                // failure here is non-fatal to the reclaim below (which still
+                // has the backfill's freelist to drain), so log and continue
+                // rather than return — the sweep retries on the next launch.
+                if let Err(e) = claudette::checkpoint_backfill::run_archived_checkpoint_sweep(
+                    &maintenance_db_path,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        error = %e,
+                        "archived-workspace checkpoint sweep failed; will retry on next launch"
+                    );
                 }
                 if let Err(e) = claudette::checkpoint_backfill::run_post_backfill_space_reclaim(
                     &maintenance_db_path,
