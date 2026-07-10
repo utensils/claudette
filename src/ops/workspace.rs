@@ -460,19 +460,11 @@ pub async fn resolve_and_run_setup_streaming(
         Ok(Some(cfg)) => {
             if let Some(setup) = cfg.scripts.and_then(|s| s.setup) {
                 (setup, "repo")
-            } else if let Some(fallback) = settings_script {
-                (fallback.to_string(), "settings")
             } else {
-                return None;
+                (settings_script?.to_string(), "settings")
             }
         }
-        Ok(None) => {
-            if let Some(fallback) = settings_script {
-                (fallback.to_string(), "settings")
-            } else {
-                return None;
-            }
-        }
+        Ok(None) => (settings_script?.to_string(), "settings"),
         Err(parse_err) => {
             tracing::warn!(
                 target: "claudette::workspace",
@@ -649,19 +641,11 @@ pub async fn resolve_and_run_archive(
         Ok(Some(cfg)) => {
             if let Some(archive) = cfg.scripts.and_then(|s| s.archive) {
                 (archive, "repo")
-            } else if let Some(fallback) = settings_script {
-                (fallback.to_string(), "settings")
             } else {
-                return None;
+                (settings_script?.to_string(), "settings")
             }
         }
-        Ok(None) => {
-            if let Some(fallback) = settings_script {
-                (fallback.to_string(), "settings")
-            } else {
-                return None;
-            }
-        }
+        Ok(None) => (settings_script?.to_string(), "settings"),
         Err(parse_err) => {
             tracing::warn!(
                 target: "claudette::workspace",

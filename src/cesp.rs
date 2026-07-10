@@ -45,17 +45,13 @@ pub fn resolve_category<'a>(manifest: &'a CespManifest, category: &str) -> Optio
     }
     let mut target = category.to_string();
     for _ in 0..MAX_ALIAS_DEPTH {
-        match manifest.category_aliases.get(&target) {
-            Some(alias_target) => {
-                if let Some(cat) = manifest.categories.get(alias_target)
-                    && !cat.sounds.is_empty()
-                {
-                    return Some(&cat.sounds);
-                }
-                target = alias_target.clone();
-            }
-            None => return None,
+        let alias_target = manifest.category_aliases.get(&target)?;
+        if let Some(cat) = manifest.categories.get(alias_target)
+            && !cat.sounds.is_empty()
+        {
+            return Some(&cat.sounds);
         }
+        target = alias_target.clone();
     }
     None
 }

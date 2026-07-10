@@ -1725,20 +1725,16 @@ fn codex_mcp_servers_from_claude_config(mcp_config: &str) -> Option<Value> {
         .as_object()?;
     let mut codex_servers = serde_json::Map::new();
     for (name, server) in servers {
-        let mut server = server.clone();
-        if let Value::Object(ref mut object) = server {
-            let is_remote = matches!(
-                object.get("type").and_then(Value::as_str),
-                Some("http") | Some("sse")
-            );
-            if is_remote {
-                continue;
-            }
-            object.remove("type");
+        let Some(mut object) = server.as_object().cloned() else {
+            continue;
+        };
+        if object.get("command").and_then(Value::as_str).is_none() {
+            continue;
         }
-        codex_servers.insert(name.clone(), server);
+        object.remove("type");
+        codex_servers.insert(name.clone(), Value::Object(object));
     }
-    Some(Value::Object(codex_servers))
+    (!codex_servers.is_empty()).then_some(Value::Object(codex_servers))
 }
 
 pub struct CodexTurnStartRequest<'a> {
@@ -3896,7 +3892,7 @@ mod tests {
                 reasoning_effort: None,
                 custom_instructions: None,
                 mcp_config: Some(
-                    r#"{"mcpServers":{"datadog":{"type":"http","url":"https://mcp.us3.datadoghq.com/api/unstable/mcp-server/mcp","headers":{"DD_API_KEY":"secret"}},"puppeteer":{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-puppeteer"]}}}"#,
+                    r#"{"mcpServers":{"datadog":{"type":"http","url":"https://mcp.us3.datadoghq.com/api/unstable/mcp-server/mcp","headers":{"DD_API_KEY":"secret"}},"legacy-remote":{"url":"https://example.com/mcp"},"malformed":"not-an-object","puppeteer":{"command":"npx","args":["-y","@modelcontextprotocol/server-puppeteer"]}}}"#,
                 ),
             },
         );
@@ -3904,7 +3900,28 @@ mod tests {
 
         let mcp_servers = &value["params"]["config"]["mcp_servers"];
         assert!(mcp_servers.get("datadog").is_none());
+        assert!(mcp_servers.get("legacy-remote").is_none());
+        assert!(mcp_servers.get("malformed").is_none());
         assert_eq!(mcp_servers["puppeteer"]["command"], "npx");
+    }
+
+    #[test]
+    fn thread_start_request_omits_mcp_override_when_no_stdio_servers_remain() {
+        let request = build_thread_start_request(
+            8,
+            CodexThreadRequestParams {
+                model: Some("gpt-5.4"),
+                cwd: Path::new("/tmp/work"),
+                permission_level: CodexPermissionLevel::Readonly,
+                fast_mode: false,
+                reasoning_effort: None,
+                custom_instructions: None,
+                mcp_config: Some(r#"{"mcpServers":{"remote":{"url":"https://example.com/mcp"}}}"#),
+            },
+        );
+        let value = serde_json::to_value(request).unwrap();
+
+        assert!(value["params"]["config"].is_null());
     }
 
     #[test]
