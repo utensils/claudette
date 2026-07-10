@@ -1699,6 +1699,24 @@ fn codex_thread_config(reasoning_effort: Option<&str>, mcp_config: Option<&str>)
     (!config.is_empty()).then_some(Value::Object(config))
 }
 
+/// Translate Claude Code's `--mcp-config` shape into Codex's `mcp_servers`
+/// config override, forwarding only `stdio` (command-based) servers.
+///
+/// Remote servers (`"type": "http"` / `"sse"`, keyed on `url` rather than
+/// `command`) are deliberately dropped rather than translated. Codex's
+/// `config` override is deep-merged on top of the user's own
+/// `~/.codex/config.toml` (and project `.codex/config.toml`) layers keyed by
+/// server name — see `merge_toml_values` in codex's config crate. If the user
+/// already has a `command`-based entry for that name (e.g. an `mcp-remote`
+/// stdio bridge to the same remote server, which is how Codex natively
+/// supports non-streamable-http remotes), merging our `url`-based override on
+/// top produces a hybrid entry with both `command` and `url` set, which
+/// Codex's config loader rejects outright (`url is not supported for
+/// stdio`), aborting the whole `thread/start`/`thread/resume` call. Even
+/// without a name collision, Claude's remote-server shape uses `headers`
+/// where Codex expects `http_headers`/`bearer_token_env_var`, so forwarding
+/// it verbatim silently drops auth headers. Remote MCP access for Codex
+/// should be configured natively in Codex's own config instead.
 fn codex_mcp_servers_from_claude_config(mcp_config: &str) -> Option<Value> {
     let parsed: Value = serde_json::from_str(mcp_config).ok()?;
     let servers = parsed
@@ -1709,6 +1727,13 @@ fn codex_mcp_servers_from_claude_config(mcp_config: &str) -> Option<Value> {
     for (name, server) in servers {
         let mut server = server.clone();
         if let Value::Object(ref mut object) = server {
+            let is_remote = matches!(
+                object.get("type").and_then(Value::as_str),
+                Some("http") | Some("sse")
+            );
+            if is_remote {
+                continue;
+            }
             object.remove("type");
         }
         codex_servers.insert(name.clone(), server);
@@ -3847,6 +3872,39 @@ mod tests {
         assert_eq!(server["env"]["CLAUDETTE_AGENT_MCP_TOKEN"], "secret");
         assert!(server.get("type").is_none());
         assert_eq!(value["params"]["config"]["model_reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn thread_start_request_drops_remote_mcp_servers_for_codex() {
+        // Regression test: a `"type": "http"`/`"sse"` (remote/url-based)
+        // Claude MCP server must not be forwarded into Codex's config
+        // override. Codex deep-merges this override onto the user's own
+        // `~/.codex/config.toml` layers by server name; if the user already
+        // has a `command`-based (stdio) entry under the same name — e.g. an
+        // `mcp-remote` bridge, which is how Codex natively reaches non-
+        // streamable-http remotes — merging in a `url` field produces a
+        // hybrid entry with both `command` and `url` set, which Codex's
+        // config loader rejects with `url is not supported for stdio`,
+        // aborting `thread/start` entirely.
+        let request = build_thread_start_request(
+            8,
+            CodexThreadRequestParams {
+                model: Some("gpt-5.4"),
+                cwd: Path::new("/tmp/work"),
+                permission_level: CodexPermissionLevel::Readonly,
+                fast_mode: false,
+                reasoning_effort: None,
+                custom_instructions: None,
+                mcp_config: Some(
+                    r#"{"mcpServers":{"datadog":{"type":"http","url":"https://mcp.us3.datadoghq.com/api/unstable/mcp-server/mcp","headers":{"DD_API_KEY":"secret"}},"puppeteer":{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-puppeteer"]}}}"#,
+                ),
+            },
+        );
+        let value = serde_json::to_value(request).unwrap();
+
+        let mcp_servers = &value["params"]["config"]["mcp_servers"];
+        assert!(mcp_servers.get("datadog").is_none());
+        assert_eq!(mcp_servers["puppeteer"]["command"], "npx");
     }
 
     #[test]
