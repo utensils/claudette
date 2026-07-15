@@ -165,7 +165,8 @@ pub fn snapshot_from_locals(
     // It would also be misleading: `chat_messages.cost_usd` is summed
     // across the whole workspace over 24h, so a stray Claude / Codex
     // turn earlier in the day would surface a dollar number under an
-    // Ollama header. Suppress it entirely for local backends.
+    // Ollama header. Suppress it for Ollama (the only local-runtime kind);
+    // add other local kinds to this guard if they're reintroduced.
     let track_cost = !matches!(provider_kind, AgentBackendKind::Ollama);
 
     let augment_cost = |agg: &LocalAggregate| -> f64 {
@@ -425,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_suppresses_cost_for_local_only_backends() {
+    fn snapshot_suppresses_cost_for_ollama_backend() {
         // Even when chat_messages.cost_usd has data (e.g. from a prior
         // paid-backend turn in the same workspace), the Ollama backend
         // should never surface a dollar readout — its inference is local
