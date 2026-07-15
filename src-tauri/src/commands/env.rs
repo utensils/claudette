@@ -1474,7 +1474,7 @@ pub async fn set_shell_env_denylist(
     // can call list_shell_env again without restarting.
     claudette::env::invalidate_shell_env();
     let cleaned: Vec<String> = patterns.into_iter().filter(|s| !s.is_empty()).collect();
-    std::thread::spawn(move || claudette::env::prewarm_shell_env(cleaned));
+    claudette::env::prewarm_shell_env(cleaned);
     Ok(())
 }
 
@@ -1513,7 +1513,7 @@ pub async fn reload_shell_env(state: State<'_, AppState>) -> Result<(), String> 
         })
         .unwrap_or_default();
     claudette::env::invalidate_shell_env();
-    std::thread::spawn(move || claudette::env::prewarm_shell_env(user_deny));
+    claudette::env::prewarm_shell_env(user_deny);
     Ok(())
 }
 
@@ -1630,7 +1630,7 @@ pub fn setup_env_watcher(app: AppHandle) {
                         .collect()
                 })
                 .unwrap_or_default();
-            std::thread::spawn(move || claudette::env::prewarm_shell_env(user_deny));
+            claudette::env::prewarm_shell_env(user_deny);
             let _ = app_for_cb.emit(
                 "env-cache-invalidated",
                 EnvCacheInvalidatedPayload {
