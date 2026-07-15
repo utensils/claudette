@@ -89,6 +89,14 @@ pub async fn resolve_with_registry_streaming(
     progress: Option<&dyn EnvProgressSink>,
     streaming: Option<std::sync::Arc<dyn crate::plugin_runtime::host_api::StreamingSink>>,
 ) -> ResolvedEnv {
+    // App startup probes the user's login shell on a background thread. Wait
+    // for that bounded probe before snapshotting providers so the first agent
+    // or terminal cannot permanently inherit launchd's minimal GUI PATH. An
+    // explicitly disabled shell-env tier neither needs nor uses the result.
+    if !disabled.contains("shell-env") {
+        crate::env::wait_for_shell_env_probe().await;
+    }
+
     let backend = PluginRegistryBackend::new(registry).with_streaming_sink(streaming);
     resolve_for_workspace_with_progress(&backend, cache, worktree, ws_info, disabled, progress)
         .await
@@ -377,10 +385,11 @@ pub async fn resolve_for_workspace_with_progress(
 ) -> ResolvedEnv {
     let mut names = backend.env_provider_names();
     // Inject shell-env as a synthetic precedence-0 source whenever the
-    // global probe has produced a cached value. It is NOT a plugin and
-    // does NOT go through the backend abstraction — it is handled inline
-    // in the loop below before any backend.is_plugin_disabled check.
-    if crate::env::shell_env_is_cached() {
+    // global probe has produced a cached value. Keep an explicitly-disabled
+    // cold source too: downstream command builders use that marker to avoid
+    // waiting for a probe whose result the user chose not to forward. It is
+    // NOT a plugin and does not go through the backend abstraction.
+    if crate::env::shell_env_is_cached() || disabled.contains("shell-env") {
         names.push("shell-env".to_string());
     }
     // Sort: primary by precedence (ascending, so higher overwrites on
@@ -1670,13 +1679,6 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         crate::env::invalidate_shell_env();
-        let mut vars = std::collections::BTreeMap::new();
-        vars.insert("LEAKED".into(), "no".into());
-        crate::env::install_shell_env_for_test(crate::env::ShellEnv {
-            vars,
-            inherited: std::collections::BTreeMap::new(),
-            captured_at: std::time::SystemTime::UNIX_EPOCH,
-        });
 
         let backend = MockBackend::new();
         let cache = EnvCache::new();
@@ -1694,7 +1696,7 @@ mod tests {
         crate::env::invalidate_shell_env();
 
         assert!(
-            !resolved.vars.contains_key("LEAKED"),
+            resolved.vars.is_empty(),
             "disabled shell-env must not contribute vars",
         );
         let shell_source = resolved

@@ -14,8 +14,8 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
-use std::sync::{Arc, OnceLock, RwLock};
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::{Duration, SystemTime};
 
 /// Snapshot of `std::env::vars_os()` captured before any other env
 /// mutation. Used to diff the shell-probe output and forward only
@@ -28,6 +28,33 @@ static LAUNCH_ENV: OnceLock<BTreeMap<String, String>> = OnceLock::new();
 /// release the lock immediately and the writer never blocks on long
 /// downstream work.
 static SHELL_ENV: RwLock<Option<Arc<ShellEnv>>> = RwLock::new(None);
+
+/// Lifecycle of the asynchronous shell probe. This is separate from
+/// `SHELL_ENV`: a completed probe may legitimately produce no environment
+/// (`$SHELL` unset, invalid shell, timeout), and waiters must still be released
+/// rather than delaying every future subprocess spawn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellEnvProbePhase {
+    Idle,
+    Running,
+    Complete,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ShellEnvProbeState {
+    generation: u64,
+    phase: ShellEnvProbePhase,
+}
+
+static SHELL_ENV_PROBE_STATE: Mutex<ShellEnvProbeState> = Mutex::new(ShellEnvProbeState {
+    generation: 0,
+    phase: ShellEnvProbePhase::Idle,
+});
+
+/// The interactive probe and its login-only fallback each have a five-second
+/// process timeout. Keep the async readiness gate bounded slightly above both.
+const SHELL_ENV_PROBE_WAIT_TIMEOUT: Duration = Duration::from_secs(11);
+const SHELL_ENV_PROBE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Captured set of env vars from the user's interactive shell init
 /// (after diff vs `LAUNCH_ENV` and after denylist filtering).
@@ -70,6 +97,77 @@ pub fn shell_env() -> Option<Arc<ShellEnv>> {
 /// avoid triggering the 5s probe on a Tokio worker.
 pub fn shell_env_is_cached() -> bool {
     SHELL_ENV.read().map(|g| g.is_some()).unwrap_or(false)
+}
+
+fn shell_env_probe_phase() -> ShellEnvProbePhase {
+    SHELL_ENV_PROBE_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .phase
+}
+
+fn begin_shell_env_probe() -> Option<u64> {
+    let mut state = SHELL_ENV_PROBE_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.phase != ShellEnvProbePhase::Idle {
+        return None;
+    }
+    state.phase = ShellEnvProbePhase::Running;
+    Some(state.generation)
+}
+
+/// Publish a worker's result only if it still belongs to the active probe.
+/// Invalidation increments the generation, preventing a stale worker from
+/// overwriting a newer reload or releasing its readiness gate early.
+fn finish_shell_env_probe(generation: u64, env: Option<Arc<ShellEnv>>) {
+    let mut state = SHELL_ENV_PROBE_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.generation != generation || state.phase != ShellEnvProbePhase::Running {
+        return;
+    }
+    if let Some(env) = env
+        && let Ok(mut guard) = SHELL_ENV.write()
+    {
+        *guard = Some(env);
+    }
+    state.phase = ShellEnvProbePhase::Complete;
+}
+
+fn abandon_running_shell_env_probe() {
+    let mut state = SHELL_ENV_PROBE_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.phase == ShellEnvProbePhase::Running {
+        // Invalidate the worker's generation so a result arriving after the
+        // readiness timeout cannot alter the fallback environment.
+        state.generation = state.generation.wrapping_add(1);
+        state.phase = ShellEnvProbePhase::Complete;
+    }
+}
+
+/// Wait asynchronously for an active shell-environment probe to finish.
+///
+/// Startup marks the probe as running before it launches the worker thread, so
+/// subprocesses created immediately after app setup cannot race ahead with the
+/// minimal GUI environment. A failed probe also transitions to `Complete`,
+/// preserving the existing process-environment fallback without repeatedly
+/// delaying later spawns. The hard timeout is defensive; the probe subprocess
+/// itself is already bounded.
+pub async fn wait_for_shell_env_probe() {
+    let deadline = tokio::time::Instant::now() + SHELL_ENV_PROBE_WAIT_TIMEOUT;
+    while shell_env_probe_phase() == ShellEnvProbePhase::Running {
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(
+                target: "claudette::env",
+                "timed out waiting for shell-env probe; using available process environment",
+            );
+            abandon_running_shell_env_probe();
+            break;
+        }
+        tokio::time::sleep(SHELL_ENV_PROBE_POLL_INTERVAL).await;
+    }
 }
 
 /// Parse a NUL-delimited `env`-style dump (`KEY=VALUE\0KEY=VALUE\0...`).
@@ -352,6 +450,11 @@ pub fn diff_against_baseline(
 /// Invalidate the cached shell env. Next call to `shell_env()` returns
 /// `None` until the probe re-runs. Used by the rc-file watcher.
 pub fn invalidate_shell_env() {
+    let mut state = SHELL_ENV_PROBE_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.generation = state.generation.wrapping_add(1);
+    state.phase = ShellEnvProbePhase::Idle;
     if let Ok(mut guard) = SHELL_ENV.write() {
         *guard = None;
     }
@@ -390,6 +493,18 @@ pub fn run_probe_pipeline(
     baseline: &BTreeMap<String, String>,
     user_deny: &[String],
 ) -> Option<Arc<ShellEnv>> {
+    let env = capture_shell_env(shell, baseline, user_deny)?;
+    if let Ok(mut guard) = SHELL_ENV.write() {
+        *guard = Some(Arc::clone(&env));
+    }
+    Some(env)
+}
+
+fn capture_shell_env(
+    shell: &std::path::Path,
+    baseline: &BTreeMap<String, String>,
+    user_deny: &[String],
+) -> Option<Arc<ShellEnv>> {
     let raw = probe_shell_env_with_shell(shell)?;
     let (added, inherited_raw) = partition_against_baseline(&raw, baseline);
     let (kept_added, dropped_added) = apply_denylist(&added, user_deny);
@@ -401,15 +516,11 @@ pub fn run_probe_pipeline(
         n_denied = dropped_added.len(),
         "shell_env probe captured",
     );
-    let env = Arc::new(ShellEnv {
+    Some(Arc::new(ShellEnv {
         vars: kept_added,
         inherited: kept_inherited,
         captured_at: SystemTime::now(),
-    });
-    if let Ok(mut guard) = SHELL_ENV.write() {
-        *guard = Some(Arc::clone(&env));
-    }
-    Some(env)
+    }))
 }
 
 /// Prewarm the shell-env cache on a `std::thread::spawn`. Idempotent:
@@ -420,13 +531,20 @@ pub fn prewarm_shell_env(user_deny: Vec<String>) {
     if shell_env_is_cached() {
         return;
     }
+    let Some(generation) = begin_shell_env_probe() else {
+        return;
+    };
     let shell = match std::env::var("SHELL") {
         Ok(s) => s,
-        Err(_) => return,
+        Err(_) => {
+            finish_shell_env_probe(generation, None);
+            return;
+        }
     };
     let baseline = LAUNCH_ENV.get().cloned().unwrap_or_default();
     std::thread::spawn(move || {
-        let _ = run_probe_pipeline(std::path::Path::new(&shell), &baseline, &user_deny);
+        let env = capture_shell_env(std::path::Path::new(&shell), &baseline, &user_deny);
+        finish_shell_env_probe(generation, env);
     });
 }
 
@@ -967,6 +1085,9 @@ mod tests {
     /// probe. We assert both invariants here.
     #[test]
     fn prewarm_shell_path_is_idempotent() {
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         prewarm_shell_path();
         prewarm_shell_path();
         // A follow-up direct call must still succeed without panicking
@@ -984,6 +1105,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn prewarm_populates_shell_path_cache_on_unix() {
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // prewarm_shell_path is now a shim over prewarm_shell_env.
         // Give the background thread a moment to populate the cache.
         prewarm_shell_path();
@@ -1013,9 +1137,46 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn shell_path_is_cached_is_true_after_prewarm() {
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         prewarm_shell_path();
         // Non-panicking return is the invariant we can assert here.
         let _ = shell_path_is_cached();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_readiness_waits_for_running_probe() {
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // A prewarm smoke test may have started the real shell worker on a
+        // parallel test thread. Let it finish before installing synthetic
+        // state for this timing assertion.
+        while shell_env_probe_phase() == ShellEnvProbePhase::Running {
+            std::thread::sleep(SHELL_ENV_PROBE_POLL_INTERVAL);
+        }
+
+        invalidate_shell_env();
+        let generation = begin_shell_env_probe().expect("synthetic probe should start");
+
+        let finisher = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(75));
+            finish_shell_env_probe(generation, None);
+        });
+        let started = std::time::Instant::now();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(wait_for_shell_env_probe());
+
+        assert!(started.elapsed() >= Duration::from_millis(50));
+        assert_eq!(shell_env_probe_phase(), ShellEnvProbePhase::Complete);
+        finisher.join().unwrap();
+        invalidate_shell_env();
     }
 
     // ---- parse_env_dump tests -----------------------------------------------

@@ -11,6 +11,8 @@ Claudette captures that environment for you.
 
 At app launch, Claudette runs your shell as `$SHELL -l -i -c 'env -0'` (or the equivalent fish command), captures the result, diffs it against the launchd / desktop-launcher baseline, applies a denylist, and exposes the remaining vars as a low-precedence env tier. Per-project env from direnv, mise, and dotenv plugins layers on top — they always win on key collision.
 
+The probe runs in the background, but the first agent or integrated terminal waits for that bounded probe before spawning. This ensures sessions opened immediately after a Finder, Dock, Spotlight, or desktop-launcher start receive the captured `PATH` instead of permanently inheriting the minimal GUI `PATH`. If the probe fails or times out, Claudette falls back to the environment supplied by the OS.
+
 You can inspect and control what was captured at **Settings → Environment → Shell environment**.
 
 ## Denylist
