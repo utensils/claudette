@@ -90,7 +90,7 @@ pub async fn run_turn(
 
     let claude_path = resolve_claude_path().await;
     let built_command =
-        build_agent_command(claude_path.as_os_str(), &args, working_dir, resolved_env);
+        build_agent_command(claude_path.as_os_str(), &args, working_dir, resolved_env).await;
     let invocation_program = built_command.invocation_program.clone();
     let invocation_args = built_command.invocation_args.clone();
     let mut cmd = built_command.command;
