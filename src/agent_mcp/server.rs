@@ -274,8 +274,9 @@ fn tools_list_result(interaction_enabled: bool) -> Value {
             }
         }, {
             "name": MONITOR_TOOL_NAME,
-            "description": "Subscribe this chat session to future output lines from a background Bash task. \
-                           The task id must come from a prior Bash run_in_background result.",
+            "description": "Subscribe this chat session to future output lines from a background task \
+                           (Bash run_in_background, a backgrounded Agent/subagent, or a Workflow). \
+                           The task id comes from the originating tool result or task notification.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

@@ -289,6 +289,31 @@ pub fn parse_background_task_binding(text: &str) -> Option<BackgroundTaskBinding
     })
 }
 
+/// Parse the `Workflow` tool's background-launch announcement, e.g.
+/// `Workflow launched in background. Task ID: wf_abc123\nSummary: ...`.
+/// Returns the `task_id` that the eventual terminal `task_notification` will
+/// carry, so a Workflow can arm the background-task wake the same way a
+/// background Bash binding does — a during-turn signal that is guaranteed to
+/// arrive (unlike a `running` System notification, which we cannot rely on for
+/// every task type). Unlike a Bash binding there is no single output path here
+/// (the tool reports a transcript *directory*), so only the id is returned; the
+/// wake still gets the task's output via the terminal notification's own
+/// `output-file`.
+pub fn parse_workflow_task_binding(text: &str) -> Option<String> {
+    const PREFIX: &str = "Workflow launched in background. Task ID:";
+    let start = text.find(PREFIX)? + PREFIX.len();
+    let rest = text[start..].trim_start();
+    let task_id = rest
+        .split(|c: char| c.is_whitespace())
+        .next()?
+        .trim_end_matches('.');
+    if task_id.is_empty() {
+        None
+    } else {
+        Some(task_id.to_string())
+    }
+}
+
 pub fn parse_task_notification(text: &str) -> Option<TaskNotification> {
     if !text.contains("<task-notification") {
         return None;
@@ -406,6 +431,36 @@ mod tests {
         .unwrap();
         assert_eq!(binding.task_id, "task_123");
         assert_eq!(binding.output_path, "/tmp/out.log");
+    }
+
+    #[test]
+    fn parses_workflow_task_binding() {
+        let id = parse_workflow_task_binding(
+            "Workflow launched in background. Task ID: w998sx0z2\nSummary: investigate the thing\nTranscript dir: /tmp/x",
+        )
+        .unwrap();
+        assert_eq!(id, "w998sx0z2");
+    }
+
+    #[test]
+    fn parses_workflow_task_binding_with_trailing_period() {
+        let id =
+            parse_workflow_task_binding("Workflow launched in background. Task ID: wf_abc123.")
+                .unwrap();
+        assert_eq!(id, "wf_abc123");
+    }
+
+    #[test]
+    fn rejects_non_workflow_binding_text() {
+        assert!(parse_workflow_task_binding("some unrelated tool output").is_none());
+        assert!(parse_workflow_task_binding("Workflow launched in background. Task ID:").is_none());
+        // A Bash binding must not be mistaken for a Workflow launch.
+        assert!(
+            parse_workflow_task_binding(
+                "Command running in background with ID: task_1. Output is being written to: /tmp/o",
+            )
+            .is_none()
+        );
     }
 
     #[test]

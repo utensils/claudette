@@ -15,9 +15,13 @@ When the built-in Claudette MCP bridge is available, agents can use these native
 | `CronCreate` | Create a routine from a standard 5-field cron expression in local time. |
 | `CronList` | List persisted wakeups and routines. |
 | `CronDelete` | Delete a routine by id or name. |
-| `Monitor` | Subscribe to future output lines from a background Bash task instead of polling. |
+| `Monitor` | Subscribe to future output lines from a background task (Bash `run_in_background`, a backgrounded Agent/subagent, or a Workflow) instead of polling. |
 
 Wakeups and routines survive app restarts. If a fire time passes while Claudette is closed, the scheduler fires the overdue task when the app starts again.
+
+## Background task completion
+
+When an agent starts work in the background — a Bash command with `run_in_background`, a backgrounded Agent/subagent, or a Workflow — Claudette watches the task and automatically re-invokes the agent when it finishes, so the agent reports the result back to you without needing a manual nudge. This works for every background task type the agent can launch, not just Bash, and long-running tasks are waited on until they complete rather than being abandoned.
 
 If the owning workspace is archived, deleted, or otherwise has no worktree when a task comes due, Claudette pauses the task instead of retrying it forever. The Automation settings row and `routine list` payload include the disabled reason and last error so you can delete or recreate the routine deliberately.
 

@@ -250,6 +250,163 @@ pub(super) fn is_final_terminal_task_status(status: &str) -> bool {
     is_terminal_task_status(status)
 }
 
+/// Whether a `task_notification` status should *arm* the background-task wake.
+/// Any non-terminal status (`running`, `starting`, or an unknown/absent value
+/// treated as running) means the task is still in flight, so it belongs in
+/// `running_background_tasks` — the set the `Result`-event gate reads to decide
+/// whether to schedule a wake. Terminal statuses are handled by the removal
+/// path in [`apply_task_notification_status`] instead.
+fn should_arm_wake_for_status(status: &str) -> bool {
+    !is_terminal_task_status(status)
+}
+
+/// Arm the background-task wake for *any* background task the Claude CLI
+/// reports via a trusted `task_notification` System event — not just Bash.
+///
+/// The CLI emits `task_notification` (a live-stream-only event; it is never
+/// persisted to the `.jsonl` transcript) for every background task type:
+/// background Bash, the `Agent` tool run in the background, and the `Workflow`
+/// tool. Historically only Bash tasks were tracked — and only by parsing
+/// Bash's `Command running in background with ID:` tool-result *text*. So a
+/// Workflow or backgrounded subagent left `running_background_tasks` empty,
+/// the `Result`-event wake gate never armed (see `send.rs`
+/// `should_wake_background_tasks`), and the eventual terminal notification hit
+/// an idle stream with no armed watcher — the model was never re-invoked and
+/// silently never reported back to the user.
+///
+/// Call this ONLY from the trusted System-event path (the CLI's structured
+/// event), never from parsed tool-result *text*, so a prompt-injected fake
+/// `<task-notification>` can't keep a session awake or smuggle in an
+/// arbitrary output path.
+pub(super) async fn arm_background_task_from_system_notification(
+    app: &AppHandle,
+    chat_session_id: &str,
+    task_id: &str,
+    output_file: Option<&str>,
+) {
+    let app_state = app.state::<AppState>();
+    let mut agents = app_state.agents.write().await;
+    if let Some(session) = agents.get_mut(chat_session_id) {
+        session.running_background_tasks.insert(task_id.to_string());
+        // Output path is trusted here: it originates from the CLI's own
+        // System event, not from tool-result text. Recording it lets the
+        // wake prompt inline the task's output (see
+        // `clone_trusted_background_output_path`).
+        if let Some(path) = output_file.map(str::trim).filter(|s| !s.is_empty()) {
+            session
+                .background_task_output_paths
+                .insert(task_id.to_string(), path.to_string());
+        }
+    }
+}
+
+/// Apply the task-status bookkeeping for a single stream event that may carry a
+/// `task_notification` — the trusted System form and both user-turn `<task-
+/// notification>` text forms. Terminal statuses remove the task from
+/// `running_background_tasks` (via [`apply_task_notification_status`]);
+/// non-terminal System notifications re-arm it. Shared by the wake's injected-
+/// turn loop and [`drain_pending_task_notifications`] so both stay in sync.
+async fn apply_stream_task_notification(
+    event: &AgentEvent,
+    app: &AppHandle,
+    db_path: &Path,
+    workspace_id: &str,
+    chat_session_id: &str,
+) {
+    if let AgentEvent::Stream(StreamEvent::System {
+        subtype,
+        task_id: Some(task_id),
+        tool_use_id,
+        output_file,
+        summary,
+        status: Some(status),
+        ..
+    }) = event
+        && subtype == "task_notification"
+    {
+        apply_task_notification_status(
+            app,
+            db_path,
+            workspace_id,
+            chat_session_id,
+            task_id,
+            tool_use_id.as_deref(),
+            status,
+            summary.as_deref(),
+            output_file.as_deref(),
+        )
+        .await;
+        if should_arm_wake_for_status(status) {
+            arm_background_task_from_system_notification(
+                app,
+                chat_session_id,
+                task_id,
+                output_file.as_deref(),
+            )
+            .await;
+        }
+    }
+
+    if let AgentEvent::Stream(StreamEvent::User { message, .. }) = event {
+        let texts: Vec<&str> = match &message.content {
+            claudette::agent::UserMessageContent::Text(body) => vec![body.as_str()],
+            claudette::agent::UserMessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|block| match block {
+                    claudette::agent::UserContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect(),
+        };
+        for text in texts {
+            if let Some(notification) = parse_task_notification(text) {
+                let status = notification.status.as_deref().unwrap_or("running");
+                apply_task_notification_status(
+                    app,
+                    db_path,
+                    workspace_id,
+                    chat_session_id,
+                    &notification.task_id,
+                    notification.tool_use_id.as_deref(),
+                    status,
+                    notification.summary.as_deref(),
+                    notification.output_file.as_deref(),
+                )
+                .await;
+            }
+        }
+    }
+}
+
+/// Drain any events currently buffered on the session-wide broadcast receiver
+/// `rx` and apply their task-status bookkeeping. Used to catch a *second*
+/// background task that completes in the narrow window between the wake's first
+/// loop breaking on one completion and the injected turn subscribing its own
+/// receiver. That notification is retained only by this (still-alive, undrained)
+/// broadcast receiver; without draining it the second task is never removed
+/// from `running_background_tasks`, leaving a phantom that the continue-on-
+/// timeout wake would spin on forever. Non-blocking — returns once the receiver
+/// is momentarily empty.
+async fn drain_pending_task_notifications(
+    rx: &mut tokio::sync::broadcast::Receiver<AgentEvent>,
+    app: &AppHandle,
+    db_path: &Path,
+    workspace_id: &str,
+    chat_session_id: &str,
+) {
+    use tokio::sync::broadcast::error::TryRecvError;
+    loop {
+        match rx.try_recv() {
+            Ok(event) => {
+                apply_stream_task_notification(&event, app, db_path, workspace_id, chat_session_id)
+                    .await;
+            }
+            Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
+            Err(TryRecvError::Lagged(_)) => continue,
+        }
+    }
+}
+
 pub(super) fn should_defer_persistent_restart(session: &AgentSessionState) -> bool {
     should_defer_persistent_restart_for_state(
         session.persistent_session.is_some(),
@@ -268,6 +425,12 @@ fn should_defer_persistent_restart_for_state(
 pub(super) struct BackgroundTaskInputTracker {
     bash_inputs: HashMap<usize, BashInput>,
     bash_tool_use_ids: HashSet<String>,
+    /// Tool-use ids of `Workflow` invocations seen this turn. The Workflow tool
+    /// always runs in the background, so any of its tool-results is a trusted
+    /// launch announcement (`Workflow launched in background. Task ID: …`) we
+    /// can arm the wake from — the belt-and-suspenders companion to the
+    /// System-event arming, using a during-turn signal guaranteed to arrive.
+    workflow_tool_use_ids: HashSet<String>,
 }
 
 struct BashInput {
@@ -296,6 +459,20 @@ impl BackgroundTaskInputTracker {
                     start_observed: false,
                 },
             );
+        }
+
+        // Track Workflow tool-uses so their launch announcement can be trusted
+        // as a wake-arming signal (see `is_workflow_tool_result`).
+        if let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockStart {
+                    content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
+                    ..
+                },
+        }) = event
+            && name == "Workflow"
+        {
+            self.workflow_tool_use_ids.insert(id.clone());
         }
 
         if let AgentEvent::Stream(StreamEvent::Stream {
@@ -327,6 +504,16 @@ impl BackgroundTaskInputTracker {
 
     pub(super) fn finish_bash_tool_result(&mut self, tool_use_id: &str) {
         self.bash_tool_use_ids.remove(tool_use_id);
+    }
+
+    /// Whether this tool-result belongs to a `Workflow` tool-use — i.e. its
+    /// text is a trusted `Workflow launched in background. Task ID: …` binding.
+    pub(super) fn is_workflow_tool_result(&self, tool_use_id: &str) -> bool {
+        self.workflow_tool_use_ids.contains(tool_use_id)
+    }
+
+    pub(super) fn finish_workflow_tool_result(&mut self, tool_use_id: &str) {
+        self.workflow_tool_use_ids.remove(tool_use_id);
     }
 
     pub(super) fn mark_bash_tool_started(&mut self, tool_use_id: &str) {
@@ -569,7 +756,7 @@ fn build_background_task_completion_prompt(
     let task_id = escape_task_notification_field(&completion.task_id);
     let status = escape_task_notification_field(&completion.status);
     let mut prompt = format!(
-        "A background Bash task completed. Respond to the user now with the result.\n\n<task-notification>\n<task-id>{task_id}</task-id>\n<status>{status}</status>"
+        "A background task completed. Respond to the user now with the result.\n\n<task-notification>\n<task-id>{task_id}</task-id>\n<status>{status}</status>"
     );
     if let Some(tool_use_id) = completion.tool_use_id.as_deref() {
         let tool_use_id = escape_task_notification_field(tool_use_id);
@@ -659,7 +846,26 @@ pub(super) fn schedule_background_task_wake(
             let event = match tokio::time::timeout(Duration::from_secs(600), rx.recv()).await {
                 Ok(Ok(event)) => event,
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => {
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break None,
+                Err(_elapsed) => {
+                    // The stream was merely silent for 600s — normal for a long
+                    // background task (a multi-minute Workflow) whose parent
+                    // session is idle. Keep the SAME subscription and keep
+                    // waiting rather than abandoning the task; dropping rx to
+                    // re-subscribe would risk missing a completion emitted in
+                    // the gap. Only give up if the task is no longer tracked
+                    // (e.g. the user killed it from the terminal) or the
+                    // persistent session went away.
+                    let still_pending = {
+                        let agents = app_state.agents.read().await;
+                        agents.get(&chat_session_id).is_some_and(|session| {
+                            !session.running_background_tasks.is_empty()
+                                && session.persistent_session.is_some()
+                        })
+                    };
+                    if still_pending {
+                        continue;
+                    }
                     break None;
                 }
             };
@@ -718,6 +924,11 @@ pub(super) fn schedule_background_task_wake(
         };
 
         let Some(completion) = completion else {
+            // Loop only exits without a completion when the persistent process
+            // is gone (Closed / ProcessExited) or the task is no longer tracked
+            // — in every case there is nothing left to wake, so just clear the
+            // in-flight flag. (A mere silent-stream timeout keeps waiting above
+            // and never lands here.)
             let mut agents = app_state.agents.write().await;
             if let Some(session) = agents.get_mut(&chat_session_id) {
                 session.background_wake_active = false;
@@ -754,6 +965,13 @@ pub(super) fn schedule_background_task_wake(
                 session.remember_local_user_message_uuid(local_user_message_uuid.clone());
             }
         }
+        // Catch any second task that completed while we were building this
+        // prompt — before the injected turn subscribes its own receiver — so it
+        // is removed from `running_background_tasks` instead of becoming a
+        // phantom the wake would spin on. `rx` is the first loop's still-alive
+        // broadcast receiver (not yet dropped).
+        drain_pending_task_notifications(&mut rx, &app, &db_path, &workspace_id, &chat_session_id)
+            .await;
         let handle = match ps
             .send_turn_with_uuid(&prompt, &[], &local_user_message_uuid)
             .await
@@ -785,79 +1003,34 @@ pub(super) fn schedule_background_task_wake(
         }
         crate::tray::rebuild_tray(&app);
 
-        let mut rx = handle.event_rx;
+        let mut turn_rx = handle.event_rx;
         let mut last_assistant_msg_id: Option<String> = None;
         let mut pending_thinking: Option<String> = None;
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
+        // Gap 4: a wedged CLI (no Result, no exit) would block this loop forever
+        // and leave `background_wake_active` stuck true, permanently rejecting
+        // every future wake for the session. A live wake turn streams events
+        // frequently, so 600s of total silence is a hang — bail and skip the
+        // retry re-arm below rather than stacking a wake behind a maybe-live turn.
+        let mut wake_turn_wedged = false;
 
-        while let Some(event) = rx.recv().await {
-            if let AgentEvent::Stream(StreamEvent::System {
-                subtype,
-                task_id: Some(task_id),
-                tool_use_id,
-                output_file,
-                summary,
-                status: Some(status),
-                ..
-            }) = &event
-                && subtype == "task_notification"
-            {
-                apply_task_notification_status(
-                    &app,
-                    &db_path,
-                    &workspace_id,
-                    &chat_session_id,
-                    task_id,
-                    tool_use_id.as_deref(),
-                    status,
-                    summary.as_deref(),
-                    output_file.as_deref(),
-                )
-                .await;
-            }
-
-            if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event
-                && let claudette::agent::UserMessageContent::Text(body) = &message.content
-                && let Some(notification) = parse_task_notification(body)
-            {
-                let status = notification.status.as_deref().unwrap_or("running");
-                apply_task_notification_status(
-                    &app,
-                    &db_path,
-                    &workspace_id,
-                    &chat_session_id,
-                    &notification.task_id,
-                    notification.tool_use_id.as_deref(),
-                    status,
-                    notification.summary.as_deref(),
-                    notification.output_file.as_deref(),
-                )
-                .await;
-            }
-
-            if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event
-                && let claudette::agent::UserMessageContent::Blocks(blocks) = &message.content
-            {
-                for block in blocks {
-                    if let claudette::agent::UserContentBlock::Text { text } = block
-                        && let Some(notification) = parse_task_notification(text)
-                    {
-                        let status = notification.status.as_deref().unwrap_or("running");
-                        apply_task_notification_status(
-                            &app,
-                            &db_path,
-                            &workspace_id,
-                            &chat_session_id,
-                            &notification.task_id,
-                            notification.tool_use_id.as_deref(),
-                            status,
-                            notification.summary.as_deref(),
-                            notification.output_file.as_deref(),
-                        )
-                        .await;
-                    }
+        loop {
+            let event = match tokio::time::timeout(Duration::from_secs(600), turn_rx.recv()).await {
+                Ok(Some(event)) => event,
+                Ok(None) => break,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        target: "claudette::chat",
+                        chat_session_id = %chat_session_id,
+                        "background wake turn produced no events for 600s; abandoning to avoid a stuck wake"
+                    );
+                    wake_turn_wedged = true;
+                    break;
                 }
-            }
+            };
+
+            apply_stream_task_notification(&event, &app, &db_path, &workspace_id, &chat_session_id)
+                .await;
 
             super::route_turn_control_request(&app, &workspace_id, &chat_session_id, &event).await;
 
@@ -952,7 +1125,9 @@ pub(super) fn schedule_background_task_wake(
         };
         crate::tray::rebuild_tray(&app);
 
-        if should_retry {
+        // Skip the re-arm if the turn wedged: a duplicate wake stacked behind a
+        // possibly-still-live turn would violate the single-turn invariant.
+        if should_retry && !wake_turn_wedged {
             tokio::time::sleep(Duration::from_secs(5)).await;
             schedule_background_task_wake(app, db_path, workspace_id, chat_session_id);
         }
@@ -964,7 +1139,7 @@ mod tests {
     use super::{
         BackgroundTaskCompletion, BackgroundTaskInputTracker,
         build_background_task_completion_prompt, markdown_code_fence_for,
-        should_defer_persistent_restart_for_state, terminal_text,
+        should_arm_wake_for_status, should_defer_persistent_restart_for_state, terminal_text,
     };
     use claudette::agent::{
         AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent, UserContentBlock,
@@ -1062,6 +1237,85 @@ mod tests {
             !tracker.is_bash_tool_result("cmd-1"),
             "a structured Codex terminal completion must prevent the legacy ToolResult fallback"
         );
+    }
+
+    #[test]
+    fn wake_prompt_is_tool_agnostic_not_bash_specific() {
+        // Regression: the wake prompt used to say "A background Bash task
+        // completed." which was both misleading for Workflow/Agent tasks and a
+        // symptom of the Bash-only design that never woke them. It must be
+        // tool-agnostic now that any background task can arm the wake.
+        let completion = BackgroundTaskCompletion {
+            task_id: "wf_123".to_string(),
+            tool_use_id: Some("toolu_1".to_string()),
+            output_file: None,
+            status: "completed".to_string(),
+            summary: Some("workflow done".to_string()),
+        };
+        let prompt = build_background_task_completion_prompt(&completion, None);
+        assert!(
+            prompt.starts_with("A background task completed."),
+            "prompt should be tool-agnostic, got: {prompt}"
+        );
+        assert!(
+            !prompt.contains("Bash"),
+            "wake prompt must not hardcode Bash: {prompt}"
+        );
+    }
+
+    #[test]
+    fn arms_wake_only_for_non_terminal_statuses() {
+        // The wake is armed off a task's non-terminal (in-flight) notification;
+        // terminal statuses are handled by the removal path instead. This is
+        // what lets Workflow/Agent tasks — not just Bash — schedule a wake.
+        for running in ["running", "starting", "queued", "in_progress", "unknown"] {
+            assert!(
+                should_arm_wake_for_status(running),
+                "non-terminal status {running:?} should arm the wake"
+            );
+        }
+        for terminal in [
+            "completed",
+            "failed",
+            "stopped",
+            "killed",
+            "cancelled",
+            "canceled",
+            "COMPLETED",
+        ] {
+            assert!(
+                !should_arm_wake_for_status(terminal),
+                "terminal status {terminal:?} must not arm the wake"
+            );
+        }
+    }
+
+    #[test]
+    fn tracks_workflow_tool_use_for_binding_trust() {
+        // The Workflow tool always runs in the background, so observing its
+        // tool-use marks the tool_use_id as a trusted launch-announcement
+        // source. This is what lets a Workflow arm the wake from its
+        // "Workflow launched in background. Task ID: …" tool-result — a
+        // during-turn signal guaranteed to arrive.
+        let mut tracker = BackgroundTaskInputTracker::default();
+        assert!(!tracker.is_workflow_tool_result("wf-tool-1"));
+
+        tracker.observe_bash_input_delta(&AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index: 2,
+                content_block: Some(StartContentBlock::ToolUse {
+                    id: "wf-tool-1".to_string(),
+                    name: "Workflow".to_string(),
+                    input: None,
+                }),
+            },
+        }));
+        assert!(tracker.is_workflow_tool_result("wf-tool-1"));
+        // A Bash tool-use must not be mistaken for a Workflow launch.
+        assert!(!tracker.is_workflow_tool_result("cmd-x"));
+
+        tracker.finish_workflow_tool_result("wf-tool-1");
+        assert!(!tracker.is_workflow_tool_result("wf-tool-1"));
     }
 
     #[test]

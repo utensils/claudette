@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::background::{
     AgentBackgroundTaskEventKind, parse_background_task_binding, parse_task_notification,
+    parse_workflow_task_binding,
 };
 use claudette::agent::{
     self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
@@ -43,9 +44,10 @@ mod team_agents;
 
 use self::background_tasks::{
     BackgroundTaskInputTracker, append_agent_bash_output, apply_task_notification_status,
-    emit_agent_background_task_event, get_or_create_agent_shell_terminal_tab,
-    is_final_terminal_task_status, mirror_background_task_output, schedule_background_task_wake,
-    should_defer_persistent_restart, terminal_text,
+    arm_background_task_from_system_notification, emit_agent_background_task_event,
+    get_or_create_agent_shell_terminal_tab, is_final_terminal_task_status,
+    mirror_background_task_output, schedule_background_task_wake, should_defer_persistent_restart,
+    terminal_text,
 };
 use self::team_agents::TeamAgentInputTracker;
 pub(super) use self::team_agents::team_agent_session_tabs_enabled;
@@ -380,6 +382,14 @@ async fn reset_persistent_session_after_auth_failure(
         session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
         session.claude_remote_control_monitor_pid = None;
         session.mcp_bridge = None;
+        // The CLI process (and any background tasks it owned) is about to be
+        // killed, so their terminal notifications can never arrive. Drop the
+        // tracking state or it leaks as phantom entries — perpetual
+        // `IdleWithBackground`, and (with the continue-on-timeout wake) a wake
+        // that spins forever against a task that will never complete.
+        session.running_background_tasks.clear();
+        session.background_task_output_paths.clear();
+        session.background_wake_active = false;
         (pid, ended_sid)
     };
 
@@ -2630,6 +2640,25 @@ pub async fn send_chat_message(
                 {
                     background_task_inputs.finish_bash_tool_result(task_id);
                 }
+                // Arm the wake for ANY background task the CLI reports — not
+                // just Bash. A non-terminal (`running`/`starting`) notification
+                // means the task is still in flight, so track it in
+                // `running_background_tasks`; the `Result`-event gate below then
+                // schedules `schedule_background_task_wake`, which catches the
+                // eventual terminal notification and re-invokes the model. This
+                // is the trusted System-event path, so the Workflow tool and
+                // backgrounded `Agent` subagents get the same auto-report-back
+                // that background Bash already had. Terminal statuses are
+                // removed by `apply_task_notification_status` above.
+                if !is_final_terminal_task_status(status) {
+                    arm_background_task_from_system_notification(
+                        &app,
+                        &chat_session_id_for_stream,
+                        task_id,
+                        output_file.as_deref(),
+                    )
+                    .await;
+                }
             }
 
             background_task_inputs.observe_bash_input_delta(&event);
@@ -2782,6 +2811,33 @@ pub async fn send_chat_message(
                                     content,
                                 } => {
                                     let text = tool_result_content_text(content);
+                                    // Workflow tool launched in the background:
+                                    // arm the wake from its trusted launch
+                                    // announcement (`Workflow launched in
+                                    // background. Task ID: …`). This during-turn
+                                    // signal is guaranteed to arrive — the
+                                    // belt-and-suspenders companion to the
+                                    // System-event arming — so a Workflow reports
+                                    // back on completion just like background
+                                    // Bash. Only trusted because the tool-use was
+                                    // observed as a `Workflow` invocation.
+                                    if !is_replay
+                                        && background_task_inputs
+                                            .is_workflow_tool_result(tool_use_id)
+                                        && let Some(task_id) = parse_workflow_task_binding(&text)
+                                    {
+                                        {
+                                            let app_state = app.state::<AppState>();
+                                            let mut agents = app_state.agents.write().await;
+                                            if let Some(session) =
+                                                agents.get_mut(&chat_session_id_for_stream)
+                                            {
+                                                session.running_background_tasks.insert(task_id);
+                                            }
+                                        }
+                                        background_task_inputs
+                                            .finish_workflow_tool_result(tool_use_id);
+                                    }
                                     let background_binding = parse_background_task_binding(&text);
                                     let is_known_bash_tool_result =
                                         background_task_inputs.is_bash_tool_result(tool_use_id);
@@ -3126,6 +3182,16 @@ pub async fn send_chat_message(
                         crate::state::ClaudeRemoteControlStatus::disabled();
                     session.claude_remote_control_monitor_pid = None;
                     session.mcp_bridge = None;
+                    // The process that owned any background tasks just died, so
+                    // their terminal notifications can never arrive. Drop the
+                    // tracking state instead of leaking phantom entries (which
+                    // would keep the session pinned `IdleWithBackground` and,
+                    // with the continue-on-timeout wake, spin a wake forever).
+                    // Also cleanly terminates any in-flight wake: its
+                    // `still_pending` check flips false on the next tick.
+                    session.running_background_tasks.clear();
+                    session.background_task_output_paths.clear();
+                    session.background_wake_active = false;
                     ended_own_session = true;
                 }
                 // Close out the agent_sessions row for post-init exits too, so
