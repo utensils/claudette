@@ -1679,6 +1679,13 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         crate::env::invalidate_shell_env();
+        let mut vars = std::collections::BTreeMap::new();
+        vars.insert("LEAKED".into(), "no".into());
+        crate::env::install_shell_env_for_test(crate::env::ShellEnv {
+            vars,
+            inherited: std::collections::BTreeMap::new(),
+            captured_at: std::time::SystemTime::UNIX_EPOCH,
+        });
 
         let backend = MockBackend::new();
         let cache = EnvCache::new();
@@ -1696,8 +1703,8 @@ mod tests {
         crate::env::invalidate_shell_env();
 
         assert!(
-            resolved.vars.is_empty(),
-            "disabled shell-env must not contribute vars",
+            !resolved.vars.contains_key("LEAKED"),
+            "cached shell-env vars must not leak when the provider is disabled",
         );
         let shell_source = resolved
             .sources
