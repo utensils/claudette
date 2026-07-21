@@ -37,6 +37,7 @@ static SHELL_ENV: RwLock<Option<Arc<ShellEnv>>> = RwLock::new(None);
 enum ShellEnvProbePhase {
     Idle,
     Running,
+    WaitExpired,
     Complete,
 }
 
@@ -119,12 +120,19 @@ fn begin_shell_env_probe() -> Option<u64> {
 
 /// Publish a worker's result only if it still belongs to the active probe.
 /// Invalidation increments the generation, preventing a stale worker from
-/// overwriting a newer reload or releasing its readiness gate early.
+/// overwriting a newer reload. A worker may still publish after its readiness
+/// wait expires so a transient startup delay does not disable shell-env for the
+/// rest of the app session.
 fn finish_shell_env_probe(generation: u64, env: Option<Arc<ShellEnv>>) {
     let mut state = SHELL_ENV_PROBE_STATE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.generation != generation || state.phase != ShellEnvProbePhase::Running {
+    if state.generation != generation
+        || !matches!(
+            state.phase,
+            ShellEnvProbePhase::Running | ShellEnvProbePhase::WaitExpired
+        )
+    {
         return;
     }
     if let Some(env) = env
@@ -135,15 +143,12 @@ fn finish_shell_env_probe(generation: u64, env: Option<Arc<ShellEnv>>) {
     state.phase = ShellEnvProbePhase::Complete;
 }
 
-fn abandon_running_shell_env_probe() {
+fn release_shell_env_probe_waiters() {
     let mut state = SHELL_ENV_PROBE_STATE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if state.phase == ShellEnvProbePhase::Running {
-        // Invalidate the worker's generation so a result arriving after the
-        // readiness timeout cannot alter the fallback environment.
-        state.generation = state.generation.wrapping_add(1);
-        state.phase = ShellEnvProbePhase::Complete;
+        state.phase = ShellEnvProbePhase::WaitExpired;
     }
 }
 
@@ -163,7 +168,7 @@ pub async fn wait_for_shell_env_probe() {
                 target: "claudette::env",
                 "timed out waiting for shell-env probe; using available process environment",
             );
-            abandon_running_shell_env_probe();
+            release_shell_env_probe_waiters();
             break;
         }
         tokio::time::sleep(SHELL_ENV_PROBE_POLL_INTERVAL).await;
@@ -1177,6 +1182,63 @@ mod tests {
         assert_eq!(shell_env_probe_phase(), ShellEnvProbePhase::Complete);
         finisher.join().unwrap();
         invalidate_shell_env();
+    }
+
+    #[test]
+    fn late_probe_result_is_cached_after_readiness_wait_expires() {
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        invalidate_shell_env();
+        let generation = begin_shell_env_probe().expect("synthetic probe should start");
+
+        release_shell_env_probe_waiters();
+        assert_eq!(shell_env_probe_phase(), ShellEnvProbePhase::WaitExpired);
+
+        let mut vars = BTreeMap::new();
+        vars.insert("LATE_PROBE".to_string(), "published".to_string());
+        finish_shell_env_probe(
+            generation,
+            Some(Arc::new(ShellEnv {
+                vars,
+                inherited: BTreeMap::new(),
+                captured_at: SystemTime::UNIX_EPOCH,
+            })),
+        );
+
+        assert_eq!(
+            shell_env()
+                .and_then(|env| env.vars.get("LATE_PROBE").cloned())
+                .as_deref(),
+            Some("published"),
+        );
+        assert_eq!(shell_env_probe_phase(), ShellEnvProbePhase::Complete);
+        invalidate_shell_env();
+    }
+
+    #[test]
+    fn invalidation_rejects_late_probe_result_after_wait_expires() {
+        let _guard = SHELL_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        invalidate_shell_env();
+        let generation = begin_shell_env_probe().expect("synthetic probe should start");
+        release_shell_env_probe_waiters();
+
+        invalidate_shell_env();
+        let mut vars = BTreeMap::new();
+        vars.insert("STALE_PROBE".to_string(), "rejected".to_string());
+        finish_shell_env_probe(
+            generation,
+            Some(Arc::new(ShellEnv {
+                vars,
+                inherited: BTreeMap::new(),
+                captured_at: SystemTime::UNIX_EPOCH,
+            })),
+        );
+
+        assert!(shell_env().is_none());
+        assert_eq!(shell_env_probe_phase(), ShellEnvProbePhase::Idle);
     }
 
     // ---- parse_env_dump tests -----------------------------------------------
