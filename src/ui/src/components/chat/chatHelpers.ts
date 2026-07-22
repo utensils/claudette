@@ -6,12 +6,18 @@ export function shouldDisable1mContext(modelId: string | null): boolean {
   return entry ? entry.contextWindowTokens < 1_000_000 : false;
 }
 
-/** Format a duration in seconds as "15s" or "2m 34s". */
+/** Format a duration in seconds as "15s", "2m 34s", "3h 2m 34s", or "1d 3h 2m 34s". */
 export function formatElapsedSeconds(secs: number): string {
   if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
   const s = secs % 60;
-  return `${m}m ${s}s`;
+  const totalMinutes = Math.floor(secs / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m ${s}s`;
+  const m = totalMinutes % 60;
+  const totalHours = Math.floor(totalMinutes / 60);
+  if (totalHours < 24) return `${totalHours}h ${m}m ${s}s`;
+  const h = totalHours % 24;
+  const d = Math.floor(totalHours / 24);
+  return `${d}d ${h}h ${m}m ${s}s`;
 }
 
 /** Format a duration in milliseconds as "15s" or "2m 34s". Sub-second turns
