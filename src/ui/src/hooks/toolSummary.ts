@@ -1,4 +1,8 @@
 import { resolveToolSummary } from "../components/chat/toolMetadata";
+import {
+  workflowDescription,
+  workflowDisplayName,
+} from "../components/chat/workflowMeta";
 
 /**
  * Extract a short human-readable summary from a tool's input JSON.
@@ -56,6 +60,15 @@ export function extractToolSummary(
         return input.name ?? input.prompt ?? "";
       case "LSP":
         return input.action ?? "";
+      case "Workflow": {
+        // Without this case the registry's longest-string heuristic picks
+        // `script` — so a workflow rendered as a truncated dump of minified
+        // JavaScript, and chat search matched against it. Resolve the same
+        // stable name the card's header shows.
+        const name = workflowDisplayName(inputJson);
+        const description = workflowDescription(inputJson);
+        return description ? `${name} — ${description}` : name;
+      }
     }
   } catch {
     return "";

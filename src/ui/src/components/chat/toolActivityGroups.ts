@@ -1,10 +1,11 @@
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { parseMcpToolName } from "./mcpToolName";
+import { workflowDisplayName } from "./workflowMeta";
 
 export type ToolActivityDisplayGroup = {
   key: string;
-  kind: "tools" | "agent" | "skill" | "mcp";
+  kind: "tools" | "agent" | "skill" | "mcp" | "workflow";
   label: string;
   activities: ToolActivity[];
 };
@@ -48,11 +49,16 @@ export function groupToolActivitiesForDisplay(
   // `directTools` and `mcpRun` are mutually exclusive accumulators: pushing to
   // either flushes the other first, so at most one is non-empty at a time.
   for (const activity of activities) {
-    // Agents and skills are first-class transcript entries, not tool
-    // calls — they break a run of direct tools and render on their own
-    // (agents as a collapsible group, skills as a flat "activated"
-    // marker) rather than getting bundled into the "N tool calls" pill.
-    if (isAgentActivity(activity) || isSkillActivity(activity)) {
+    // Agents, skills, and workflows are first-class transcript entries,
+    // not tool calls — they break a run of direct tools and render on
+    // their own (agents and workflows as collapsible groups, skills as a
+    // flat "activated" marker) rather than getting bundled into the
+    // "N tool calls" pill.
+    if (
+      isAgentActivity(activity) ||
+      isSkillActivity(activity) ||
+      isWorkflowActivity(activity)
+    ) {
       flushDirectTools();
       flushMcpRun();
       groups.push(activityDisplayGroup(activity));
@@ -86,6 +92,10 @@ export function isAgentActivity(activity: ToolActivity): boolean {
 
 export function isSkillActivity(activity: ToolActivity): boolean {
   return activity.toolName === "Skill";
+}
+
+export function isWorkflowActivity(activity: ToolActivity): boolean {
+  return activity.toolName === "Workflow";
 }
 
 /** Skill name from the `Skill` tool input (`{ "skill": "..." }`), falling
@@ -142,6 +152,17 @@ function activityDisplayGroup(activity: ToolActivity): ToolActivityDisplayGroup 
       key: `skill:${activity.toolUseId}`,
       kind: "skill",
       label: skillActivationName(activity),
+      activities: [activity],
+    };
+  }
+  if (isWorkflowActivity(activity)) {
+    return {
+      key: `workflow:${activity.toolUseId}`,
+      kind: "workflow",
+      // Name comes from the tool input (stable from the moment the
+      // tool_use arrives), not the streamed description — which the CLI
+      // repoints at whichever agent is currently running.
+      label: `Workflow ${workflowDisplayName(activity.inputJson)}`,
       activities: [activity],
     };
   }

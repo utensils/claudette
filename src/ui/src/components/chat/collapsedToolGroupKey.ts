@@ -32,17 +32,19 @@ export function collapsedToolGroupKey(
   const first = activities[0];
   if (!first) return null;
   // Match the discriminator `groupToolActivitiesForDisplay` uses for
-  // its own React `key` (`agent:` for Agent tool, `mcp:` for an MCP tool,
-  // `tools:` otherwise) so the slice key collides with nothing
-  // user-meaningful and reads sensibly in dev tools. Both render paths
-  // (live `GroupedToolActivityRows` and post-turn `TurnSummary`) call this
-  // with the same first activity, so the key stays stable across the
-  // running→completed transition.
+  // its own React `key` (`agent:` for Agent tool, `workflow:` for the
+  // Workflow tool, `mcp:` for an MCP tool, `tools:` otherwise) so the
+  // slice key collides with nothing user-meaningful and reads sensibly in
+  // dev tools. Both render paths (live `GroupedToolActivityRows` and
+  // post-turn `TurnSummary`) call this with the same first activity, so
+  // the key stays stable across the running→completed transition.
   const kind =
     first.toolName === "Agent"
       ? "agent"
-      : isMcpToolName(first.toolName)
-        ? "mcp"
-        : "tools";
+      : first.toolName === "Workflow"
+        ? "workflow"
+        : isMcpToolName(first.toolName)
+          ? "mcp"
+          : "tools";
   return `${kind}:${first.toolUseId}`;
 }

@@ -7,6 +7,7 @@ import styles from "./ChatPanel.module.css";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
 import { activityMatchesSearch } from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
+import { WorkflowCard } from "./WorkflowCard";
 import { ToolActivityRow } from "./ToolActivityRow";
 import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
 import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
@@ -55,6 +56,21 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
             worktreePath={worktreePath}
             inline={toolDisplayMode === "inline"}
           />
+        ) : group.kind === "workflow" && group.activities[0] ? (
+          toolDisplayMode === "inline" ? (
+            <WorkflowCard
+              key={group.key}
+              activity={group.activities[0]}
+              inline
+              live
+            />
+          ) : (
+            <GroupedWorkflowActivity
+              key={`grouped:${group.activities[0].toolUseId}`}
+              sessionId={sessionId}
+              activity={group.activities[0]}
+            />
+          )
         ) : group.kind === "agent" && group.activities[0] ? (
           // Inline mode keeps the legacy always-expanded Agent rendering;
           // grouped mode wraps the same component with a chevron+toggle
@@ -215,6 +231,50 @@ function GroupedToolActivityRows({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Live wrapper around a single Workflow activity.
+ *
+ * Unlike agents and tool groups, workflows default to **expanded**. A
+ * workflow's tool_result lands within a second ("launched in background")
+ * while the run itself takes minutes, so the usual "collapsed is quiet"
+ * argument inverts here: collapsing by default would hide the only
+ * indication that anything is happening for the entire run. The header,
+ * progress rail, and agent tree are what make a background workflow legible
+ * at all.
+ *
+ * Collapse state persists through the same `collapsedToolGroupsBySession`
+ * slice as every other group, keyed `workflow:<toolUseId>`, so the user's
+ * choice survives the running→completed transition into `TurnSummary`.
+ */
+function GroupedWorkflowActivity({
+  sessionId,
+  activity,
+}: {
+  sessionId: string;
+  activity: ToolActivity;
+}) {
+  const groupKey = collapsedToolGroupKey([activity]);
+  const userOverride = useAppStore((s) =>
+    groupKey ? s.collapsedToolGroupsBySession[sessionId]?.[groupKey] : undefined,
+  );
+  const setCollapsedToolGroup = useAppStore((s) => s.setCollapsedToolGroup);
+
+  const collapsed = userOverride ?? false;
+  const toggle = () => {
+    if (!groupKey) return;
+    setCollapsedToolGroup(sessionId, groupKey, !collapsed);
+  };
+
+  return (
+    <WorkflowCard
+      activity={activity}
+      collapsed={collapsed}
+      onToggle={toggle}
+      live
+    />
   );
 }
 

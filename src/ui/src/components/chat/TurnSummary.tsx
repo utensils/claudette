@@ -8,8 +8,9 @@ import { TaskProgressBar } from "./TaskProgressBar";
 import { activityMatchesSearch } from "./agentToolCallRendering";
 import { toolColor } from "./chatHelpers";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
+import { WorkflowCard } from "./WorkflowCard";
 import { ToolActivityRow } from "./ToolActivityRow";
-import { isAgentActivity } from "./toolActivityGroups";
+import { isAgentActivity, isWorkflowActivity } from "./toolActivityGroups";
 import { TurnEditSummaryCard } from "./EditChangeSummary";
 import {
   type EditPreviewLine,
@@ -17,15 +18,15 @@ import {
   summarizeTurnEdits,
 } from "./editActivitySummary";
 
-/// Split the leading "Agent" / "Skill" prefix on a turn label into a
-/// colored span so the finalized summary matches the accent color used
-/// while the turn was still running. Handles three label shapes:
-///   • bare  — "Agent" / "Skill"
-///   • prefixed — "Agent <description>" / "Skill <description>"
+/// Split the leading "Agent" / "Skill" / "Workflow" prefix on a turn label
+/// into a colored span so the finalized summary matches the accent color
+/// used while the turn was still running. Handles three label shapes:
+///   • bare  — "Agent" / "Skill" / "Workflow"
+///   • prefixed — "Agent <description>" / "Workflow <name>"
 ///   • anything else — rendered untouched
 /// Kept inline rather than promoted to a helper module — the only
 /// other consumer of `toolColor` already lives in TurnSummary.
-const COLORED_PREFIX = /^(Agent|Skill)(?:\s+(.+))?$/;
+const COLORED_PREFIX = /^(Agent|Skill|Workflow)(?:\s+(.+))?$/;
 function renderTurnLabel(label: string) {
   const match = COLORED_PREFIX.exec(label);
   if (!match) return label;
@@ -133,6 +134,12 @@ export function TurnSummary({
     );
   const isExpanded = inline || !collapsed || queryHasMatch;
   const renderedActivities = visibleActivities.map((act: ToolActivity) => {
+    if (isWorkflowActivity(act)) {
+      // Always expanded here — the enclosing TurnSummary header already
+      // provides the collapse affordance for a finished run, and nesting a
+      // second chevron inside it would give the same card two of them.
+      return <WorkflowCard key={act.toolUseId} activity={act} inline />;
+    }
     if (isAgentActivity(act)) {
       return (
         <AgentToolCallGroup

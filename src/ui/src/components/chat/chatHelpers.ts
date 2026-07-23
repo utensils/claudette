@@ -37,6 +37,8 @@ export const TOOL_COLORS: Record<string, string> = {
   WebSearch: "var(--tool-web)",
   WebFetch: "var(--tool-web)",
   Agent: "var(--tool-agent)",
+  // Same family as Agent — a workflow is a fan-out of them.
+  Workflow: "var(--tool-agent)",
   AskUserQuestion: "var(--accent-primary)",
 };
 

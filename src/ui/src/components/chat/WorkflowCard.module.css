@@ -1,0 +1,262 @@
+/* Rendering for a Claude Code `Workflow` tool call — the phase/agent tree
+ * reported on `task_progress`. Deliberately its own module rather than more
+ * rules in ChatPanel.module.css, which is already one of the repo's god
+ * files. */
+
+.card {
+  margin: var(--space-2) 0;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--chat-system-bg);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.header:hover {
+  background: var(--hover-bg-subtle);
+}
+
+.header:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.chevron {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  width: 0.75rem;
+  flex-shrink: 0;
+}
+
+.toolName {
+  color: var(--tool-agent);
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-xs);
+  flex-shrink: 0;
+}
+
+.name {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.errorBadge {
+  color: var(--accent-error);
+}
+
+.resumeBadge {
+  color: var(--text-faint);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+/* Determinate progress rail under the header. Width is set inline from the
+ * done/total ratio — the only inline style here, since it's data. */
+.rail {
+  height: 2px;
+  background: var(--divider);
+  overflow: hidden;
+}
+
+.railFill {
+  height: 100%;
+  background: var(--accent-primary);
+  transition: width var(--transition-normal);
+}
+
+.railFillDone {
+  background: var(--accent-success);
+}
+
+.railFillError {
+  background: var(--accent-error);
+}
+
+.body {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.description {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+}
+
+.phase {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.phaseTitle {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.phaseTitle::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--divider);
+}
+
+.agent {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--fs-xs);
+  padding: 1px 0;
+}
+
+.stateIcon {
+  text-align: center;
+  line-height: 1;
+}
+
+.stateQueued {
+  color: var(--text-faint);
+}
+
+.stateProgress {
+  color: var(--accent-primary);
+}
+
+.stateDone {
+  color: var(--accent-success);
+}
+
+.stateError {
+  color: var(--accent-error);
+}
+
+.agentLabel {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agentLabelDone {
+  color: var(--text-muted);
+}
+
+.agentMeta {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Secondary line under an agent: latest tool + its summary, or the error. */
+.agentDetail {
+  grid-column: 2 / -1;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agentError {
+  grid-column: 2 / -1;
+  color: var(--accent-error);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attemptBadge {
+  color: var(--accent-warning);
+}
+
+.cachedBadge {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.empty {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-style: italic;
+}
+
+/* Script disclosure. Collapsed by default — the tree is what people read;
+ * the source is here so the card doesn't lose the visibility that
+ * ToolActivityRow's expanded view used to provide. */
+.script {
+  font-size: var(--fs-xs);
+}
+
+.scriptToggle {
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.scriptToggle::-webkit-details-marker {
+  display: none;
+}
+
+.scriptToggle::before {
+  content: "› ";
+  color: var(--text-faint);
+}
+
+.script[open] .scriptToggle::before {
+  content: "⌄ ";
+}
+
+.scriptToggle:hover {
+  color: var(--text-primary);
+}
+
+.scriptBody {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  max-height: 20rem;
+  overflow: auto;
+  background: var(--terminal-bg);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+  white-space: pre;
+}
