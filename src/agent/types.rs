@@ -72,6 +72,95 @@ pub struct TaskUsage {
     pub duration_ms: Option<u64>,
 }
 
+/// One entry in the `workflow_progress` array carried by
+/// `subtype: "task_progress"` events for Claude Code's `Workflow` tool.
+///
+/// The array is a *full replacement snapshot* of the run's progress tree,
+/// not a delta — but the CLI only includes it on meaningful state
+/// transitions (queued → progress → done/error). Pure "still working"
+/// ticks are throttled and arrive with the field absent, which means
+/// "unchanged", never "empty". Consumers must not clear on `None`.
+///
+/// Field names are camelCase inside these entries even though the
+/// enclosing `system` event uses snake_case — that asymmetry is upstream's,
+/// not ours.
+///
+/// Unrecognized `type` values deserialize to [`WorkflowProgressEntry::Unknown`]
+/// rather than failing the whole line. Note this is lossy on re-serialize:
+/// an unknown entry persists as `{"type":"Unknown"}`. That is deliberate —
+/// an entry kind we can't name is one we can't render either, and keeping
+/// the surrounding progress tree parseable matters more than round-tripping
+/// a payload nothing reads. `workflow_log` entries are the known example:
+/// the CLI strips them before they ever reach the SDK stream.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum WorkflowProgressEntry {
+    /// Declares a phase heading. Emitted once per `phase()` call in the
+    /// workflow script, ahead of the agents that belong to it.
+    #[serde(rename = "workflow_phase")]
+    Phase {
+        #[serde(default)]
+        index: i64,
+        #[serde(default)]
+        title: String,
+    },
+    /// One subagent's current state. Re-emitted on each transition, so the
+    /// latest entry for a given `index` supersedes earlier ones.
+    #[serde(rename = "workflow_agent")]
+    Agent(Box<WorkflowAgentProgress>),
+    #[serde(other)]
+    Unknown,
+}
+
+/// Payload of [`WorkflowProgressEntry::Agent`]. Boxed at the variant because
+/// — unlike [`StreamEvent`], which is built one at a time — these are held
+/// by the hundred in a `Vec`, so an unboxed variant would size every entry
+/// (including bare `Phase` headings) to this struct's footprint.
+///
+/// Every field is `#[serde(default)]` on purpose. A missing or renamed
+/// field upstream would otherwise fail the entire enclosing `StreamEvent`,
+/// costing us the whole progress tick rather than one attribute of one row.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkflowAgentProgress {
+    /// Position in the run's global agent ordering. Stable across
+    /// re-emissions, so the UI keys rows on it.
+    pub index: i64,
+    /// Display label — the script's `opts.label`, or a summary of the prompt.
+    pub label: String,
+    pub phase_index: Option<i64>,
+    pub phase_title: Option<String>,
+    pub agent_id: Option<String>,
+    /// Custom subagent type (`opts.agentType`), when the script set one.
+    pub agent_type: Option<String>,
+    /// `"worktree"` or `"remote"` when the agent runs isolated.
+    pub isolation: Option<String>,
+    pub remote_session_id: Option<String>,
+    pub model: Option<String>,
+    pub fallback_model: Option<String>,
+    /// Observed: `"queued"`, `"progress"`, `"done"`, `"error"`. Kept as a
+    /// `String` rather than an enum so a future state can't break parsing —
+    /// same rationale as [`CompactMetadata::trigger`].
+    pub state: String,
+    pub started_at: Option<i64>,
+    pub queued_at: Option<i64>,
+    pub last_progress_at: Option<i64>,
+    /// Retry counter, 1-based. `> 1` means an earlier attempt failed.
+    pub attempt: Option<i64>,
+    pub last_attempt_reason: Option<String>,
+    pub last_tool_name: Option<String>,
+    pub last_tool_summary: Option<String>,
+    pub prompt_preview: Option<String>,
+    pub result_preview: Option<String>,
+    pub tokens: Option<u64>,
+    pub tool_calls: Option<u64>,
+    pub duration_ms: Option<u64>,
+    /// `true` when a resumed run served this agent from its prior result
+    /// instead of re-running it.
+    pub cached: Option<bool>,
+    pub error: Option<String>,
+}
+
 /// Top-level JSON line from Claude CLI stdout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -118,6 +207,14 @@ pub enum StreamEvent {
         /// Present on `task_progress` / `task_notification`.
         #[serde(default)]
         usage: Option<TaskUsage>,
+        /// Present on `task_progress` events for the `Workflow` tool: a full
+        /// snapshot of the run's phase/agent tree. Absent on the throttled
+        /// no-transition ticks, where it means "unchanged" — see
+        /// [`WorkflowProgressEntry`]. `skip_serializing_if` keeps it off the
+        /// re-emitted Tauri payload for the many system events that never
+        /// carry it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workflow_progress: Option<Vec<WorkflowProgressEntry>>,
         /// Only present on `subtype: "status"` events. Values observed:
         /// `"requesting"` (normal API call), `"compacting"` (compaction in
         /// flight), or `null` (compaction complete).
@@ -214,6 +311,7 @@ impl StreamEvent {
             description: None,
             last_tool_name: None,
             usage: None,
+            workflow_progress: None,
             status: None,
             compact_result: None,
             compact_metadata: None,
@@ -1340,5 +1438,139 @@ mod compaction_tests {
             }
             other => panic!("expected User event, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod workflow_progress_tests {
+    use super::*;
+
+    /// Shape captured from a real `Workflow` run's `task_progress` event.
+    /// Field names inside `workflow_progress` are camelCase while the
+    /// enclosing event is snake_case — that split is what this pins.
+    #[test]
+    fn parses_task_progress_workflow_tree() {
+        let line = r#"{
+            "type": "system",
+            "subtype": "task_progress",
+            "task_id": "w4stpeffj",
+            "tool_use_id": "toolu_01AxY9PTrqaJ6k9apBCi3kue",
+            "description": "Review: review:completeness",
+            "last_tool_name": "StructuredOutput",
+            "usage": {"total_tokens": 84669, "tool_uses": 38, "duration_ms": 180027},
+            "workflow_progress": [
+                {"type": "workflow_phase", "index": 1, "title": "Review"},
+                {"type": "workflow_agent", "index": 1, "label": "review:completeness",
+                 "phaseIndex": 1, "phaseTitle": "Review", "agentId": "ae1e803ca4fd797bf",
+                 "model": "claude-opus-4-8", "state": "done", "startedAt": 1782843838042,
+                 "queuedAt": 1782843838028, "attempt": 1, "lastToolName": "StructuredOutput",
+                 "lastToolSummary": "No functional completeness gaps",
+                 "promptPreview": "CONTEXT - a code change", "lastProgressAt": 1782844018069,
+                 "tokens": 84669, "toolCalls": 38, "durationMs": 180027,
+                 "resultPreview": "{\"summary\":\"...\"}", "cached": false}
+            ]
+        }"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        let StreamEvent::System {
+            subtype,
+            workflow_progress,
+            ..
+        } = ev
+        else {
+            panic!("expected System event");
+        };
+        assert_eq!(subtype, "task_progress");
+        let entries = workflow_progress.expect("workflow_progress parsed");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0],
+            WorkflowProgressEntry::Phase {
+                index: 1,
+                title: "Review".to_string(),
+            }
+        );
+        let WorkflowProgressEntry::Agent(agent) = &entries[1] else {
+            panic!("expected Agent entry, got {:?}", entries[1]);
+        };
+        assert_eq!(agent.label, "review:completeness");
+        assert_eq!(agent.state, "done");
+        assert_eq!(agent.phase_title.as_deref(), Some("Review"));
+        assert_eq!(agent.tokens, Some(84669));
+        assert_eq!(agent.tool_calls, Some(38));
+        assert_eq!(agent.duration_ms, Some(180027));
+        assert_eq!(agent.cached, Some(false));
+    }
+
+    /// An entry kind we don't model must not cost us the rest of the tree —
+    /// the surrounding phases and agents still have to parse.
+    #[test]
+    fn unknown_workflow_progress_entry_does_not_fail_the_line() {
+        let line = r#"{"type":"system","subtype":"task_progress","workflow_progress":[
+            {"type":"workflow_log","message":"3/10 found"},
+            {"type":"workflow_phase","index":2,"title":"Verify"}
+        ]}"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        let StreamEvent::System {
+            workflow_progress, ..
+        } = ev
+        else {
+            panic!("expected System event");
+        };
+        let entries = workflow_progress.expect("workflow_progress parsed");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], WorkflowProgressEntry::Unknown);
+        assert_eq!(
+            entries[1],
+            WorkflowProgressEntry::Phase {
+                index: 2,
+                title: "Verify".to_string(),
+            }
+        );
+    }
+
+    /// A `workflow_agent` stripped of every optional field must still parse.
+    /// Everything is `#[serde(default)]` precisely so one renamed attribute
+    /// upstream can't cost us the whole progress tick.
+    #[test]
+    fn workflow_agent_tolerates_missing_fields() {
+        let line = r#"{"type":"system","subtype":"task_progress","workflow_progress":[
+            {"type":"workflow_agent"}
+        ]}"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        let StreamEvent::System {
+            workflow_progress, ..
+        } = ev
+        else {
+            panic!("expected System event");
+        };
+        let entries = workflow_progress.expect("workflow_progress parsed");
+        let WorkflowProgressEntry::Agent(agent) = &entries[0] else {
+            panic!("expected Agent entry");
+        };
+        assert_eq!(agent.label, "");
+        assert_eq!(agent.state, "");
+        assert_eq!(agent.tokens, None);
+    }
+
+    /// Throttled no-transition ticks omit `workflow_progress` entirely.
+    /// It must deserialize to `None` (meaning "unchanged"), and must not be
+    /// re-emitted as an explicit `null` on the many system events that never
+    /// carry it.
+    #[test]
+    fn task_progress_without_workflow_tree_is_none_and_not_reserialized() {
+        let line = r#"{"type":"system","subtype":"task_progress","task_id":"w4stpeffj"}"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        let StreamEvent::System {
+            workflow_progress, ..
+        } = &ev
+        else {
+            panic!("expected System event");
+        };
+        assert!(workflow_progress.is_none());
+        let re = serde_json::to_string(&ev).unwrap();
+        assert!(
+            !re.contains("workflow_progress"),
+            "absent tree should not be re-emitted: {re}"
+        );
     }
 }

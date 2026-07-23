@@ -796,9 +796,9 @@ impl Database {
                     result_text, summary, sort_order, assistant_message_ordinal,
                     agent_task_id, agent_description, agent_last_tool_name,
                     agent_tool_use_count, agent_status, agent_tool_calls_json,
-                    agent_thinking_blocks_json, agent_result_text
+                    agent_thinking_blocks_json, agent_result_text, workflow_progress_json
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -819,6 +819,7 @@ impl Database {
                     a.agent_tool_calls_json,
                     a.agent_thinking_blocks_json,
                     a.agent_result_text,
+                    a.workflow_progress_json,
                 ])?;
             }
         }
@@ -857,9 +858,9 @@ impl Database {
                     result_text, summary, sort_order, assistant_message_ordinal,
                     agent_task_id, agent_description, agent_last_tool_name,
                     agent_tool_use_count, agent_status, agent_tool_calls_json,
-                    agent_thinking_blocks_json, agent_result_text
+                    agent_thinking_blocks_json, agent_result_text, workflow_progress_json
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -880,6 +881,7 @@ impl Database {
                     a.agent_tool_calls_json,
                     a.agent_thinking_blocks_json,
                     a.agent_result_text,
+                    a.workflow_progress_json,
                 ])?;
             }
         }
@@ -903,7 +905,7 @@ impl Database {
                     ta.assistant_message_ordinal, ta.agent_task_id,
                     ta.agent_description, ta.agent_last_tool_name,
                     ta.agent_tool_use_count, ta.agent_status, ta.agent_tool_calls_json,
-                    ta.agent_thinking_blocks_json, ta.agent_result_text
+                    ta.agent_thinking_blocks_json, ta.agent_result_text, ta.workflow_progress_json
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.workspace_id = ?1
@@ -929,6 +931,7 @@ impl Database {
                     agent_tool_calls_json: row.get(14)?,
                     agent_thinking_blocks_json: row.get(15)?,
                     agent_result_text: row.get(16)?,
+                    workflow_progress_json: row.get(17)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1012,7 +1015,7 @@ impl Database {
                     ta.assistant_message_ordinal, ta.agent_task_id,
                     ta.agent_description, ta.agent_last_tool_name,
                     ta.agent_tool_use_count, ta.agent_status, ta.agent_tool_calls_json,
-                    ta.agent_thinking_blocks_json, ta.agent_result_text
+                    ta.agent_thinking_blocks_json, ta.agent_result_text, ta.workflow_progress_json
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.chat_session_id = ?1
@@ -1038,6 +1041,7 @@ impl Database {
                     agent_tool_calls_json: row.get(14)?,
                     agent_thinking_blocks_json: row.get(15)?,
                     agent_result_text: row.get(16)?,
+                    workflow_progress_json: row.get(17)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1122,6 +1126,7 @@ mod tests {
             agent_tool_calls_json: "[]".into(),
             agent_thinking_blocks_json: "[]".into(),
             agent_result_text: None,
+            workflow_progress_json: "[]".into(),
         }
     }
 

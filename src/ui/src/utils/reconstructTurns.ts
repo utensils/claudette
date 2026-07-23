@@ -1,6 +1,7 @@
 import type { CompletedTurn } from "../stores/useAppStore";
 import type { ChatMessage } from "../types/chat";
 import type { CompletedTurnData } from "../types/checkpoint";
+import type { WorkflowProgressEntry } from "../types/workflow";
 import { debugChat } from "./chatDebug";
 
 /**
@@ -94,6 +95,7 @@ export function reconstructCompletedTurns(
         agentToolCalls: parseAgentToolCalls(a.agent_tool_calls_json),
         agentThinkingBlocks: parseStringArray(a.agent_thinking_blocks_json),
         agentResultText: a.agent_result_text,
+        workflowProgress: parseWorkflowProgress(a.workflow_progress_json),
       })),
       messageCount: td.message_count,
       collapsed: true,
@@ -113,6 +115,35 @@ function parseAgentToolCalls(value: string | null | undefined) {
   try {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Rehydrate a persisted `Workflow` progress tree.
+ *
+ *  Returns `undefined` rather than `[]` for the empty case so a non-workflow
+ *  activity (every one of which stores `"[]"`) doesn't come back looking
+ *  like a workflow that produced no agents — `WorkflowCard` keys off
+ *  `workflowProgress` being present at all.
+ *
+ *  Entries are not validated beyond "is an object with a `type`". The Rust
+ *  side already normalized unrecognized kinds to `{"type":"Unknown"}` on
+ *  the way in, and the renderer switches on `type` with a default of
+ *  "skip", so a malformed row degrades to an omitted line rather than a
+ *  thrown render. */
+function parseWorkflowProgress(
+  value: string | null | undefined,
+): WorkflowProgressEntry[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    const entries = parsed.filter(
+      (item): item is WorkflowProgressEntry =>
+        typeof item === "object" && item !== null && typeof item.type === "string",
+    );
+    return entries.length > 0 ? entries : undefined;
   } catch {
     return undefined;
   }

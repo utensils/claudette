@@ -462,6 +462,7 @@ fn copy_history(
                     agent_tool_calls_json: a.agent_tool_calls_json.clone(),
                     agent_thinking_blocks_json: a.agent_thinking_blocks_json.clone(),
                     agent_result_text: a.agent_result_text.clone(),
+                    workflow_progress_json: a.workflow_progress_json.clone(),
                 })
                 .collect();
             db.insert_turn_tool_activities(&remapped)?;
@@ -746,6 +747,7 @@ mod tests {
             agent_tool_calls_json: "[]".into(),
             agent_thinking_blocks_json: "[]".into(),
             agent_result_text: None,
+            workflow_progress_json: "[]".into(),
         }])
         .unwrap();
         db.insert_turn_tool_activities(&[TurnToolActivity {
@@ -766,6 +768,7 @@ mod tests {
             agent_tool_calls_json: "[]".into(),
             agent_thinking_blocks_json: "[]".into(),
             agent_result_text: None,
+            workflow_progress_json: "[]".into(),
         }])
         .unwrap();
         db

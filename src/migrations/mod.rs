@@ -269,4 +269,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260611120000_agent_conclusions.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260723155203_turn_tool_activity_workflow_progress",
+        sql: include_str!("20260723155203_turn_tool_activity_workflow_progress.sql"),
+        legacy_version: None,
+    },
 ];

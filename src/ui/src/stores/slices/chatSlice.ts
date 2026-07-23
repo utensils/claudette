@@ -8,6 +8,7 @@ import type {
 import type { StoredAttachment } from "../../types/chat";
 import { debugChat } from "../../utils/chatDebug";
 import type { CompactionEvent } from "../../utils/compactionSentinel";
+import type { WorkflowProgressEntry } from "../../types/workflow";
 import type { AppState } from "../useAppStore";
 
 export interface ToolActivity {
@@ -27,6 +28,10 @@ export interface ToolActivity {
   agentToolCalls?: AgentToolCall[];
   agentThinkingBlocks?: string[];
   agentResultText?: string | null;
+  /** Phase/agent tree for a `Workflow` tool activity. Undefined for every
+   *  other tool, and also for a workflow whose first progress tick hasn't
+   *  landed yet. */
+  workflowProgress?: WorkflowProgressEntry[];
 }
 
 export interface AgentToolCall {
@@ -585,6 +590,7 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
           agentToolCalls: a.agentToolCalls,
           agentThinkingBlocks: a.agentThinkingBlocks,
           agentResultText: a.agentResultText,
+          workflowProgress: a.workflowProgress,
         })),
         messageCount,
         collapsed: true,

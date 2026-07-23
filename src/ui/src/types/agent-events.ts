@@ -1,3 +1,5 @@
+import type { WorkflowProgressEntry } from "./workflow";
+
 /** Payload shape emitted from the Rust backend via Tauri events. */
 export interface AgentStreamPayload {
   workspace_id: string;
@@ -41,6 +43,12 @@ export type StreamEvent =
         tool_uses?: number | null;
         duration_ms?: number | null;
       } | null;
+      /** Present on `subtype: "task_progress"` events for the `Workflow`
+       * tool: a full replacement snapshot of the run's phase/agent tree.
+       * Absent (not `null` — Rust skips the key) on the throttled
+       * no-transition ticks, where it means "unchanged". Consumers must
+       * treat `undefined` as "keep previous", never as "clear". */
+      workflow_progress?: WorkflowProgressEntry[];
       /** Only present on the end-of-compaction status event. Rust
        * serializes `Option<String>` as `null` (no `skip_serializing_if`),
        * so the wire payload carries `null` when absent. */

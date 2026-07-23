@@ -27,6 +27,9 @@ export interface TurnToolActivityData {
   agent_tool_calls_json: string;
   agent_thinking_blocks_json: string;
   agent_result_text: string | null;
+  /** Serialized `WorkflowProgressEntry[]` for a `Workflow` tool activity;
+   *  `"[]"` for every other tool. */
+  workflow_progress_json: string;
 }
 
 export interface CompletedTurnData {

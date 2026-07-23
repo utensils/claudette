@@ -61,6 +61,12 @@ pub struct TurnToolActivity {
     pub agent_thinking_blocks_json: String,
     #[serde(default)]
     pub agent_result_text: Option<String>,
+    /// Serialized `Vec<claudette::agent::WorkflowProgressEntry>` — the
+    /// phase/agent tree of a `Workflow` tool run. `"[]"` for every other
+    /// tool. Defaulted on deserialize so activity payloads persisted before
+    /// the column existed still load.
+    #[serde(default = "empty_json_array")]
+    pub workflow_progress_json: String,
 }
 
 fn empty_json_array() -> String {

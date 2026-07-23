@@ -37,7 +37,8 @@ pub use session::PersistentSession;
 pub use types::{
     AssistantMessage, CompactMetadata, ContentBlock, ControlRequestInner, ControlResponsePayload,
     Delta, FileAttachment, InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage,
-    TokenUsageIteration, UserContentBlock, UserEventMessage, UserMessageContent, parse_stream_line,
+    TokenUsageIteration, UserContentBlock, UserEventMessage, UserMessageContent,
+    WorkflowAgentProgress, WorkflowProgressEntry, parse_stream_line,
 };
 
 /// Per-turn settings that control CLI flags for the agent subprocess.

@@ -319,6 +319,15 @@ export function useAgentStream() {
               if (typeof streamEvent.usage?.tool_uses === "number") {
                 updates.agentToolUseCount = streamEvent.usage.tool_uses;
               }
+              // Full replacement snapshot of a Workflow run's phase/agent
+              // tree. The CLI only attaches it on real state transitions;
+              // the throttled in-between ticks omit the key entirely, and
+              // that absence means "unchanged". Assigning unconditionally
+              // would blank the card every ~10s mid-run, so only touch
+              // `workflowProgress` when the key is actually present.
+              if (Array.isArray(streamEvent.workflow_progress)) {
+                updates.workflowProgress = streamEvent.workflow_progress;
+              }
               if (streamEvent.status) {
                 updates.agentStatus = streamEvent.status;
               } else if (streamEvent.subtype === "task_progress") {
@@ -1011,6 +1020,7 @@ export function useAgentStream() {
                 a.agentThinkingBlocks ?? [],
               ),
               agent_result_text: a.agentResultText ?? null,
+              workflow_progress_json: JSON.stringify(a.workflowProgress ?? []),
             }));
             return saveTurnToolActivities(checkpoint.id, messageCount, activities);
           })()

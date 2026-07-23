@@ -53,6 +53,7 @@ function makeTurnData(
       agent_tool_calls_json: "[]",
       agent_thinking_blocks_json: "[]",
       agent_result_text: null,
+      workflow_progress_json: "[]",
     })),
   };
 }
@@ -342,6 +343,7 @@ describe("reconstructCompletedTurns", () => {
             agent_tool_calls_json: "[]",
             agent_thinking_blocks_json: "[]",
             agent_result_text: null,
+            workflow_progress_json: "[]",
           },
         ],
       },
