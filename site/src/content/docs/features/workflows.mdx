@@ -1,0 +1,56 @@
+---
+title: Workflows
+description: Watch Claude Code's multi-agent Workflow runs unfold in the transcript, with a live phase and agent tree.
+---
+
+Claude Code's **Workflow** tool orchestrates many subagents from a script — fan out a review across dimensions, pipeline a migration over dozens of files, run a judge panel over competing designs. Claudette renders each run as a live tree in the chat transcript: phases, per-agent state, token and tool counts, and elapsed time.
+
+## What you see
+
+A workflow appears in the transcript as a card, in place of the tool call that launched it.
+
+- **Header** — the workflow's name (read from the script's `meta.name`), how many agents have finished, total tokens, and a badge for any that failed. A progress rail underneath fills as agents complete, turning green on success or red if any agent errored.
+- **Phase groups** — agents are grouped under the phase that spawned them, in declaration order.
+- **Agent rows** — one per subagent, showing its state (`○` queued, `◐` running, `●` done, `✕` failed), model, token count, tool-call count, and elapsed time. The second line shows the agent's latest tool activity, or its error if it failed.
+- **Script** — a collapsed disclosure at the bottom of the card holds the workflow script itself.
+
+Rows carry extra badges where relevant: `cached` when a resumed run served an agent from its prior result instead of re-running it, `retry N` when an agent needed more than one attempt, and `worktree` or `remote` when an agent ran isolated.
+
+The card is expanded by default. Collapsing it hides the agent tree but keeps the header and progress rail visible, and your choice persists for that run.
+
+## The status pill
+
+Workflows run in the background. The tool returns "launched in background" within a second, the agent finishes its turn, and the run keeps going for minutes — so the card is usually well above the fold by the time anything interesting happens.
+
+A pill above the message composer keeps each in-flight run visible: workflow name, current phase, and agents completed. Click it to scroll its card back into view. The pill disappears when the run finishes. Concurrent workflows each get their own pill.
+
+## Persistence
+
+A completed run's tree is stored with the turn, so it renders the same after an app restart, in [forked sessions](/claudette/features/checkpoints-and-forking/), and when history is replayed from disk.
+
+Because a workflow typically finishes long after its turn was saved, Claudette writes the final tree back to that turn when the completion notification arrives. If you restart Claudette while a workflow is still running, its card shows the tree as of the moment the turn ended — the run itself continues inside Claude Code, but Claudette is no longer listening for its progress.
+
+## Limits
+
+Claudette renders what Claude Code puts on the stream, which shapes what is and isn't available:
+
+- **`log()` output is not shown.** Claude Code strips narrator lines before the progress stream leaves the CLI, so they never reach Claudette.
+- **Runs can't be controlled from Claudette.** Pause, kill, retry, and skip live inside the Claude Code process and aren't exposed over its stream protocol. Use `/workflows` in a Claude Code terminal for those.
+- **Progress is throttled.** Claude Code sends the full tree on state changes and at most every ten seconds otherwise. Elapsed times for running agents are interpolated locally so rows keep counting between updates.
+- **Claude backends only.** Codex Native sessions have no equivalent tool; the card never appears there.
+
+## Enabling workflows
+
+Workflows are a Claude Code feature, configured in Claude Code rather than in Claudette:
+
+- Available on paid plans; not enabled by default on Pro.
+- Toggle with the **Workflows** setting in Claude Code's `/config`.
+- `CLAUDE_CODE_DISABLE_WORKFLOWS` disables the tool entirely.
+- Claude Code's **Workflow keyword trigger** setting controls whether the word "workflow" in a prompt starts one.
+
+If workflows are unavailable in your Claude Code install, the tool is never offered to the agent and nothing changes in Claudette.
+
+## Related
+
+- [Task History](/claudette/features/task-history/) — the Tasks panel, which tracks agent-declared checklists rather than runtime-spawned agents.
+- [Parallel Agents](/claudette/features/parallel-agents/) — running independent agents across separate workspaces.
