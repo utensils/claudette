@@ -501,8 +501,15 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       // the relevant activity is almost always in the most recent one.
       // Purely additive: today these updates are silently dropped, so no
       // currently-working path changes behavior.
+      // Return the existing state (not `{}`) on every miss below. Zustand
+      // shallow-merges whatever a `set` updater returns, so `{}` still
+      // produces a fresh top-level state object and fires every listener;
+      // returning `s` is `Object.is`-equal and a true no-op. These misses
+      // are the common case — most `updateToolActivity` calls that reach
+      // here are progress ticks for a workflow whose turn is still live and
+      // matched above, or for activities not in this session at all.
       const turns = s.completedTurns[sessionId];
-      if (!turns) return {};
+      if (!turns) return s;
       for (let i = turns.length - 1; i >= 0; i--) {
         const idx = turns[i].activities.findIndex(
           (a) => a.toolUseId === toolUseId,
@@ -516,7 +523,7 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
           completedTurns: { ...s.completedTurns, [sessionId]: nextTurns },
         };
       }
-      return {};
+      return s;
     }),
   upsertAgentToolCall: (sessionId, agentId, call) => {
     let matched = false;

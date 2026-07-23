@@ -155,6 +155,28 @@ describe("updateToolActivity — workflow progress after the turn ends", () => {
     ).toBe("running");
   });
 
+  // Zustand shallow-merges an updater's return value, so returning `{}` on a
+  // miss still allocates a new *top-level* state object (via
+  // `Object.assign({}, state, {})`) and notifies every subscriber. Returning
+  // the existing state instead is `Object.is`-equal, so Zustand skips the
+  // merge entirely and the state reference is preserved — a genuine no-op on
+  // the many progress ticks that match nothing here.
+  it("preserves the top-level state reference on a miss", () => {
+    useAppStore.setState({
+      toolActivities: { [SESSION]: [workflowActivity()] },
+      completedTurns: {
+        [SESSION]: [completedTurn("turn-1", [workflowActivity("toolu_a")])],
+      },
+    });
+    const before = useAppStore.getState();
+
+    before.updateToolActivity(SESSION, "toolu_missing", {
+      agentStatus: "completed",
+    });
+
+    expect(useAppStore.getState()).toBe(before);
+  });
+
   it("does not disturb sibling activities in the same completed turn", () => {
     useAppStore.setState({
       completedTurns: {

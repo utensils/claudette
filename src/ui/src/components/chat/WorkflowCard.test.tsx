@@ -100,6 +100,48 @@ describe("WorkflowCard", () => {
     expect(text).toContain("1/2 agents");
   });
 
+  // Under a pipeline, a later phase's agent can be reported before an
+  // earlier phase's slow agent — so first-seen order would render Verify
+  // above Review. Sections must follow declaration order from the
+  // `workflow_phase` entries instead.
+  it("orders phase sections by declaration, not by first-seen agent", async () => {
+    const container = await render(
+      <WorkflowCard
+        activity={makeActivity({
+          workflowProgress: [
+            { type: "workflow_phase", index: 1, title: "Review" },
+            { type: "workflow_phase", index: 2, title: "Verify" },
+            // Verify's agent arrives first; Review's slow agent lands later.
+            agent(2, "done", { phaseTitle: "Verify", label: "verify:bugs" }),
+            agent(1, "progress", { phaseTitle: "Review", label: "review:bugs" }),
+          ],
+        })}
+      />,
+    );
+    const headings = [
+      ...container.querySelectorAll("[class*=phaseTitle]"),
+    ].map((el) => el.textContent);
+    expect(headings).toEqual(["Review", "Verify"]);
+  });
+
+  it("appends an undeclared phase after the declared ones", async () => {
+    const container = await render(
+      <WorkflowCard
+        activity={makeActivity({
+          workflowProgress: [
+            { type: "workflow_phase", index: 1, title: "Review" },
+            agent(1, "progress", { phaseTitle: "Improvised", label: "a" }),
+            agent(2, "done", { phaseTitle: "Review", label: "b" }),
+          ],
+        })}
+      />,
+    );
+    const headings = [
+      ...container.querySelectorAll("[class*=phaseTitle]"),
+    ].map((el) => el.textContent);
+    expect(headings).toEqual(["Review", "Improvised"]);
+  });
+
   it("reports progress on the rail with accessible bounds", async () => {
     const container = await render(
       <WorkflowCard

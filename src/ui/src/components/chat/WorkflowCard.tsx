@@ -260,9 +260,14 @@ export function WorkflowCard({
   const collapsible = !inline && typeof onToggle === "function";
   const isCollapsed = collapsible && collapsed === true;
 
-  // Group agents under their phase, preserving the order phases were
-  // declared in and falling back to first-appearance order for agents whose
-  // phase was never declared via `phase()`.
+  // Group agents under their phase. Sections are ordered by *declaration*
+  // order (`summary.phases`), not by which phase's first agent happened to
+  // arrive first — those diverge under a pipeline, where a later phase's
+  // agent can start before an earlier phase's slow agent finishes, and
+  // first-seen order would then reshuffle the sections mid-run. Any phase
+  // that has agents but was never declared via `phase()` — including the
+  // no-phase bucket for `agent()` calls made before any `phase()` — keeps
+  // its first-seen position, appended after the declared phases.
   const grouped = useMemo(() => {
     const byPhase = new Map<string, WorkflowAgentEntry[]>();
     for (const agent of summary.agents) {
@@ -271,11 +276,27 @@ export function WorkflowCard({
       if (bucket) bucket.push(agent);
       else byPhase.set(key, [agent]);
     }
-    return [...byPhase.entries()].map(([title, agents]) => ({
+
+    const orderedKeys: string[] = [];
+    const seen = new Set<string>();
+    for (const phase of summary.phases) {
+      if (byPhase.has(phase.title) && !seen.has(phase.title)) {
+        orderedKeys.push(phase.title);
+        seen.add(phase.title);
+      }
+    }
+    for (const key of byPhase.keys()) {
+      if (!seen.has(key)) {
+        orderedKeys.push(key);
+        seen.add(key);
+      }
+    }
+
+    return orderedKeys.map((title) => ({
       title: title === UNPHASED ? null : title,
-      agents,
+      agents: byPhase.get(title)!,
     }));
-  }, [summary.agents]);
+  }, [summary.agents, summary.phases]);
 
   const headerInteractiveProps = collapsible
     ? {
