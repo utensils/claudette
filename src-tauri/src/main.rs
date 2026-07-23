@@ -1123,6 +1123,7 @@ fn main() {
             commands::chat::checkpoint::rollback_to_checkpoint,
             commands::chat::checkpoint::clear_conversation,
             commands::chat::checkpoint::save_turn_tool_activities,
+            commands::chat::checkpoint::update_turn_tool_activity_progress,
             commands::chat::checkpoint::load_completed_turns,
             commands::chat::session::list_chat_sessions,
             commands::chat::session::get_chat_session,

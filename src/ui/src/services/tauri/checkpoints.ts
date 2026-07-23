@@ -46,6 +46,21 @@ export function saveTurnToolActivities(
   });
 }
 
+/** Persist the workflow progress tree for a single already-checkpointed
+ *  activity. Used when a backgrounded `Workflow` finishes after the turn
+ *  that launched it was already saved. */
+export function updateTurnToolActivityProgress(
+  toolUseId: string,
+  workflowProgressJson: string,
+  agentStatus: string | null,
+): Promise<void> {
+  return invoke("update_turn_tool_activity_progress", {
+    toolUseId,
+    workflowProgressJson,
+    agentStatus,
+  });
+}
+
 export function loadCompletedTurns(
   sessionId: string,
 ): Promise<CompletedTurnData[]> {

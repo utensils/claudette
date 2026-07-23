@@ -4,6 +4,7 @@ import { useAppStore } from "../stores/useAppStore";
 import {
   loadChatHistory,
   saveTurnToolActivities,
+  updateTurnToolActivityProgress,
   setSessionCliInvocation,
 } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
@@ -334,6 +335,30 @@ export function useAgentStream() {
                 updates.agentStatus = "running";
               }
               updateToolActivity(sessionId, streamEvent.tool_use_id, updates);
+              // A backgrounded Workflow usually finishes after the turn
+              // that launched it has already been checkpointed, so its
+              // final tree has nowhere to land — `save_turn_tool_activities`
+              // ran minutes ago. Write it directly at the activity row.
+              //
+              // Only on the terminal notification, not on every progress
+              // tick: one write per run instead of dozens, and the
+              // completed state is what replay actually needs. A reload
+              // mid-run still shows the tree as of the turn's end.
+              if (
+                streamEvent.subtype === "task_notification" &&
+                updates.workflowProgress !== undefined
+              ) {
+                void updateTurnToolActivityProgress(
+                  streamEvent.tool_use_id,
+                  JSON.stringify(updates.workflowProgress),
+                  updates.agentStatus ?? null,
+                ).catch((err) => {
+                  debugChat("stream", "persist workflow progress failed", {
+                    toolUseId: streamEvent.tool_use_id,
+                    error: String(err),
+                  });
+                });
+              }
               if (streamEvent.task_id) {
                 const pending = pendingAgentToolCallsRef.current[streamEvent.task_id] || [];
                 const remaining = pending.filter(

@@ -295,6 +295,27 @@ pub async fn save_turn_tool_activities(
     Ok(())
 }
 
+/// Persist the final workflow progress tree for an activity whose turn has
+/// already been checkpointed. See
+/// [`claudette::db::Database::update_turn_tool_activity_progress`] for why a
+/// targeted update is needed rather than a re-save of the whole turn.
+#[tauri::command]
+pub async fn update_turn_tool_activity_progress(
+    tool_use_id: String,
+    workflow_progress_json: String,
+    agent_status: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.update_turn_tool_activity_progress(
+        &tool_use_id,
+        &workflow_progress_json,
+        agent_status.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn load_completed_turns(
     session_id: String,

@@ -474,14 +474,50 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       },
     })),
   updateToolActivity: (sessionId, toolUseId, updates) =>
-    set((s) => ({
-      toolActivities: {
-        ...s.toolActivities,
-        [sessionId]: (s.toolActivities[sessionId] || []).map((a) =>
-          a.toolUseId === toolUseId ? { ...a, ...updates } : a,
-        ),
-      },
-    })),
+    set((s) => {
+      const live = s.toolActivities[sessionId] || [];
+      if (live.some((a) => a.toolUseId === toolUseId)) {
+        return {
+          toolActivities: {
+            ...s.toolActivities,
+            [sessionId]: live.map((a) =>
+              a.toolUseId === toolUseId ? { ...a, ...updates } : a,
+            ),
+          },
+        };
+      }
+
+      // Not in the live turn. Normally that means the update is for an
+      // activity we've already forgotten and there's nothing to do — but a
+      // backgrounded `Workflow` breaks that assumption: its tool_result
+      // ("launched in background") arrives within a second, the agent
+      // finishes its turn, and the run keeps emitting `task_progress` for
+      // minutes afterwards. Those updates arrive after `finalizeTurn` has
+      // moved the activity into `completedTurns`, so without this fallback
+      // the card would freeze at whatever the tree looked like when the
+      // turn ended and never show the run completing.
+      //
+      // Searched newest-first because `toolUseId` is unique per turn and
+      // the relevant activity is almost always in the most recent one.
+      // Purely additive: today these updates are silently dropped, so no
+      // currently-working path changes behavior.
+      const turns = s.completedTurns[sessionId];
+      if (!turns) return {};
+      for (let i = turns.length - 1; i >= 0; i--) {
+        const idx = turns[i].activities.findIndex(
+          (a) => a.toolUseId === toolUseId,
+        );
+        if (idx < 0) continue;
+        const nextTurns = [...turns];
+        const nextActivities = [...turns[i].activities];
+        nextActivities[idx] = { ...nextActivities[idx], ...updates };
+        nextTurns[i] = { ...turns[i], activities: nextActivities };
+        return {
+          completedTurns: { ...s.completedTurns, [sessionId]: nextTurns },
+        };
+      }
+      return {};
+    }),
   upsertAgentToolCall: (sessionId, agentId, call) => {
     let matched = false;
     set((s) => {

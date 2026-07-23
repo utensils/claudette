@@ -889,6 +889,37 @@ impl Database {
         Ok(())
     }
 
+    /// Update the persisted workflow progress tree (and agent status) for a
+    /// single already-saved tool activity, addressed by `tool_use_id`.
+    ///
+    /// Exists because a `Workflow` run routinely outlives the turn that
+    /// launched it: the tool returns "launched in background" within a
+    /// second, the agent finishes its turn, and the run keeps going for
+    /// minutes before its task-notification arrives. By then the activity
+    /// has already been written by `save_turn_tool_activities`, so the
+    /// final tree has nowhere to land without a targeted update.
+    ///
+    /// Returns the number of rows updated — zero is normal and not an
+    /// error (the activity may belong to a session whose turn was never
+    /// checkpointed).
+    pub fn update_turn_tool_activity_progress(
+        &self,
+        tool_use_id: &str,
+        workflow_progress_json: &str,
+        agent_status: Option<&str>,
+    ) -> Result<usize, rusqlite::Error> {
+        // COALESCE keeps the stored status when the caller has nothing
+        // better to say, so a progress-only update can't blank a status
+        // that a prior notification already resolved.
+        self.conn.execute(
+            "UPDATE turn_tool_activities
+                SET workflow_progress_json = ?1,
+                    agent_status = COALESCE(?2, agent_status)
+              WHERE tool_use_id = ?3",
+            params![workflow_progress_json, agent_status, tool_use_id],
+        )
+    }
+
     /// Load all completed turns for a workspace: checkpoints joined with their
     /// tool activities, grouped by checkpoint and ordered by turn_index.
     pub fn list_completed_turns(
@@ -1397,6 +1428,65 @@ mod tests {
         assert_eq!(turns[0].activities.len(), 2);
         assert_eq!(turns[1].activities.len(), 1);
         assert_eq!(turns[1].activities[0].tool_name, "Bash");
+    }
+
+    /// A backgrounded `Workflow` finishes long after its turn was saved, so
+    /// the final tree has to be written straight at the activity row.
+    #[test]
+    fn test_update_turn_tool_activity_progress_writes_tree_and_status() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_turn_tool_activities(&[make_tool_activity("a1", "cp1", "Workflow", 0)])
+            .unwrap();
+
+        let tree = r#"[{"type":"workflow_agent","index":1,"label":"review","state":"done"}]"#;
+        let updated = db
+            .update_turn_tool_activity_progress("tu_a1", tree, Some("completed"))
+            .unwrap();
+        assert_eq!(updated, 1);
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        let activity = &turns[0].activities[0];
+        assert_eq!(activity.workflow_progress_json, tree);
+        assert_eq!(activity.agent_status.as_deref(), Some("completed"));
+    }
+
+    /// `COALESCE` on the status column: a progress-only update must not
+    /// blank a status a prior notification already resolved.
+    #[test]
+    fn test_update_turn_tool_activity_progress_preserves_status_when_none() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_turn_tool_activities(&[make_tool_activity("a1", "cp1", "Workflow", 0)])
+            .unwrap();
+
+        db.update_turn_tool_activity_progress("tu_a1", "[]", Some("completed"))
+            .unwrap();
+        db.update_turn_tool_activity_progress("tu_a1", r#"[{"type":"Unknown"}]"#, None)
+            .unwrap();
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        assert_eq!(
+            turns[0].activities[0].agent_status.as_deref(),
+            Some("completed")
+        );
+    }
+
+    /// An unknown `tool_use_id` is normal (the turn may never have been
+    /// checkpointed), so it reports zero rows rather than erroring.
+    #[test]
+    fn test_update_turn_tool_activity_progress_unknown_id_is_not_an_error() {
+        let db = setup_db_with_workspace();
+        let updated = db
+            .update_turn_tool_activity_progress("tu_missing", "[]", Some("completed"))
+            .unwrap();
+        assert_eq!(updated, 0);
     }
 
     #[test]
