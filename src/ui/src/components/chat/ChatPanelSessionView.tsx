@@ -32,6 +32,7 @@ import { setPlanModeAndPersist } from "./planModePersistence";
 import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
 import { ScrollContext } from "./ScrollContext";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
+import { WorkflowStatusPill } from "./WorkflowStatusPill";
 import { SetupScriptBanner } from "./SetupScriptBanner";
 import { StreamingMessage } from "./StreamingMessage";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
@@ -423,6 +424,11 @@ export function ChatPanelSessionView({
           </div>
         </ScrollContext.Provider>
       </div>
+
+      {/* Sits above the scroll pill: a backgrounded workflow's card leaves
+          the viewport within seconds (its launching turn ends almost
+          immediately), so this is what keeps a multi-minute run visible. */}
+      <WorkflowStatusPill sessionId={activeSessionId} />
 
       <ScrollToBottomPill
         visible={!isAtBottom && messages.length > 0}

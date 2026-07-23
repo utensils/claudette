@@ -1,0 +1,85 @@
+/* Compact live indicator for backgrounded Workflow runs. Sits with the
+ * scroll-to-bottom pill above the composer, which is the one spot that
+ * stays visible no matter where the transcript is scrolled. */
+
+.stack {
+  align-self: center;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-1) 0;
+}
+
+.pill {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.pill:hover {
+  background: var(--hover-bg);
+  border-color: var(--accent-primary);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.icon {
+  color: var(--tool-agent);
+  display: flex;
+  flex-shrink: 0;
+}
+
+/* The icon spins only while the run has agents in flight, so a workflow
+ * waiting on a queue slot doesn't imply activity that isn't happening. */
+.spinning {
+  animation: workflowSpin 2s linear infinite;
+}
+
+@keyframes workflowSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinning {
+    animation: none;
+  }
+}
+
+.name {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  max-width: 16rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.separator {
+  color: var(--text-separator);
+}
+
+.counts {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.errors {
+  color: var(--accent-error);
+}

@@ -12,6 +12,7 @@ import {
   workflowDescription,
   workflowDisplayName,
 } from "./workflowMeta";
+import { WORKFLOW_CARD_ANCHOR_ATTR } from "./workflowAnchor";
 import styles from "./WorkflowCard.module.css";
 
 /** Grouping key for an agent with no phase — workflows can call `agent()`
@@ -298,7 +299,8 @@ export function WorkflowCard({
       : 0;
 
   return (
-    <div className={styles.card}>
+    // Anchor for the status pill's scroll-into-view — see `workflowAnchor`.
+    <div className={styles.card} {...{ [WORKFLOW_CARD_ANCHOR_ATTR]: activity.toolUseId }}>
       <div className={styles.header} {...headerInteractiveProps}>
         {collapsible && (
           <span className={styles.chevron} aria-hidden="true">
