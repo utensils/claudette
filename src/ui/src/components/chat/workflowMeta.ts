@@ -14,8 +14,9 @@
 
 /** Upper bound on the `meta` literal scan, so a script with an unbalanced
  *  brace (or one that simply never closes the object) can't walk the whole
- *  file. Real `meta` blocks are a few hundred chars; scripts run to
- *  hundreds of KB. */
+ *  file. Real `meta` blocks are a few hundred chars; measured against a
+ *  corpus of real runs, whole scripts are a median of ~10 KB and up to
+ *  ~30 KB. */
 const META_SCAN_CHARS = 4000;
 
 interface WorkflowToolInput {

@@ -249,8 +249,25 @@ describe("WorkflowCard", () => {
     const details = container.querySelector("details");
     expect(details).not.toBeNull();
     expect(details?.hasAttribute("open")).toBe(false);
-    expect(details?.textContent).toContain("export const meta");
     expect(details?.querySelector("summary")?.textContent).toContain("6 lines");
+  });
+
+  // The script body is mounted only while open. A collapsed <details>
+  // doesn't paint its contents, but the text nodes still cost memory, and a
+  // long session accumulates one card per run.
+  it("does not mount the script body until the disclosure is opened", async () => {
+    const container = await render(<WorkflowCard activity={makeActivity()} />);
+    const details = container.querySelector("details")!;
+    expect(details.querySelector("pre")).toBeNull();
+    expect(details.textContent).not.toContain("export const meta");
+
+    await act(async () => {
+      details.open = true;
+      details.dispatchEvent(new Event("toggle"));
+    });
+
+    expect(details.querySelector("pre")).not.toBeNull();
+    expect(details.textContent).toContain("export const meta");
   });
 
   it("omits the script disclosure for a workflow launched by name", async () => {

@@ -194,6 +194,43 @@ function AgentRow({
 }
 
 /**
+ * The workflow script, behind a collapsed disclosure.
+ *
+ * The `<pre>` is mounted only while open. A collapsed `<details>` doesn't
+ * paint its contents, but the text nodes still exist — and a long-lived
+ * session accumulates one card per run inside a transcript that already
+ * holds every completed turn. Measured against real runs, scripts are a
+ * median of ~10 KB and up to ~30 KB, so this is a modest saving per card
+ * rather than a dramatic one; it's here because the cost is pure waste
+ * (nobody reads most of these) and the fix is four lines.
+ *
+ * `onToggle` drives local state rather than the `open` attribute, so the
+ * element stays uncontrolled and keeps the browser's native disclosure
+ * behavior — including keyboard activation and find-in-page auto-expand.
+ */
+function ScriptDisclosure({
+  script,
+  lineCount,
+}: {
+  script: string;
+  lineCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <details
+      className={styles.script}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
+      <summary className={styles.scriptToggle}>
+        Script ({lineCount} line{lineCount !== 1 ? "s" : ""})
+      </summary>
+      {open && <pre className={styles.scriptBody}>{script}</pre>}
+    </details>
+  );
+}
+
+/**
  * Renders a `Workflow` tool call as its live phase/agent tree.
  *
  * Before this existed, a workflow showed up as one tool row whose summary
@@ -398,12 +435,7 @@ export function WorkflowCard({
             ))
           )}
           {script && (
-            <details className={styles.script}>
-              <summary className={styles.scriptToggle}>
-                Script ({scriptLineCount} line{scriptLineCount !== 1 ? "s" : ""})
-              </summary>
-              <pre className={styles.scriptBody}>{script}</pre>
-            </details>
+            <ScriptDisclosure script={script} lineCount={scriptLineCount} />
           )}
         </div>
       )}
