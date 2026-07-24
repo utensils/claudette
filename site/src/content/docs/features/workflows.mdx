@@ -16,7 +16,7 @@ A workflow appears in the transcript as a card, in place of the tool call that l
 
 Rows carry extra badges where relevant: `cached` when a resumed run served an agent from its prior result instead of re-running it, `retry N` when an agent needed more than one attempt, and `worktree` or `remote` when an agent ran isolated.
 
-The card is expanded by default. Collapsing it hides the agent tree but keeps the header and progress rail visible, and your choice persists for that run.
+The card is expanded by default. Collapsing it hides the agent tree but keeps the header and progress rail visible, so a collapsed run still shows its agent count, failures, and tokens at a glance. That holds both while the run is live and after the launching turn has finished, and your choice carries across that boundary — collapse a running workflow and it stays collapsed, in the same shape, once the turn ends.
 
 ## The status pill
 

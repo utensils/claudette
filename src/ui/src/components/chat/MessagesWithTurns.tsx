@@ -749,7 +749,15 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
               // accidentally colliding with a real tool group.
               `tools:__empty__:${turn.id}`;
             const userOverride = collapsedToolGroups?.[groupKey];
-            const collapsed = userOverride ?? turn.collapsed;
+            // Workflows default to expanded on both sides of the turn
+            // boundary. `turn.collapsed` defaults to true, which would fold
+            // an untouched workflow card the instant its turn ended —
+            // reversing what the user was just watching, and for the one
+            // group kind whose whole point is the phase/agent tree (see
+            // `GroupedWorkflowActivity` for the same default while live).
+            const isWorkflowGroup = kind === "workflow";
+            const collapsed =
+              userOverride ?? (isWorkflowGroup ? false : turn.collapsed);
             // Single-group turns also flip the legacy `turn.collapsed`
             // flag so persistence-aware code (Cmd-A "collapse all" etc.)
             // sees the same state without needing to consult the override
@@ -763,7 +771,15 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             const onToggle = () => {
               const next = !collapsed;
               setCollapsedToolGroup(sessionId, groupKey, next);
-              if (isSingleGroupTurn && next !== turn.collapsed) {
+              // Workflow groups read the override against their own `false`
+              // default and never consult `turn.collapsed`, so syncing the
+              // legacy flag here would drift it away from what the card
+              // actually shows.
+              if (
+                !isWorkflowGroup &&
+                isSingleGroupTurn &&
+                next !== turn.collapsed
+              ) {
                 toggleCompletedTurn(sessionId, globalIdx);
               }
             };

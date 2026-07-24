@@ -247,7 +247,10 @@ function GroupedToolActivityRows({
  *
  * Collapse state persists through the same `collapsedToolGroupsBySession`
  * slice as every other group, keyed `workflow:<toolUseId>`, so the user's
- * choice survives the running→completed transition into `TurnSummary`.
+ * choice survives the running→completed transition into `TurnSummary` —
+ * which forwards that same state to this card rather than to its own
+ * chevron, so collapse means "hide the agent tree, keep the header and
+ * rail" on both sides of the boundary.
  */
 function GroupedWorkflowActivity({
   sessionId,

@@ -844,3 +844,135 @@ describe("MessagesWithTurns conclusion gating", () => {
     expect(container.textContent).not.toContain("Shipped the migration.");
   });
 });
+
+describe("MessagesWithTurns workflow groups", () => {
+  const WORKFLOW_SCRIPT = `export const meta = {
+  name: 'review-changes',
+  description: 'Review the diff across dimensions',
+  phases: [{ title: 'Review' }],
+}`;
+
+  // One done + one errored: both are terminal, so the badge reads "2/2 agents"
+  // alongside "1 failed". Two agents (rather than one) keeps the count badge
+  // distinguishable from the failure badge in the collapsed assertions below.
+  function workflowActivity(): ToolActivity {
+    return {
+      toolUseId: "toolu_wf1",
+      toolName: "Workflow",
+      inputJson: JSON.stringify({ script: WORKFLOW_SCRIPT }),
+      // A workflow's tool_result lands at LAUNCH, not completion.
+      resultText: "Workflow launched in background. Task ID: w4stpeffj",
+      collapsed: false,
+      summary: "review-changes",
+      agentStatus: "completed",
+      workflowProgress: [
+        { type: "workflow_phase", index: 1, title: "Review" },
+        {
+          type: "workflow_agent",
+          index: 1,
+          label: "review:bugs",
+          state: "done",
+          phaseTitle: "Review",
+        },
+        {
+          type: "workflow_agent",
+          index: 2,
+          label: "review:perf",
+          state: "error",
+          phaseTitle: "Review",
+        },
+      ],
+    };
+  }
+
+  const workflowMessages = [
+    message("user-1", "User", "Review the diff"),
+    message("assistant-1", "Assistant", "Launched a workflow."),
+  ];
+
+  async function renderWorkflowTurn(turn: CompletedTurn): Promise<HTMLElement> {
+    useAppStore.setState({ completedTurns: { [SESSION_ID]: [turn] } });
+    return render(
+      <MessagesWithTurns
+        messages={workflowMessages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+  }
+
+  it("renders a finished workflow expanded even when its turn is collapsed", async () => {
+    // `turn.collapsed` defaults true for ordinary tool groups. A workflow must
+    // not inherit that: the card was expanded the whole time it was running,
+    // and folding it the instant the turn ends reverses what the user saw.
+    const container = await renderWorkflowTurn({
+      ...completedTurn([workflowActivity()]),
+      collapsed: true,
+    });
+
+    expect(container.textContent).toContain("review:bugs");
+    expect(container.textContent).toContain("review:perf");
+  });
+
+  it("keeps the header, badges, and rail visible when the card is collapsed", async () => {
+    // The regression this guards: collapse used to be spent on the enclosing
+    // TurnSummary chevron, which unmounted the entire card — so the finished
+    // run's agent count and failure badge vanished, which is precisely the
+    // summary someone collapsing a completed workflow wants to keep.
+    useAppStore.setState({
+      collapsedToolGroupsBySession: {
+        [SESSION_ID]: { "workflow:toolu_wf1": true },
+      },
+    });
+    const container = await renderWorkflowTurn(
+      completedTurn([workflowActivity()]),
+    );
+
+    expect(container.textContent).toContain("2/2 agents");
+    expect(container.textContent).toContain("1 failed");
+    expect(container.querySelector('[role="progressbar"]')).not.toBeNull();
+    // Only the agent tree is hidden.
+    expect(container.textContent).not.toContain("review:bugs");
+  });
+
+  it("gives the group exactly one collapse control, on the card itself", async () => {
+    const container = await renderWorkflowTurn(
+      completedTurn([workflowActivity()]),
+    );
+
+    // No generic TurnSummary chevron wrapping the card — otherwise the run
+    // would render two stacked chevrons meaning two different things.
+    expect(container.querySelectorAll("[class*=turnHeader]")).toHaveLength(0);
+    const cardHeader = container.querySelector(
+      '[role="button"][aria-label*="workflow review-changes"]',
+    );
+    expect(cardHeader).not.toBeNull();
+    expect(cardHeader?.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("persists a card collapse under the same key the live card uses", async () => {
+    const container = await renderWorkflowTurn(
+      completedTurn([workflowActivity()]),
+    );
+    const cardHeader = container.querySelector(
+      '[role="button"][aria-label*="workflow review-changes"]',
+    ) as HTMLElement;
+
+    await act(async () => {
+      cardHeader.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // `workflow:<toolUseId>` — the key `GroupedWorkflowActivity` writes while
+    // the run is live, so the choice carries across the turn boundary.
+    expect(
+      useAppStore.getState().collapsedToolGroupsBySession[SESSION_ID]?.[
+        "workflow:toolu_wf1"
+      ],
+    ).toBe(true);
+    expect(container.textContent).not.toContain("review:bugs");
+    expect(container.querySelector('[role="progressbar"]')).not.toBeNull();
+  });
+});

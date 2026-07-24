@@ -133,11 +133,35 @@ export function TurnSummary({
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
   const isExpanded = inline || !collapsed || queryHasMatch;
+
+  // In grouped mode a workflow is always a group of exactly one activity
+  // (`groupToolActivitiesForDisplay` gives it its own group), and the card it
+  // renders already owns a header, chevron, and progress rail. So hand this
+  // group's `collapsed`/`onToggle` to the card rather than spending them on
+  // the generic TurnSummary chevron.
+  //
+  // That keeps one chevron on screen instead of two, but the real reason is
+  // that `workflow:<toolUseId>` is shared with the live card on purpose (see
+  // `collapsedToolGroupKey`) — and wrapping made the key mean two different
+  // things across the running→completed boundary. While live, collapse hid
+  // only the agent tree and kept the header/rail; once the turn ended the
+  // TurnSummary chevron unmounted the whole card, so the final agent count,
+  // failure badge, and token total silently disappeared — exactly the summary
+  // a user collapsing a finished run wants to keep. Forwarding makes collapse
+  // mean "hide the agent tree" on both sides.
+  const soleActivity =
+    visibleActivities.length === 1 ? visibleActivities[0] : undefined;
+  const workflowCollapseOwner =
+    !inline && soleActivity && isWorkflowActivity(soleActivity)
+      ? soleActivity
+      : null;
+
   const renderedActivities = visibleActivities.map((act: ToolActivity) => {
     if (isWorkflowActivity(act)) {
-      // Always expanded here — the enclosing TurnSummary header already
-      // provides the collapse affordance for a finished run, and nesting a
-      // second chevron inside it would give the same card two of them.
+      // Reached only in inline display mode (grouped mode routes the card
+      // through `workflowCollapseOwner` above). Inline mode renders every
+      // activity flush with no enclosing chevron, so the card has no collapse
+      // affordance to inherit and stays expanded.
       return <WorkflowCard key={act.toolUseId} activity={act} inline />;
     }
     if (isAgentActivity(act)) {
@@ -166,7 +190,15 @@ export function TurnSummary({
 
   return (
     <div className={styles.turnSummaryWrapper}>
-      {inline ? (
+      {workflowCollapseOwner ? (
+        <div className={styles.inlineTurnActivities}>
+          <WorkflowCard
+            activity={workflowCollapseOwner}
+            collapsed={!isExpanded}
+            onToggle={onToggle}
+          />
+        </div>
+      ) : inline ? (
         <div className={styles.inlineTurnActivities}>{renderedActivities}</div>
       ) : (
         <div className={styles.turnSummary}>
