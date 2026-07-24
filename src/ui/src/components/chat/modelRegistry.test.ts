@@ -61,13 +61,19 @@ describe("modelRegistry", () => {
 
   describe("get1mFallback", () => {
     it("maps 1M models to their 200K equivalents", () => {
-      expect(get1mFallback("opus")).toBe("claude-opus-4-8");
       expect(get1mFallback("claude-fable-5[1m]")).toBe("claude-fable-5");
+      // Opus 4.8 1M now falls back to the pinned 200K id, not the `opus`
+      // alias (which moved to Opus 5).
+      expect(get1mFallback("claude-opus-4-8[1m]")).toBe("claude-opus-4-8");
       expect(get1mFallback("claude-opus-4-7[1m]")).toBe("claude-opus-4-7");
       // Sonnet 4.6 1M now falls back to the pinned 200K id, not the `sonnet`
       // alias (which moved to Sonnet 5).
       expect(get1mFallback("claude-sonnet-4-6[1m]")).toBe("claude-sonnet-4-6");
       expect(get1mFallback("claude-opus-4-6[1m]")).toBe("claude-opus-4-6");
+    });
+
+    it("returns the `opus` alias unchanged (Opus 5 is natively 1M, no 200K variant)", () => {
+      expect(get1mFallback("opus")).toBe("opus");
     });
 
     it("returns the `sonnet` alias unchanged (Sonnet 5 is natively 1M, no 200K variant)", () => {

@@ -39,10 +39,12 @@ export function is1mContextModel(modelId: string): boolean {
 }
 
 const NON_1M_FALLBACKS: Record<string, string> = {
-  "opus": "claude-opus-4-8",
+  // No `opus` entry: Opus 5 is natively 1M with no 200K variant to fall back
+  // to, so `get1mFallback("opus")` correctly returns "opus" unchanged.
   // No `sonnet` entry: Sonnet 5 is natively 1M with no 200K variant to fall
   // back to, so `get1mFallback("sonnet")` correctly returns "sonnet" unchanged.
   "claude-fable-5[1m]": "claude-fable-5",
+  "claude-opus-4-8[1m]": "claude-opus-4-8",
   "claude-opus-4-7[1m]": "claude-opus-4-7",
   "claude-sonnet-4-6[1m]": "claude-sonnet-4-6",
   "claude-opus-4-6[1m]": "claude-opus-4-6",
@@ -54,16 +56,21 @@ export function get1mFallback(modelId: string): string {
 
 export const MODELS: readonly Model[] = [
   // 1M context billing per Anthropic's Claude Code docs (Model configuration → Extended context):
-  //   Max/Team/Enterprise → Opus 1M included with subscription; legacy Sonnet 4.6 1M is extra usage.
-  //   Pro                → both Opus 1M and legacy Sonnet 4.6 1M are extra usage.
-  // Sonnet 5 is the exception: its 1M window is native and included at standard pricing on
-  // every plan, so it carries no `extraUsage` indicator (see the `sonnet` row below).
+  //   Max/Team/Enterprise → legacy Opus 4.8 1M is included with subscription; legacy Sonnet 4.6 1M is extra usage.
+  //   Pro                → both legacy Opus 4.8 1M and legacy Sonnet 4.6 1M are extra usage.
+  // Opus 5 and Sonnet 5 are both exceptions: their 1M windows are native and included at
+  // standard pricing on every plan, so neither carries an `extraUsage` indicator (see the
+  // `opus` and `sonnet` rows below).
   // The `extraUsage` flag tracks subscription-quota inclusion, not per-token API price.
   // We optimize for Max/Team/Enterprise (Claudette's primary audience), so only legacy
-  // Sonnet 4.6 1M carries the indicator; Pro users selecting Opus 1M see no warning even
-  // though it counts against their extra-usage allotment.
-  { id: "opus", label: "Opus 4.8 1M", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
-  { id: "claude-opus-4-8", label: "Opus 4.8", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
+  // Sonnet 4.6 1M carries the indicator; Pro users selecting legacy Opus 4.8 1M see no
+  // warning even though it counts against their extra-usage allotment.
+  // `opus` is the bare alias the Claude CLI resolves to the latest Opus — now Opus 5,
+  // which (like Sonnet 5) runs natively at 1M context with no 200K variant, no `[1m]`
+  // suffix to select, and no usage credits on any plan — Anthropic recommends it as
+  // Claude Code's default. So unlike Opus 4.8, there is no separate concrete
+  // `claude-opus-5` row: the alias itself is the 1M model.
+  { id: "opus", label: "Opus 5", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
   // `sonnet` is the bare alias the Claude CLI resolves to the latest Sonnet — now Sonnet 5,
   // which runs natively at 1M context (no 200K variant, no `[1m]` suffix to select, no usage
   // credits on any plan — Claude Code model-config docs, "Sonnet 5 context window"). So unlike
@@ -76,6 +83,11 @@ export const MODELS: readonly Model[] = [
   // uses the `[1m]` suffix convention so `is1mContextModel` detects it without a special case.
   { id: "claude-fable-5", label: "Fable 5", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
   { id: "claude-fable-5[1m]", label: "Fable 5 1M", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
+  // Opus 4.8 demoted to the "More" disclosure when `opus` moved to Opus 5. Both the
+  // 200K default and 1M variant are pinned here (the paths the `opus` alias used to
+  // resolve to for each context size) so they survive the alias move.
+  { id: "claude-opus-4-8", label: "Opus 4.8", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
+  { id: "claude-opus-4-8[1m]", label: "Opus 4.8 1M", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 1_000_000 },
   { id: "claude-opus-4-7", label: "Opus 4.7", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
   { id: "claude-opus-4-7[1m]", label: "Opus 4.7 1M", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 1_000_000 },
   { id: "claude-opus-4-6", label: "Opus 4.6", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },

@@ -98,36 +98,45 @@ const PRICING_TABLE: &[(&str, ModelPricing)] = &[
     (
         "claude-fable-5",
         ModelPricing {
-            prompt_per_mtok_usd: 30.00,
-            completion_per_mtok_usd: 150.00,
+            prompt_per_mtok_usd: 10.00,
+            completion_per_mtok_usd: 50.00,
+        },
+    ),
+    // Opus 5 is the current flagship; the `opus` alias resolves here.
+    // The `[1m]` gateway form matches via `starts_with`.
+    (
+        "claude-opus-5",
+        ModelPricing {
+            prompt_per_mtok_usd: 5.00,
+            completion_per_mtok_usd: 25.00,
         },
     ),
     (
         "claude-opus-4-8",
         ModelPricing {
-            prompt_per_mtok_usd: 15.00,
-            completion_per_mtok_usd: 75.00,
+            prompt_per_mtok_usd: 5.00,
+            completion_per_mtok_usd: 25.00,
         },
     ),
     (
         "claude-opus-4-7",
         ModelPricing {
-            prompt_per_mtok_usd: 15.00,
-            completion_per_mtok_usd: 75.00,
+            prompt_per_mtok_usd: 5.00,
+            completion_per_mtok_usd: 25.00,
         },
     ),
     (
         "claude-opus-4-6",
         ModelPricing {
-            prompt_per_mtok_usd: 15.00,
-            completion_per_mtok_usd: 75.00,
+            prompt_per_mtok_usd: 5.00,
+            completion_per_mtok_usd: 25.00,
         },
     ),
     (
         "claude-opus-4-5",
         ModelPricing {
-            prompt_per_mtok_usd: 15.00,
-            completion_per_mtok_usd: 75.00,
+            prompt_per_mtok_usd: 5.00,
+            completion_per_mtok_usd: 25.00,
         },
     ),
     // Sonnet 5 standard list price ($3/$15 per Mtok) — same as Sonnet 4.6.
@@ -171,11 +180,21 @@ mod tests {
     #[test]
     fn lookup_fable_5_priced_at_2x_opus() {
         let p = lookup("claude-fable-5").expect("claude-fable-5 has pricing");
-        assert!((p.prompt_per_mtok_usd - 30.00).abs() < f64::EPSILON);
-        assert!((p.completion_per_mtok_usd - 150.00).abs() < f64::EPSILON);
+        assert!((p.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
+        assert!((p.completion_per_mtok_usd - 50.00).abs() < f64::EPSILON);
         // The 1M variant shares the bare prefix via `starts_with`.
         let one_m = lookup("claude-fable-5[1m]").expect("1M variant resolves to same pricing");
-        assert!((one_m.prompt_per_mtok_usd - 30.00).abs() < f64::EPSILON);
+        assert!((one_m.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn lookup_opus_5() {
+        let p = lookup("claude-opus-5").expect("claude-opus-5 has pricing");
+        assert!((p.prompt_per_mtok_usd - 5.00).abs() < f64::EPSILON);
+        assert!((p.completion_per_mtok_usd - 25.00).abs() < f64::EPSILON);
+        // The 1M gateway form shares the bare prefix via `starts_with`.
+        let one_m = lookup("claude-opus-5[1m]").expect("1M variant resolves to same pricing");
+        assert!((one_m.prompt_per_mtok_usd - 5.00).abs() < f64::EPSILON);
     }
 
     #[test]

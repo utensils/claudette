@@ -247,11 +247,26 @@ describe("applySelectedModel", () => {
       appStore.selectedModel["sess-1"] = "claude-opus-4-7";
       appStore.selectedModelProvider["sess-1"] = "anthropic";
 
-      await applySelectedModel("sess-1", "opus", "anthropic");
+      await applySelectedModel("sess-1", "claude-opus-4-8[1m]", "anthropic");
 
       expect(appStore.setSelectedModel).toHaveBeenCalledWith(
         "sess-1",
         "claude-opus-4-8",
+        "anthropic",
+      );
+      expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
+    });
+
+    it("does NOT substitute the `opus` alias (Opus 5 is natively 1M, no 200K variant)", async () => {
+      appStore.disable1mContext = true;
+      appStore.selectedModel["sess-1"] = "claude-opus-4-7";
+      appStore.selectedModelProvider["sess-1"] = "anthropic";
+
+      await applySelectedModel("sess-1", "opus", "anthropic");
+
+      expect(appStore.setSelectedModel).toHaveBeenCalledWith(
+        "sess-1",
+        "opus",
         "anthropic",
       );
       expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
