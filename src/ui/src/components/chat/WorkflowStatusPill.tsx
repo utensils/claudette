@@ -29,12 +29,27 @@ function WorkflowPill({ workflow }: { workflow: LiveWorkflow }) {
       ? `${summary.doneCount}/${summary.totalCount}`
       : "starting";
 
+  // Built independently of `counts`, which is shorthand tuned for the
+  // pill's width ("1/3", "starting"). Reusing it here produced
+  // "…, starting agents complete", and read "1/3" as a fraction. Errors
+  // are folded in because `aria-label` *replaces* the button's accessible
+  // name — the visual failure badge is not announced at all otherwise.
+  const spokenProgress =
+    summary.totalCount > 0
+      ? `${summary.doneCount} of ${summary.totalCount} agents complete`
+      : "starting";
+  const spokenErrors =
+    summary.errorCount > 0
+      ? `, ${summary.errorCount} failed`
+      : "";
+  const ariaLabel = `Workflow ${name}, ${spokenProgress}${spokenErrors}. Jump to details.`;
+
   return (
     <button
       type="button"
       className={styles.pill}
       onClick={onClick}
-      aria-label={`Workflow ${name}, ${counts} agents complete. Jump to details.`}
+      aria-label={ariaLabel}
     >
       <span className={styles.icon}>
         <WorkflowIcon

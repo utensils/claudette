@@ -16,15 +16,24 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  cursor: pointer;
   user-select: none;
 }
 
-.header:hover {
+/* Interactive affordances are scoped to the collapsible form. In inline
+ * mode (completed turns, and the inline tool-display setting) the card
+ * renders no chevron, no click handler, and no role — a pointer cursor and
+ * hover highlight there advertise a click that does nothing. `role="button"`
+ * is set by exactly the same condition that wires `onToggle`, so it's a
+ * faithful proxy for "this header is clickable". */
+.header[role="button"] {
+  cursor: pointer;
+}
+
+.header[role="button"]:hover {
   background: var(--hover-bg-subtle);
 }
 
-.header:focus-visible {
+.header[role="button"]:focus-visible {
   outline: 2px solid var(--accent-primary);
   outline-offset: -2px;
 }

@@ -219,6 +219,23 @@ describe("WorkflowCard", () => {
     expect(container.textContent).not.toContain("review:bugs");
   });
 
+  // The CSS scopes cursor/hover/focus affordances to `[role="button"]`, so
+  // the role must be present exactly when the header is really clickable —
+  // otherwise the inline card advertises a click that does nothing.
+  it("marks the header interactive only when a toggle is wired", async () => {
+    const collapsible = await render(
+      <WorkflowCard activity={makeActivity()} collapsed={false} onToggle={() => {}} />,
+    );
+    expect(
+      collapsible.querySelector("[class*=header]")?.getAttribute("role"),
+    ).toBe("button");
+
+    const inline = await render(<WorkflowCard activity={makeActivity()} inline />);
+    expect(
+      inline.querySelector("[class*=header]")?.getAttribute("role"),
+    ).toBeNull();
+  });
+
   it("shows a starting state before the first progress tick", async () => {
     const container = await render(
       <WorkflowCard activity={makeActivity({ workflowProgress: undefined })} />,

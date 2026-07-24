@@ -160,6 +160,59 @@ describe("WorkflowStatusPill", () => {
     expect(container.textContent).toContain("starting");
   });
 
+  describe("accessible name", () => {
+    // The visual counts string is shorthand tuned for the pill's width;
+    // reusing it verbatim produced "starting agents complete" and spoke
+    // "1/3" as a fraction.
+    it("spells out progress rather than reusing the visual shorthand", async () => {
+      useAppStore.setState({
+        toolActivities: { [SESSION]: [workflowActivity()] },
+      });
+      const container = await render(<WorkflowStatusPill sessionId={SESSION} />);
+      const label = container.querySelector("button")?.getAttribute("aria-label");
+      expect(label).toBe(
+        "Workflow review-changes, 1 of 3 agents complete. Jump to details.",
+      );
+    });
+
+    it("reads naturally before any agent has been reported", async () => {
+      useAppStore.setState({
+        toolActivities: {
+          [SESSION]: [
+            workflowActivity("toolu_wf1", { workflowProgress: undefined }),
+          ],
+        },
+      });
+      const container = await render(<WorkflowStatusPill sessionId={SESSION} />);
+      const label = container.querySelector("button")?.getAttribute("aria-label");
+      expect(label).toBe("Workflow review-changes, starting. Jump to details.");
+      expect(label).not.toContain("agents complete");
+    });
+
+    // `aria-label` replaces the button's accessible name, so the visual
+    // failure badge is not announced unless it's folded into the label.
+    it("includes the failure count", async () => {
+      useAppStore.setState({
+        toolActivities: {
+          [SESSION]: [
+            workflowActivity("toolu_wf1", {
+              workflowProgress: [
+                { type: "workflow_agent", index: 1, label: "a", state: "error" },
+                { type: "workflow_agent", index: 2, label: "b", state: "done" },
+              ],
+            }),
+          ],
+        },
+      });
+      const container = await render(<WorkflowStatusPill sessionId={SESSION} />);
+      expect(
+        container.querySelector("button")?.getAttribute("aria-label"),
+      ).toBe(
+        "Workflow review-changes, 2 of 2 agents complete, 1 failed. Jump to details.",
+      );
+    });
+  });
+
   it("scrolls the matching card into view when clicked", async () => {
     useAppStore.setState({
       toolActivities: { [SESSION]: [workflowActivity()] },
