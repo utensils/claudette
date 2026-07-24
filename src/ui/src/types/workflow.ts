@@ -89,6 +89,23 @@ export function isAgentTerminal(agent: WorkflowAgentEntry): boolean {
   return TERMINAL_AGENT_STATES.has(agent.state);
 }
 
+/**
+ * An agent's phase title, or `null` when it has none.
+ *
+ * Normalizes the three ways "no phase" can arrive — `undefined`, an explicit
+ * `null` (Rust's `Option<String>` serializes that way), and an empty or
+ * whitespace-only string. Without the last case an agent could land in its
+ * own phase group keyed on `""`, rendering as a nameless section separate
+ * from the real unphased bucket.
+ *
+ * Shared by the summarizer and the card's grouping so both agree on which
+ * agents count as unphased.
+ */
+export function phaseTitleOf(agent: WorkflowAgentEntry): string | null {
+  const title = agent.phaseTitle?.trim();
+  return title ? title : null;
+}
+
 export interface WorkflowRunSummary {
   phases: WorkflowPhaseEntry[];
   agents: WorkflowAgentEntry[];
@@ -101,8 +118,10 @@ export interface WorkflowRunSummary {
   running: boolean;
   totalTokens: number;
   totalToolCalls: number;
-  /** Phase title of the newest non-terminal agent, else the last phase seen.
-   *  Drives the compact pill's "Phase: Verify" text. */
+  /** Phase of the first in-flight agent that declares one; when nothing is
+   *  in flight, the last declared phase. `null` when agents are running but
+   *  none is phased — better to say nothing than to name a phase no agent
+   *  is actually working in. Drives the pill's "· Verify" segment. */
   currentPhaseTitle: string | null;
 }
 
@@ -142,20 +161,32 @@ export function summarizeWorkflowProgress(
   let errorCount = 0;
   let totalTokens = 0;
   let totalToolCalls = 0;
+  let hasInFlight = false;
   let currentPhaseTitle: string | null = null;
 
   for (const agent of agents) {
-    if (isAgentTerminal(agent)) doneCount++;
-    else if (currentPhaseTitle === null) currentPhaseTitle = agent.phaseTitle ?? null;
+    if (isAgentTerminal(agent)) {
+      doneCount++;
+    } else {
+      hasInFlight = true;
+      // First in-flight agent that actually declares a phase wins. An
+      // unphased one contributes nothing here but still counts as in
+      // flight, which is what stops the fallback below from firing.
+      if (currentPhaseTitle === null) currentPhaseTitle = phaseTitleOf(agent);
+    }
     if (agent.state === "error") errorCount++;
     totalTokens += agent.tokens ?? 0;
     totalToolCalls += agent.toolCalls ?? 0;
   }
 
-  // No in-flight agent to borrow a phase from (run finished, or the first
-  // tick arrived before any agent did) — fall back to the last declared
-  // phase so the header still says something useful.
-  if (currentPhaseTitle === null && phases.length > 0) {
+  // Fall back to the last declared phase only when nothing is in flight —
+  // the run finished, or the first tick arrived before any agent did.
+  //
+  // The `!hasInFlight` guard is the point: with agents running but none
+  // carrying a phase (a script that calls `agent()` before any `phase()`),
+  // an ungated fallback would name the last declared phase and the pill
+  // would confidently report a phase nothing is actually working in.
+  if (currentPhaseTitle === null && !hasInFlight && phases.length > 0) {
     currentPhaseTitle = phases[phases.length - 1].title;
   }
 
@@ -165,7 +196,10 @@ export function summarizeWorkflowProgress(
     doneCount,
     errorCount,
     totalCount: agents.length,
-    running: agents.length > 0 && doneCount < agents.length,
+    // Same quantity as `hasInFlight` by construction (every agent is either
+    // terminal or in flight); sharing the one source keeps them from
+    // drifting if either definition is ever adjusted.
+    running: hasInFlight,
     totalTokens,
     totalToolCalls,
     currentPhaseTitle,

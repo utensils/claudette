@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { ToolActivity } from "../../stores/useAppStore";
 import {
   isAgentTerminal,
+  phaseTitleOf,
   summarizeWorkflowProgress,
   type WorkflowAgentEntry,
 } from "../../types/workflow";
@@ -271,7 +272,7 @@ export function WorkflowCard({
   const grouped = useMemo(() => {
     const byPhase = new Map<string, WorkflowAgentEntry[]>();
     for (const agent of summary.agents) {
-      const key = agent.phaseTitle ?? UNPHASED;
+      const key = phaseTitleOf(agent) ?? UNPHASED;
       const bucket = byPhase.get(key);
       if (bucket) bucket.push(agent);
       else byPhase.set(key, [agent]);

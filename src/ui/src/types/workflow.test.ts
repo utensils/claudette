@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isAgentTerminal,
+  phaseTitleOf,
   summarizeWorkflowProgress,
   type WorkflowAgentEntry,
   type WorkflowProgressEntry,
@@ -109,6 +110,44 @@ describe("summarizeWorkflowProgress", () => {
     expect(summary.currentPhaseTitle).toBe("Synthesize");
   });
 
+  // The fallback exists for "nothing is running"; firing it while an
+  // unphased agent is in flight would name a phase nothing is working in.
+  it("does not claim a declared phase while an unphased agent is in flight", () => {
+    const summary = summarizeWorkflowProgress([
+      phase(1, "Review"),
+      phase(2, "Synthesize"),
+      agent(1, "done", { phaseTitle: "Review" }),
+      agent(2, "progress"), // launched before any phase() — no phaseTitle
+    ]);
+    expect(summary.currentPhaseTitle).toBeNull();
+  });
+
+  it("prefers a later in-flight agent that does declare a phase", () => {
+    const summary = summarizeWorkflowProgress([
+      phase(1, "Review"),
+      agent(1, "progress"), // unphased
+      agent(2, "progress", { phaseTitle: "Verify" }),
+    ]);
+    expect(summary.currentPhaseTitle).toBe("Verify");
+  });
+
+  it("treats an empty or whitespace phase title as no phase", () => {
+    expect(
+      summarizeWorkflowProgress([
+        phase(1, "Review"),
+        agent(1, "progress", { phaseTitle: "   " }),
+      ]).currentPhaseTitle,
+    ).toBeNull();
+
+    // ...and it must not block a later, real phase title either.
+    expect(
+      summarizeWorkflowProgress([
+        agent(1, "progress", { phaseTitle: "" }),
+        agent(2, "progress", { phaseTitle: "Verify" }),
+      ]).currentPhaseTitle,
+    ).toBe("Verify");
+  });
+
   it("ignores unknown entry kinds without disturbing the counts", () => {
     const summary = summarizeWorkflowProgress([
       { type: "Unknown" },
@@ -117,6 +156,23 @@ describe("summarizeWorkflowProgress", () => {
     ]);
     expect(summary.totalCount).toBe(1);
     expect(summary.doneCount).toBe(1);
+  });
+});
+
+describe("phaseTitleOf", () => {
+  it("returns the trimmed title when present", () => {
+    expect(phaseTitleOf(agent(1, "done", { phaseTitle: "  Review  " }))).toBe(
+      "Review",
+    );
+  });
+
+  // Three shapes mean "no phase": absent, an explicit null (how Rust
+  // serializes `Option<String>`), and empty/whitespace.
+  it("normalizes every no-phase shape to null", () => {
+    expect(phaseTitleOf(agent(1, "done"))).toBeNull();
+    expect(phaseTitleOf(agent(1, "done", { phaseTitle: null }))).toBeNull();
+    expect(phaseTitleOf(agent(1, "done", { phaseTitle: "" }))).toBeNull();
+    expect(phaseTitleOf(agent(1, "done", { phaseTitle: "  " }))).toBeNull();
   });
 });
 
