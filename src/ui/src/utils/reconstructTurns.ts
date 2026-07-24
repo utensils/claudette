@@ -1,7 +1,10 @@
 import type { CompletedTurn } from "../stores/useAppStore";
 import type { ChatMessage } from "../types/chat";
 import type { CompletedTurnData } from "../types/checkpoint";
-import type { WorkflowProgressEntry } from "../types/workflow";
+import {
+  isWorkflowProgressEntry,
+  type WorkflowProgressEntry,
+} from "../types/workflow";
 import { debugChat } from "./chatDebug";
 
 /**
@@ -127,11 +130,11 @@ function parseAgentToolCalls(value: string | null | undefined) {
  *  like a workflow that produced no agents — `WorkflowCard` keys off
  *  `workflowProgress` being present at all.
  *
- *  Entries are not validated beyond "is an object with a `type`". The Rust
- *  side already normalized unrecognized kinds to `{"type":"Unknown"}` on
- *  the way in, and the renderer switches on `type` with a default of
- *  "skip", so a malformed row degrades to an omitted line rather than a
- *  thrown render. */
+ *  Entries are filtered through `isWorkflowProgressEntry`, which admits only
+ *  the kinds the union models — including `Unknown`, which Rust writes for
+ *  any incoming kind it doesn't recognize. Anything else in the column is
+ *  foreign or corrupt data and is dropped here rather than being asserted
+ *  into the type and skipped later by each consumer in turn. */
 function parseWorkflowProgress(
   value: string | null | undefined,
 ): WorkflowProgressEntry[] | undefined {
@@ -139,10 +142,7 @@ function parseWorkflowProgress(
   try {
     const parsed = JSON.parse(value);
     if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
-    const entries = parsed.filter(
-      (item): item is WorkflowProgressEntry =>
-        typeof item === "object" && item !== null && typeof item.type === "string",
-    );
+    const entries = parsed.filter(isWorkflowProgressEntry);
     return entries.length > 0 ? entries : undefined;
   } catch {
     return undefined;

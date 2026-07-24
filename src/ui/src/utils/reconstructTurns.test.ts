@@ -361,4 +361,82 @@ describe("reconstructCompletedTurns", () => {
     expect(act.summary).toBe("list files");
     expect(act.collapsed).toBe(true);
   });
+
+  describe("workflow progress rehydration", () => {
+    function turnWithProgress(json: string): CompletedTurnData[] {
+      return [
+        {
+          checkpoint_id: "cp1",
+          message_id: "m1",
+          turn_index: 0,
+          message_count: 1,
+          commit_hash: null,
+          activities: [
+            {
+              id: "act-1",
+              checkpoint_id: "cp1",
+              tool_use_id: "tu-wf",
+              tool_name: "Workflow",
+              input_json: "{}",
+              result_text: "launched",
+              summary: "wf",
+              sort_order: 0,
+              assistant_message_ordinal: 0,
+              agent_task_id: null,
+              agent_description: null,
+              agent_last_tool_name: null,
+              agent_tool_use_count: null,
+              agent_status: null,
+              agent_tool_calls_json: "[]",
+              agent_thinking_blocks_json: "[]",
+              agent_result_text: null,
+              workflow_progress_json: json,
+            },
+          ],
+        },
+      ];
+    }
+
+    const messages = [makeMsg("m1")];
+
+    it("rehydrates the modeled entry kinds", () => {
+      const json = JSON.stringify([
+        { type: "workflow_phase", index: 1, title: "Review" },
+        { type: "workflow_agent", index: 1, label: "a", state: "done" },
+        { type: "Unknown" },
+      ]);
+      const result = reconstructCompletedTurns(messages, turnWithProgress(json));
+      expect(result[0].activities[0].workflowProgress).toHaveLength(3);
+    });
+
+    // The filter's type predicate asserts the union, so an unmodeled `type`
+    // must be dropped at the boundary rather than asserted into the type
+    // and skipped later by each consumer in turn.
+    it("drops entries whose type is not a modeled kind", () => {
+      const json = JSON.stringify([
+        { type: "workflow_phase", index: 1, title: "Review" },
+        { type: "workflow_log", message: "3/10 found" },
+        { type: "bogus" },
+        "not an object",
+        null,
+      ]);
+      const result = reconstructCompletedTurns(messages, turnWithProgress(json));
+      const progress = result[0].activities[0].workflowProgress;
+      expect(progress).toHaveLength(1);
+      expect(progress?.[0]).toEqual({
+        type: "workflow_phase",
+        index: 1,
+        title: "Review",
+      });
+    });
+
+    // `undefined`, not `[]` — a non-workflow activity stores "[]", and the
+    // card keys off `workflowProgress` being present at all.
+    it("returns undefined when nothing survives or the column is empty", () => {
+      for (const json of ["[]", "[{\"type\":\"bogus\"}]", "not json", ""]) {
+        const result = reconstructCompletedTurns(messages, turnWithProgress(json));
+        expect(result[0].activities[0].workflowProgress).toBeUndefined();
+      }
+    });
+  });
 });

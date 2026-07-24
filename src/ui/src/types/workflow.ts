@@ -67,6 +67,33 @@ export type WorkflowProgressEntry =
   | WorkflowAgentEntry
   | WorkflowUnknownEntry;
 
+/** The complete set of entry kinds Rust can persist. `Unknown` is included
+ *  deliberately: the Rust side maps any unrecognized incoming kind to it, so
+ *  it is a legitimate stored value rather than a parse failure. */
+const KNOWN_ENTRY_TYPES = new Set<string>([
+  "workflow_phase",
+  "workflow_agent",
+  "Unknown",
+]);
+
+/**
+ * Boundary check for a single entry decoded from persisted JSON.
+ *
+ * Narrow enough to justify the type predicate: it accepts only the kinds
+ * the union actually models. A looser "has a string `type`" check would
+ * assert `WorkflowProgressEntry` for `{type: "bogus"}`, which is unsound —
+ * harmless while every consumer re-discriminates on `type`, but a trap for
+ * the first one that trusts the type instead (an exhaustive switch with a
+ * `never` default, say, or reading `.label` off a presumed agent).
+ */
+export function isWorkflowProgressEntry(
+  value: unknown,
+): value is WorkflowProgressEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const type = (value as { type?: unknown }).type;
+  return typeof type === "string" && KNOWN_ENTRY_TYPES.has(type);
+}
+
 export function isWorkflowPhase(
   entry: WorkflowProgressEntry,
 ): entry is WorkflowPhaseEntry {

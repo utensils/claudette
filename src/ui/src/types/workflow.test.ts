@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isAgentTerminal,
+  isWorkflowProgressEntry,
   phaseTitleOf,
   summarizeWorkflowProgress,
   type WorkflowAgentEntry,
@@ -156,6 +157,30 @@ describe("summarizeWorkflowProgress", () => {
     ]);
     expect(summary.totalCount).toBe(1);
     expect(summary.doneCount).toBe(1);
+  });
+});
+
+describe("isWorkflowProgressEntry", () => {
+  it("accepts every kind the union models", () => {
+    expect(isWorkflowProgressEntry(phase(1, "Review"))).toBe(true);
+    expect(isWorkflowProgressEntry(agent(1, "done"))).toBe(true);
+    // Rust writes this for any incoming kind it doesn't recognize, so it's
+    // a legitimate stored value, not a parse failure.
+    expect(isWorkflowProgressEntry({ type: "Unknown" })).toBe(true);
+  });
+
+  // The predicate asserts the union type, so admitting an unmodeled `type`
+  // would be unsound — safe only while every consumer re-discriminates.
+  it("rejects an object whose type is a string but not a known kind", () => {
+    expect(isWorkflowProgressEntry({ type: "workflow_log" })).toBe(false);
+    expect(isWorkflowProgressEntry({ type: "bogus", label: "x" })).toBe(false);
+    expect(isWorkflowProgressEntry({ type: "" })).toBe(false);
+  });
+
+  it("rejects non-objects and objects without a string type", () => {
+    for (const value of [null, undefined, 42, "workflow_agent", [], {}, { type: 1 }]) {
+      expect(isWorkflowProgressEntry(value)).toBe(false);
+    }
   });
 });
 
