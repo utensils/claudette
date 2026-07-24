@@ -3,6 +3,8 @@ import {
   isAgentTerminal,
   isWorkflowProgressEntry,
   phaseTitleOf,
+  readOptionalNumber,
+  readOptionalString,
   summarizeWorkflowProgress,
   type WorkflowAgentEntry,
   type WorkflowProgressEntry,
@@ -149,6 +151,24 @@ describe("summarizeWorkflowProgress", () => {
     ).toBe("Verify");
   });
 
+  // A stray non-number would make `+=` concatenate or produce NaN — a
+  // silently wrong total rather than a loud failure.
+  it("ignores corrupt token and tool-call values instead of corrupting totals", () => {
+    const summary = summarizeWorkflowProgress([
+      agent(1, "done", { tokens: 100, toolCalls: 3 }),
+      {
+        type: "workflow_agent",
+        index: 2,
+        label: "b",
+        state: "done",
+        tokens: "abc",
+        toolCalls: NaN,
+      } as unknown as WorkflowAgentEntry,
+    ]);
+    expect(summary.totalTokens).toBe(100);
+    expect(summary.totalToolCalls).toBe(3);
+  });
+
   it("ignores unknown entry kinds without disturbing the counts", () => {
     const summary = summarizeWorkflowProgress([
       { type: "Unknown" },
@@ -182,6 +202,64 @@ describe("isWorkflowProgressEntry", () => {
       expect(isWorkflowProgressEntry(value)).toBe(false);
     }
   });
+
+  it("rejects a known kind that is missing or mistypes a required field", () => {
+    // phase requires index:number + title:string
+    expect(isWorkflowProgressEntry({ type: "workflow_phase" })).toBe(false);
+    expect(
+      isWorkflowProgressEntry({ type: "workflow_phase", index: "1", title: "R" }),
+    ).toBe(false);
+    expect(
+      isWorkflowProgressEntry({ type: "workflow_phase", index: 1, title: 2 }),
+    ).toBe(false);
+
+    // agent requires index:number + label:string + state:string
+    expect(isWorkflowProgressEntry({ type: "workflow_agent" })).toBe(false);
+    expect(
+      isWorkflowProgressEntry({ type: "workflow_agent", index: 1, label: "a" }),
+    ).toBe(false);
+    expect(
+      isWorkflowProgressEntry({
+        type: "workflow_agent",
+        index: 1,
+        label: "a",
+        state: 3,
+      }),
+    ).toBe(false);
+  });
+
+  // Documents the deliberate limit of this guard: optional fields are not
+  // type-checked, so a corrupt one survives. That is why accessors reaching
+  // for string methods go through `readOptionalString` — see the
+  // "tolerates a corrupt optional field" test below.
+  it("admits a well-formed entry even when an optional field is corrupt", () => {
+    expect(
+      isWorkflowProgressEntry({
+        type: "workflow_agent",
+        index: 1,
+        label: "a",
+        state: "done",
+        phaseTitle: 1,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("readOptionalString / readOptionalNumber", () => {
+  it("passes through valid values and nulls everything else", () => {
+    expect(readOptionalString("x")).toBe("x");
+    expect(readOptionalString("")).toBe("");
+    for (const bad of [1, null, undefined, {}, [], true]) {
+      expect(readOptionalString(bad)).toBeNull();
+    }
+
+    expect(readOptionalNumber(0)).toBe(0);
+    expect(readOptionalNumber(42)).toBe(42);
+    // NaN and infinities would poison a running total just as a string does.
+    for (const bad of ["1", null, undefined, NaN, Infinity, -Infinity, {}]) {
+      expect(readOptionalNumber(bad)).toBeNull();
+    }
+  });
 });
 
 describe("phaseTitleOf", () => {
@@ -198,6 +276,21 @@ describe("phaseTitleOf", () => {
     expect(phaseTitleOf(agent(1, "done", { phaseTitle: null }))).toBeNull();
     expect(phaseTitleOf(agent(1, "done", { phaseTitle: "" }))).toBeNull();
     expect(phaseTitleOf(agent(1, "done", { phaseTitle: "  " }))).toBeNull();
+  });
+
+  // The guard admits this shape (optional fields go unchecked), so the
+  // accessor is the layer that has to survive it. `.trim()` on a number
+  // throws, which would take down the whole card render.
+  it("tolerates a corrupt optional field instead of throwing", () => {
+    const corrupt = {
+      type: "workflow_agent",
+      index: 1,
+      label: "a",
+      state: "done",
+      phaseTitle: 1,
+    } as unknown as WorkflowAgentEntry;
+    expect(() => phaseTitleOf(corrupt)).not.toThrow();
+    expect(phaseTitleOf(corrupt)).toBeNull();
   });
 });
 

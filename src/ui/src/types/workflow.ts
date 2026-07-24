@@ -67,31 +67,60 @@ export type WorkflowProgressEntry =
   | WorkflowAgentEntry
   | WorkflowUnknownEntry;
 
-/** The complete set of entry kinds Rust can persist. `Unknown` is included
- *  deliberately: the Rust side maps any unrecognized incoming kind to it, so
- *  it is a legitimate stored value rather than a parse failure. */
-const KNOWN_ENTRY_TYPES = new Set<string>([
-  "workflow_phase",
-  "workflow_agent",
-  "Unknown",
-]);
-
 /**
  * Boundary check for a single entry decoded from persisted JSON.
  *
- * Narrow enough to justify the type predicate: it accepts only the kinds
- * the union actually models. A looser "has a string `type`" check would
- * assert `WorkflowProgressEntry` for `{type: "bogus"}`, which is unsound —
- * harmless while every consumer re-discriminates on `type`, but a trap for
- * the first one that trusts the type instead (an exhaustive switch with a
- * `never` default, say, or reading `.label` off a presumed agent).
+ * Validates the kind *and* the fields that kind declares as required, so
+ * the type predicate is honest about everything the interface says is
+ * non-optional. `Unknown` is an accepted kind on purpose: Rust maps any
+ * incoming kind it doesn't recognize to it, making it a legitimate stored
+ * value rather than a parse failure.
+ *
+ * **Optional fields are not type-checked here.** Doing so would mean
+ * per-field validation of ~25 attributes to guard against data we
+ * ourselves serialized from Rust, where the types are already enforced.
+ * The cost of that trade is real but bounded: a corrupt optional field
+ * survives this check, so accessors that call *methods* on one must
+ * tolerate a wrong type. `readOptionalString` exists for exactly that and
+ * is used at every such site — see `phaseTitleOf`. Numeric accumulators
+ * take the same care via `readOptionalNumber`, where a stray string would
+ * otherwise turn `+=` into concatenation and silently corrupt a total
+ * rather than throwing.
  */
 export function isWorkflowProgressEntry(
   value: unknown,
 ): value is WorkflowProgressEntry {
   if (typeof value !== "object" || value === null) return false;
-  const type = (value as { type?: unknown }).type;
-  return typeof type === "string" && KNOWN_ENTRY_TYPES.has(type);
+  const entry = value as Record<string, unknown>;
+  switch (entry.type) {
+    case "workflow_phase":
+      return typeof entry.index === "number" && typeof entry.title === "string";
+    case "workflow_agent":
+      return (
+        typeof entry.index === "number" &&
+        typeof entry.label === "string" &&
+        typeof entry.state === "string"
+      );
+    case "Unknown":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** Read an optional string field that survived `isWorkflowProgressEntry`
+ *  without being type-checked. Returns null for anything that isn't a
+ *  string, so a corrupt value degrades to "absent" instead of throwing
+ *  when a caller reaches for a string method. */
+export function readOptionalString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** Numeric counterpart to `readOptionalString`. Rejects NaN and infinities
+ *  as well as non-numbers, so a corrupt value contributes 0 to a running
+ *  total rather than poisoning it into NaN. */
+export function readOptionalNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export function isWorkflowPhase(
@@ -129,7 +158,10 @@ export function isAgentTerminal(agent: WorkflowAgentEntry): boolean {
  * agents count as unphased.
  */
 export function phaseTitleOf(agent: WorkflowAgentEntry): string | null {
-  const title = agent.phaseTitle?.trim();
+  // Read through `readOptionalString` rather than trusting the declared
+  // type: `phaseTitle` is optional, so the boundary guard didn't verify it,
+  // and `.trim()` on a non-string throws.
+  const title = readOptionalString(agent.phaseTitle)?.trim();
   return title ? title : null;
 }
 
@@ -202,8 +234,10 @@ export function summarizeWorkflowProgress(
       if (currentPhaseTitle === null) currentPhaseTitle = phaseTitleOf(agent);
     }
     if (agent.state === "error") errorCount++;
-    totalTokens += agent.tokens ?? 0;
-    totalToolCalls += agent.toolCalls ?? 0;
+    // `?? 0` alone would let a corrupt non-number through `+=`, turning the
+    // total into a concatenated string or NaN rather than failing loudly.
+    totalTokens += readOptionalNumber(agent.tokens) ?? 0;
+    totalToolCalls += readOptionalNumber(agent.toolCalls) ?? 0;
   }
 
   // Fall back to the last declared phase only when nothing is in flight —

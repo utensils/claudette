@@ -3,6 +3,7 @@ import type { ToolActivity } from "../../stores/useAppStore";
 import {
   isAgentTerminal,
   phaseTitleOf,
+  readOptionalString,
   summarizeWorkflowProgress,
   type WorkflowAgentEntry,
 } from "../../types/workflow";
@@ -136,9 +137,12 @@ function AgentRow({
   live: boolean;
 }) {
   const elapsedMs = agentElapsedMs(agent, now, live);
+  // Both fields are optional, so the persistence boundary guard didn't
+  // type-check them — read through `readOptionalString` before `.trim()`.
+  const lastToolName = readOptionalString(agent.lastToolName);
   const detail =
-    agent.lastToolSummary?.trim() ||
-    (agent.lastToolName ? `${agent.lastToolName}…` : "");
+    readOptionalString(agent.lastToolSummary)?.trim() ||
+    (lastToolName ? `${lastToolName}…` : "");
 
   return (
     <div className={styles.agent}>

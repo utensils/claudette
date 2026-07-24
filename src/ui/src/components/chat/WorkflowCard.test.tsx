@@ -236,6 +236,33 @@ describe("WorkflowCard", () => {
     ).toBeNull();
   });
 
+  // The persistence guard checks required fields only, so a corrupt
+  // optional one reaches the renderer. `.trim()` on a non-string throws,
+  // and an unhandled throw here takes out the whole transcript, not just
+  // this row.
+  it("renders rather than throwing when optional fields are corrupt", async () => {
+    const container = await render(
+      <WorkflowCard
+        activity={makeActivity({
+          workflowProgress: [
+            {
+              type: "workflow_agent",
+              index: 1,
+              label: "review:bugs",
+              state: "progress",
+              phaseTitle: 1,
+              lastToolSummary: 2,
+              lastToolName: 3,
+              tokens: "abc",
+            } as unknown as WorkflowProgressEntry,
+          ],
+        })}
+      />,
+    );
+    expect(container.textContent).toContain("review:bugs");
+    expect(container.textContent).toContain("0/1 agents");
+  });
+
   it("shows a starting state before the first progress tick", async () => {
     const container = await render(
       <WorkflowCard activity={makeActivity({ workflowProgress: undefined })} />,
