@@ -430,8 +430,10 @@ describe("reconstructCompletedTurns", () => {
       });
     });
 
-    // `undefined`, not `[]` — a non-workflow activity stores "[]", and the
-    // card keys off `workflowProgress` being present at all.
+    // `undefined`, not `[]` — the distinction is load-bearing for the
+    // terminal-notification write in `useAgentStream`, which sends `null`
+    // for an absent tree so the stored column is COALESCEd rather than
+    // blanked. Rendering treats the two identically.
     it("returns undefined when nothing survives or the column is empty", () => {
       for (const json of ["[]", "[{\"type\":\"bogus\"}]", "not json", ""]) {
         const result = reconstructCompletedTurns(messages, turnWithProgress(json));

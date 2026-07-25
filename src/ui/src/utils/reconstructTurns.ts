@@ -125,10 +125,18 @@ function parseAgentToolCalls(value: string | null | undefined) {
 
 /** Rehydrate a persisted `Workflow` progress tree.
  *
- *  Returns `undefined` rather than `[]` for the empty case so a non-workflow
- *  activity (every one of which stores `"[]"`) doesn't come back looking
- *  like a workflow that produced no agents — `WorkflowCard` keys off
- *  `workflowProgress` being present at all.
+ *  Returns `undefined` rather than `[]` when nothing valid is stored, so
+ *  "no tree was ever recorded" stays distinguishable from "a tree that
+ *  reported no agents". Rendering does not need that distinction —
+ *  `summarizeWorkflowProgress` coerces both to the same empty summary, and
+ *  whether a card renders at all is decided by `toolName === "Workflow"`
+ *  (`isWorkflowActivity`), not by this field.
+ *
+ *  The terminal-notification write in `useAgentStream` is what needs it:
+ *  it sends `null` for an absent tree so the stored column is COALESCEd
+ *  instead of overwritten with `"[]"`. Collapsing the two here would let a
+ *  run whose activity was rehydrated without a tree blank the good row that
+ *  a prior write had already put in the database.
  *
  *  Entries are filtered through `isWorkflowProgressEntry`, which admits only
  *  the kinds the union models — including `Unknown`, which Rust writes for
