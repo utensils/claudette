@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
+import { findToolActivity } from "../stores/findToolActivity";
 import {
   loadChatHistory,
   saveTurnToolActivities,
@@ -338,26 +339,57 @@ export function useAgentStream() {
               // A backgrounded Workflow usually finishes after the turn
               // that launched it has already been checkpointed, so its
               // final tree has nowhere to land — `save_turn_tool_activities`
-              // ran minutes ago. Write it directly at the activity row.
+              // ran minutes ago, writing `"[]"` and a null status because
+              // the tool_result ("launched in background") arrives within a
+              // second of launch, before any progress exists. Write the
+              // finished state directly at the activity row instead.
               //
-              // Only on the terminal notification, not on every progress
-              // tick: one write per run instead of dozens, and the
-              // completed state is what replay actually needs. A reload
-              // mid-run still shows the tree as of the turn's end.
-              if (
-                streamEvent.subtype === "task_notification" &&
-                updates.workflowProgress !== undefined
-              ) {
-                void updateTurnToolActivityProgress(
+              // Read the tree back out of the store rather than off this
+              // event: the CLI attaches `workflow_progress` to `task_progress`
+              // ONLY — its `task_notification` payload carries just
+              // `task_id` / `tool_use_id` / `status` / `output_file` /
+              // `summary` / `usage`, with no tree on any code path. Gating
+              // this write on the event carrying one therefore never fired,
+              // leaving every finished run to replay as "Starting workflow…"
+              // behind a status pill that spun forever.
+              //
+              // The store is the right source: `updateToolActivity` above has
+              // already applied the terminal status, and the last
+              // `task_progress` tick left the completed tree there. By now
+              // the activity has migrated into `completedTurns`, so the
+              // lookup has to check both places — hence `findToolActivity`.
+              //
+              // Still only on the terminal notification, not on every tick:
+              // one write per run instead of dozens, and the completed state
+              // is what replay actually needs.
+              if (streamEvent.subtype === "task_notification") {
+                const activity = findToolActivity(
+                  useAppStore.getState(),
+                  sessionId,
                   streamEvent.tool_use_id,
-                  JSON.stringify(updates.workflowProgress),
-                  updates.agentStatus ?? null,
-                ).catch((err) => {
-                  debugChat("stream", "persist workflow progress failed", {
-                    toolUseId: streamEvent.tool_use_id,
-                    error: String(err),
+                );
+                // Persist for workflows even when no tree was ever reported
+                // (a run that failed before its first `task_progress`): the
+                // terminal status alone still has to land, or the pill keeps
+                // spinning. `null` leaves the stored tree untouched in that
+                // case rather than blanking it — both columns COALESCE.
+                // `agentStatus` is read back off the activity so a
+                // notification without an explicit `status` still writes
+                // whatever the store settled on.
+                if (activity?.toolName === "Workflow") {
+                  void updateTurnToolActivityProgress(
+                    streamEvent.tool_use_id,
+                    activity.workflowProgress
+                      ? JSON.stringify(activity.workflowProgress)
+                      : null,
+                    activity.agentStatus ?? null,
+                  ).catch((err) => {
+                    debugChat("stream", "persist workflow progress failed", {
+                      toolUseId: streamEvent.tool_use_id,
+                      error: String(err),
+                    });
                   });
-                });
+                }
               }
               if (streamEvent.task_id) {
                 const pending = pendingAgentToolCallsRef.current[streamEvent.task_id] || [];

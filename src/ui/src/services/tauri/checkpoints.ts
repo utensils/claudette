@@ -48,10 +48,15 @@ export function saveTurnToolActivities(
 
 /** Persist the workflow progress tree for a single already-checkpointed
  *  activity. Used when a backgrounded `Workflow` finishes after the turn
- *  that launched it was already saved. */
+ *  that launched it was already saved.
+ *
+ *  Both fields are optional and COALESCE against the stored row: pass
+ *  `null` for either to leave it untouched. A run that ends without ever
+ *  reporting agents still needs its status resolved, and must not blank
+ *  the tree on the way. */
 export function updateTurnToolActivityProgress(
   toolUseId: string,
-  workflowProgressJson: string,
+  workflowProgressJson: string | null,
   agentStatus: string | null,
 ): Promise<void> {
   return invoke("update_turn_tool_activity_progress", {

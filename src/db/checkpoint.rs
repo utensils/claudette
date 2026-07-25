@@ -905,15 +905,19 @@ impl Database {
     pub fn update_turn_tool_activity_progress(
         &self,
         tool_use_id: &str,
-        workflow_progress_json: &str,
+        workflow_progress_json: Option<&str>,
         agent_status: Option<&str>,
     ) -> Result<usize, rusqlite::Error> {
-        // COALESCE keeps the stored status when the caller has nothing
-        // better to say, so a progress-only update can't blank a status
-        // that a prior notification already resolved.
+        // COALESCE on both columns keeps the stored value when the caller
+        // has nothing better to say, so neither field can be blanked by an
+        // update that only knows about the other. Status-only updates are
+        // the reason the tree is optional: a run that ends without ever
+        // reporting agents still has to resolve its status, and passing
+        // `None` there must not overwrite a tree the run did report.
         self.conn.execute(
             "UPDATE turn_tool_activities
-                SET workflow_progress_json = ?1,
+                SET workflow_progress_json =
+                        COALESCE(?1, workflow_progress_json),
                     agent_status = COALESCE(?2, agent_status)
               WHERE tool_use_id = ?3",
             params![workflow_progress_json, agent_status, tool_use_id],
@@ -1444,7 +1448,7 @@ mod tests {
 
         let tree = r#"[{"type":"workflow_agent","index":1,"label":"review","state":"done"}]"#;
         let updated = db
-            .update_turn_tool_activity_progress("tu_a1", tree, Some("completed"))
+            .update_turn_tool_activity_progress("tu_a1", Some(tree), Some("completed"))
             .unwrap();
         assert_eq!(updated, 1);
 
@@ -1466,9 +1470,9 @@ mod tests {
         db.insert_turn_tool_activities(&[make_tool_activity("a1", "cp1", "Workflow", 0)])
             .unwrap();
 
-        db.update_turn_tool_activity_progress("tu_a1", "[]", Some("completed"))
+        db.update_turn_tool_activity_progress("tu_a1", Some("[]"), Some("completed"))
             .unwrap();
-        db.update_turn_tool_activity_progress("tu_a1", r#"[{"type":"Unknown"}]"#, None)
+        db.update_turn_tool_activity_progress("tu_a1", Some(r#"[{"type":"Unknown"}]"#), None)
             .unwrap();
 
         let turns = db.list_completed_turns("w1").unwrap();
@@ -1478,13 +1482,40 @@ mod tests {
         );
     }
 
+    /// `COALESCE` on the tree column: a status-only update must not blank a
+    /// tree the run already reported. This is the terminal-notification
+    /// path — the CLI never carries `workflow_progress` on
+    /// `task_notification`, so a run whose store entry has no tree resolves
+    /// its status with `None` here and the stored tree has to survive.
+    #[test]
+    fn test_update_turn_tool_activity_progress_preserves_tree_when_none() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_turn_tool_activities(&[make_tool_activity("a1", "cp1", "Workflow", 0)])
+            .unwrap();
+
+        let tree = r#"[{"type":"workflow_agent","index":1,"label":"review","state":"done"}]"#;
+        db.update_turn_tool_activity_progress("tu_a1", Some(tree), None)
+            .unwrap();
+        db.update_turn_tool_activity_progress("tu_a1", None, Some("failed"))
+            .unwrap();
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        let activity = &turns[0].activities[0];
+        assert_eq!(activity.workflow_progress_json, tree);
+        assert_eq!(activity.agent_status.as_deref(), Some("failed"));
+    }
+
     /// An unknown `tool_use_id` is normal (the turn may never have been
     /// checkpointed), so it reports zero rows rather than erroring.
     #[test]
     fn test_update_turn_tool_activity_progress_unknown_id_is_not_an_error() {
         let db = setup_db_with_workspace();
         let updated = db
-            .update_turn_tool_activity_progress("tu_missing", "[]", Some("completed"))
+            .update_turn_tool_activity_progress("tu_missing", Some("[]"), Some("completed"))
             .unwrap();
         assert_eq!(updated, 0);
     }

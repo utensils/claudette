@@ -302,14 +302,14 @@ pub async fn save_turn_tool_activities(
 #[tauri::command]
 pub async fn update_turn_tool_activity_progress(
     tool_use_id: String,
-    workflow_progress_json: String,
+    workflow_progress_json: Option<String>,
     agent_status: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.update_turn_tool_activity_progress(
         &tool_use_id,
-        &workflow_progress_json,
+        workflow_progress_json.as_deref(),
         agent_status.as_deref(),
     )
     .map_err(|e| e.to_string())?;
