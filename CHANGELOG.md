@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.27.0](https://github.com/utensils/claudette/compare/v0.26.0...v0.27.0) (2026-07-25)
+
+
+### Features
+
+* **chat:** surface Claude Code Workflow runs in the transcript ([#1011](https://github.com/utensils/claudette/issues/1011)) ([14d5af8](https://github.com/utensils/claudette/commit/14d5af8c9535fd403f0c0537b8509c5f940768b9))
+* **models:** add Claude Opus 5 and fix stale Opus/Fable pricing ([#1012](https://github.com/utensils/claudette/issues/1012)) ([67bd778](https://github.com/utensils/claudette/commit/67bd778b38d287f1a24b84cbefa32c6cf968304f))
+
+
+### Bug Fixes
+
+* **chat:** show days and hours in agent run durations ([#1009](https://github.com/utensils/claudette/issues/1009)) ([114e277](https://github.com/utensils/claudette/commit/114e2771eb12287d9fba6991cb688955a38dec4e))
+
 ## [0.26.0](https://github.com/utensils/claudette/compare/v0.25.0...v0.26.0) (2026-07-16)
 
 
