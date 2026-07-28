@@ -22,13 +22,17 @@ The card is expanded by default. Collapsing it hides the agent tree but keeps th
 
 Workflows run in the background. The tool returns "launched in background" within a second, the agent finishes its turn, and the run keeps going for minutes — so the card is usually well above the fold by the time anything interesting happens.
 
-A pill above the message composer keeps each in-flight run visible: workflow name, current phase, and agents completed. Click it to scroll its card back into view. The pill disappears when the run finishes. Concurrent workflows each get their own pill.
+A pill above the message composer keeps each in-flight run visible: workflow name, current phase, and agents completed. Click it to scroll its card back into view. Concurrent workflows each get their own pill.
+
+The pill disappears when the run ends — whether it completed, failed, or was terminated. Terminated runs count: a workflow you stop, or one killed when its session is interrupted or reset, resolves the same way rather than leaving an indicator behind.
 
 ## Persistence
 
 A completed run's tree is stored with the turn, so it renders the same after an app restart, in [forked sessions](/claudette/features/checkpoints-and-forking/), and when history is replayed from disk.
 
-Because a workflow typically finishes long after its turn was saved, Claudette writes the final tree back to that turn when the completion notification arrives. If you restart Claudette while a workflow is still running, its card shows the tree as of the moment the turn ended — the run itself continues inside Claude Code, but Claudette is no longer listening for its progress.
+Because a workflow typically finishes long after its turn was saved, Claudette writes the final tree back to that turn when the completion notification arrives.
+
+A workflow runs inside the Claude Code process that started it, so it does not survive that process going away — quitting Claudette, stopping the agent, or resetting the session ends the run. Claudette marks those runs stopped rather than leaving them mid-flight: any still marked running when Claudette starts belongs to a process that is gone, and is resolved at launch. Their cards keep the tree as of the last progress update before the process ended.
 
 ## Limits
 

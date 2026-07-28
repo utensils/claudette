@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
 import { findToolActivity } from "../stores/findToolActivity";
+import { collectInFlightWorkflows } from "../stores/inFlightWorkflows";
+import { REAPED_BACKGROUND_TASK_STATUS } from "../types/backgroundTaskStatus";
 import {
   loadChatHistory,
   saveTurnToolActivities,
@@ -14,6 +16,7 @@ import type {
   AgentApprovalDetail,
   AgentApprovalKind,
   AgentToolCall,
+  ToolActivity,
 } from "../stores/useAppStore";
 import type { AgentConclusionEvent, ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
@@ -47,6 +50,76 @@ const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const CODEX_COMMAND_APPROVAL_TOOL = "CodexCommandApproval";
 const CODEX_FILE_CHANGE_APPROVAL_TOOL = "CodexFileChangeApproval";
 const CODEX_PERMISSIONS_APPROVAL_TOOL = "CodexPermissionsApproval";
+
+/**
+ * Resolve every workflow a session's CLI process was still running when it
+ * exited.
+ *
+ * A `Workflow` run lives *inside* the CLI process — nothing can move it
+ * forward once that process is gone, and nothing will report on it either.
+ * The CLI states the same invariant for its own `background_tasks_changed`
+ * level signal: "The level is per-process: nothing is emitted at startup,
+ * so consumers must reset to the empty set whenever the session's CLI
+ * process (re)starts." `AgentSessionState` holds a single `active_pid` per
+ * chat session, so `ProcessExited` is unambiguous — there is no second
+ * process that could still own these tasks.
+ *
+ * On the happy path this reaps nothing: the run's terminal
+ * `task_notification` arrived minutes earlier and the activity already
+ * reads as finished. It fires on the paths that never produce a
+ * notification at all — the user hitting stop, a crash, a session reset —
+ * which used to leave `agentStatus` pinned at `"running"` (or unset) with
+ * no way out. That wedged the status pill above the composer for the rest
+ * of the session, and since the status is persisted, every later reload
+ * brought the pill back.
+ *
+ * Persisted as well as applied in-store. `checkpoint-created` fires before
+ * the `result` event, so the row exists by the time we get here; when it
+ * doesn't (a stop before any checkpoint) the UPDATE matches nothing, which
+ * is exactly right — there is no row to resurrect the pill from.
+ *
+ * Takes `updateToolActivity` rather than closing over it so it can live at
+ * module scope: a helper defined in the hook body would be a new reference
+ * every render and would have to be threaded through the stream effect's
+ * dependency array, which already lists the store action.
+ */
+function reapInFlightWorkflows(
+  sessionId: string,
+  updateToolActivity: (
+    sessionId: string,
+    toolUseId: string,
+    updates: Partial<ToolActivity>,
+  ) => void,
+): void {
+  const state = useAppStore.getState();
+  const orphaned = collectInFlightWorkflows(
+    state.toolActivities[sessionId] ?? [],
+    state.completedTurns[sessionId] ?? [],
+  );
+  if (orphaned.length === 0) return;
+  debugChat("stream", "reap in-flight workflows", {
+    sessionId,
+    toolUseIds: orphaned.map((a) => a.toolUseId),
+  });
+  for (const activity of orphaned) {
+    updateToolActivity(sessionId, activity.toolUseId, {
+      agentStatus: REAPED_BACKGROUND_TASK_STATUS,
+    });
+    // `null` for the tree: whatever the last `task_progress` tick left in
+    // the store is already the stored value, and both columns COALESCE, so
+    // a status-only write can't blank a good tree.
+    void updateTurnToolActivityProgress(
+      activity.toolUseId,
+      null,
+      REAPED_BACKGROUND_TASK_STATUS,
+    ).catch((err) => {
+      debugChat("stream", "persist reaped workflow status failed", {
+        toolUseId: activity.toolUseId,
+        error: String(err),
+      });
+    });
+  }
+}
 
 function isCodexApprovalTool(toolName: string): boolean {
   return (
@@ -253,6 +326,9 @@ export function useAgentStream() {
             turnCheckpointIdRef.current[sessionId]
           );
         }
+        // After `finalizeTurn`, so the activity sits in exactly one lane
+        // (`completedTurns`) and the update has one place to land.
+        reapInFlightWorkflows(sessionId, updateToolActivity);
         turnMessageCountRef.current[sessionId] = 0;
         turnFinalizedRef.current[sessionId] = false;
         turnCheckpointIdRef.current[sessionId] = undefined;

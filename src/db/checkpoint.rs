@@ -924,6 +924,51 @@ impl Database {
         )
     }
 
+    /// Resolve `Workflow` activities left mid-run by a previous app session.
+    ///
+    /// A workflow's background task lives inside the Claude CLI process, so
+    /// none of them survive a Claudette restart. Any row still claiming to
+    /// be in flight when we boot is therefore describing a run that can
+    /// never report again: its terminal `task_notification` was lost when
+    /// the process went away (app quit, crash, kill), and `agent_status`
+    /// stayed at `"running"` — or at `NULL`, for a run checkpointed before
+    /// its first progress tick.
+    ///
+    /// The frontend reads those rows back as still-running and pins a
+    /// status pill above the composer for each one, permanently: the pill
+    /// is sourced from persisted turns, so it returns on every reload and
+    /// accumulates one entry per historical run.
+    ///
+    /// Runs at startup rather than as a migration because the wedge is not
+    /// a one-time backlog — a SIGKILL'd app never gets to run the
+    /// frontend's `ProcessExited` reaper, so fresh orphans can appear at
+    /// any time. Idempotent, and safe to run unconditionally: at boot,
+    /// there is by definition no live CLI process from a previous run.
+    ///
+    /// Scoped to `Workflow`. `Task` / `Agent` activities can wedge the same
+    /// way, but they render as a status word inside a collapsed turn rather
+    /// than as a persistent floating indicator, so rewriting their
+    /// historical status is not worth the blast radius here.
+    ///
+    /// Returns the number of rows resolved.
+    pub fn resolve_orphaned_workflow_activities(&self) -> Result<usize, rusqlite::Error> {
+        // Keep the terminal set in sync with `isTerminalBackgroundTaskStatus`
+        // in `src/ui/src/types/backgroundTaskStatus.ts`, which is where the
+        // vocabulary is documented. `"stopped"` is the CLI's own value for a
+        // task that ended without completing, so a resolved row needs no
+        // special-casing on the read side.
+        self.conn.execute(
+            "UPDATE turn_tool_activities
+                SET agent_status = 'stopped'
+              WHERE tool_name = 'Workflow'
+                AND (agent_status IS NULL
+                     OR LOWER(agent_status) NOT IN
+                        ('completed', 'failed', 'stopped', 'killed',
+                         'error', 'cancelled', 'canceled'))",
+            [],
+        )
+    }
+
     /// Load all completed turns for a workspace: checkpoints joined with their
     /// tool activities, grouped by checkpoint and ordered by turn_index.
     pub fn list_completed_turns(
@@ -1507,6 +1552,62 @@ mod tests {
         let activity = &turns[0].activities[0];
         assert_eq!(activity.workflow_progress_json, tree);
         assert_eq!(activity.agent_status.as_deref(), Some("failed"));
+    }
+
+    /// The startup sweep resolves workflows a previous session left mid-run
+    /// (`"running"`, or `NULL` for a run checkpointed before its first
+    /// progress tick) while leaving already-resolved runs alone. Without it
+    /// each wedged row pins a status pill above the composer on every
+    /// reload, forever.
+    #[test]
+    fn test_resolve_orphaned_workflow_activities() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        let mut running = make_tool_activity("a1", "cp1", "Workflow", 0);
+        running.agent_status = Some("running".into());
+        let mut never_reported = make_tool_activity("a2", "cp1", "Workflow", 1);
+        never_reported.agent_status = None;
+        let mut completed = make_tool_activity("a3", "cp1", "Workflow", 2);
+        completed.agent_status = Some("completed".into());
+        // Mixed case: the CLI's vocabulary is lowercase, but the comparison
+        // is case-insensitive so a differently-cased value can't slip past
+        // and get rewritten as if it were still in flight.
+        let mut stopped = make_tool_activity("a4", "cp1", "Workflow", 3);
+        stopped.agent_status = Some("Stopped".into());
+        // A non-workflow activity with the same wedged status is out of
+        // scope — it renders as a status word inside a collapsed turn, not
+        // as a floating indicator.
+        let mut agent_task = make_tool_activity("a5", "cp1", "Task", 4);
+        agent_task.agent_status = Some("running".into());
+
+        db.insert_turn_tool_activities(&[running, never_reported, completed, stopped, agent_task])
+            .unwrap();
+
+        let resolved = db.resolve_orphaned_workflow_activities().unwrap();
+        assert_eq!(resolved, 2, "only the two in-flight workflows are swept");
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        let by_id = |id: &str| {
+            turns[0]
+                .activities
+                .iter()
+                .find(|a| a.tool_use_id == id)
+                .unwrap()
+                .agent_status
+                .clone()
+        };
+        assert_eq!(by_id("tu_a1").as_deref(), Some("stopped"));
+        assert_eq!(by_id("tu_a2").as_deref(), Some("stopped"));
+        assert_eq!(by_id("tu_a3").as_deref(), Some("completed"));
+        assert_eq!(by_id("tu_a4").as_deref(), Some("Stopped"));
+        assert_eq!(by_id("tu_a5").as_deref(), Some("running"));
+
+        // Idempotent: a second boot has nothing left to do.
+        assert_eq!(db.resolve_orphaned_workflow_activities().unwrap(), 0);
     }
 
     /// An unknown `tool_use_id` is normal (the turn may never have been

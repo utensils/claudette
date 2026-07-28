@@ -451,6 +451,28 @@ fn main() {
         let _ = db.set_app_setting("install_date", &now);
     }
 
+    // Resolve `Workflow` activities that a previous app session left mid-run.
+    // Background tasks live inside the Claude CLI process and none survive a
+    // restart, so anything still marked in-flight here belongs to a run that
+    // can never report again. Left alone, each one pins a status pill above
+    // the composer on every reload, forever. Non-fatal: a failure here costs
+    // a stale pill, not a broken boot.
+    if let Ok(db) = Database::open(&db_path) {
+        match db.resolve_orphaned_workflow_activities() {
+            Ok(0) => {}
+            Ok(count) => tracing::info!(
+                target: "claudette::chat",
+                count,
+                "resolved orphaned workflow activities from a previous session"
+            ),
+            Err(e) => tracing::warn!(
+                target: "claudette::chat",
+                error = %e,
+                "failed to resolve orphaned workflow activities"
+            ),
+        }
+    }
+
     // Load worktree base dir from settings, or use default.
     let worktree_base_dir = {
         let default = claudette::path::claudette_home().join("workspaces");

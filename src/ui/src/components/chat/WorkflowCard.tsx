@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { ToolActivity } from "../../stores/useAppStore";
+import { isTerminalBackgroundTaskStatus } from "../../types/backgroundTaskStatus";
 import {
   isAgentTerminal,
   phaseTitleOf,
@@ -36,25 +37,6 @@ function workflowScript(inputJson: string): string | null {
   } catch {
     return null;
   }
-}
-
-/** Statuses that mean the background task itself has ended.
- *
- *  These arrive on the `task-notification` the CLI emits when a workflow
- *  finishes — `useAgentStream` copies the notification's `status` onto
- *  `agentStatus`. While the run is in flight the same field reads
- *  `"running"` (set by the `task_progress` branch). */
-const TERMINAL_WORKFLOW_STATUSES = new Set([
-  "completed",
-  "failed",
-  "error",
-  "killed",
-  "cancelled",
-  "canceled",
-]);
-
-function isTerminalWorkflowStatus(status: string | null | undefined): boolean {
-  return TERMINAL_WORKFLOW_STATUSES.has((status ?? "").toLowerCase());
 }
 
 function stateIcon(state: string): string {
@@ -291,7 +273,7 @@ export function WorkflowCard({
   // launched in background. Task ID: …"); the run itself takes minutes.
   // Completion arrives much later as a task-notification, which
   // `useAgentStream` maps onto `agentStatus`.
-  const finished = isTerminalWorkflowStatus(activity.agentStatus);
+  const finished = isTerminalBackgroundTaskStatus(activity.agentStatus);
   // `live` gates the interpolated clock. A run that was still going when
   // the app closed replays with non-terminal agents forever; without this
   // its elapsed times would tick upward on every reload, reporting minutes

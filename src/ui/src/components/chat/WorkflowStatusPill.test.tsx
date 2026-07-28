@@ -125,6 +125,61 @@ describe("WorkflowStatusPill", () => {
     expect(container.textContent).toBe("");
   });
 
+  // The regression this file exists to pin. `"stopped"` is what the CLI's
+  // `task_notification` reports for a *terminated* run — its status enum is
+  // exactly `["completed", "failed", "stopped"]` — but the terminal set
+  // here was hand-written and omitted it, so killing a workflow left its
+  // pill above the composer for the rest of the session. Worse, the status
+  // is persisted, so it came back on every reload.
+  it.each(["stopped", "failed", "completed", "killed"])(
+    "hides a run that ended with status %s",
+    async (agentStatus) => {
+      useAppStore.setState({
+        completedTurns: {
+          [SESSION]: [
+            turn("turn-1", [workflowActivity("toolu_wf1", { agentStatus })]),
+          ],
+        },
+      });
+      const container = await render(<WorkflowStatusPill sessionId={SESSION} />);
+      expect(container.textContent).toBe("");
+    },
+  );
+
+  // Case-insensitive, so an upper/mixed-case value from a future CLI build
+  // degrades to "finished" rather than to a pill that never leaves.
+  it("hides a run whose terminal status is differently cased", async () => {
+    useAppStore.setState({
+      completedTurns: {
+        [SESSION]: [
+          turn("turn-1", [
+            workflowActivity("toolu_wf1", { agentStatus: "Stopped" }),
+          ]),
+        ],
+      },
+    });
+    const container = await render(<WorkflowStatusPill sessionId={SESSION} />);
+    expect(container.textContent).toBe("");
+  });
+
+  // A workflow checkpointed before its first `task_progress` tick has no
+  // status yet and is genuinely still starting — absence must NOT read as
+  // an ending, or a just-launched run would never show a pill at all.
+  it("still shows a run that has not reported a status yet", async () => {
+    useAppStore.setState({
+      toolActivities: {
+        [SESSION]: [
+          workflowActivity("toolu_wf1", {
+            agentStatus: undefined,
+            workflowProgress: undefined,
+          }),
+        ],
+      },
+    });
+    const container = await render(<WorkflowStatusPill sessionId={SESSION} />);
+    expect(container.textContent).toContain("review-changes");
+  });
+
   it("does not double-count a workflow present in both lanes", async () => {
     useAppStore.setState({
       toolActivities: { [SESSION]: [workflowActivity()] },
