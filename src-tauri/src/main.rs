@@ -44,32 +44,46 @@ fn chrono_iso_now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-/// Best-effort warning when another live Claudette dev instance is
-/// likely running against the same database. We do **not** block the
-/// second launch — multi-instance dev is a supported workflow — but
-/// two processes against the same SQLite file is the most plausible
-/// origin of cross-session message bleed-through (insert paths race
-/// on `chat_messages.chat_session_id`, transcript JSONLs in
-/// `~/.claude/projects/<encoded-cwd>/<sid>.jsonl` interleave). Surfacing
-/// the collision in the log lets postmortems start with "two PIDs were
-/// alive at the same time" rather than guessing.
+/// Other live Claudette processes likely running against the same
+/// database. We do **not** block the second launch — multi-instance dev is
+/// a supported workflow — but two processes against the same SQLite file
+/// is the most plausible origin of cross-session message bleed-through
+/// (insert paths race on `chat_messages.chat_session_id`, transcript
+/// JSONLs in `~/.claude/projects/<encoded-cwd>/<sid>.jsonl` interleave).
 ///
 /// `scripts/dev.sh` drops `${TMPDIR}/claudette-dev/<pid>.json` when it
-/// launches; we scan that directory, cross-reference with the live
-/// process table, and emit a `tracing::warn!` if any other live PID is
-/// found. Stale files from crashed dev runs are ignored (PID not
-/// alive). Release builds without `dev.sh` simply find an empty
-/// directory and log nothing.
-fn warn_if_concurrent_dev_instance(db_path: &Path) {
+/// launches; we scan that directory and cross-reference with the live
+/// process table. Stale files from crashed dev runs are ignored (PID not
+/// alive).
+///
+/// Two callers: [`warn_if_concurrent_dev_instance`], so a postmortem can
+/// start from "two PIDs were alive at the same time" rather than guessing,
+/// and the orphaned-workflow sweep, which must not rewrite rows a peer may
+/// still own.
+///
+/// Note the coverage this gives. A peer is only visible if it wrote a
+/// discovery file, which means `dev.sh` launches and nothing else — two
+/// *release* builds against one database produce an empty result here. An
+/// empty return means "no peer we can see", not "no peer".
+fn live_peer_instances(db_path: &Path) -> Vec<PeerInstance> {
+    peer_instances_in(&std::env::temp_dir().join("claudette-dev"), db_path)
+}
+
+/// The scan itself, with the discovery directory injected.
+///
+/// Split out from [`live_peer_instances`] so it can be tested against a
+/// fixture directory: this result now gates a database mutation (the
+/// orphaned-workflow sweep), not just a log line, so a false "no peers"
+/// has consequences beyond a missing warning.
+fn peer_instances_in(dir: &Path, db_path: &Path) -> Vec<PeerInstance> {
     use std::fs;
 
-    let dir = std::env::temp_dir().join("claudette-dev");
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
     };
     let our_pid = std::process::id();
     let our_data_dir = db_path.parent().map(normalize_dev_data_dir);
-    let mut peers: Vec<(u32, String, Option<PathBuf>)> = Vec::new();
+    let mut peers: Vec<PeerInstance> = Vec::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -105,10 +119,26 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
         if peer_data_dir.is_some() && peer_data_dir != our_data_dir {
             continue;
         }
-        peers.push((pid, cwd, peer_data_dir));
+        peers.push(PeerInstance {
+            pid,
+            cwd,
+            data_dir: peer_data_dir,
+        });
     }
 
-    for (pid, cwd, peer_data_dir) in &peers {
+    peers
+}
+
+/// A live Claudette process that may be sharing our database.
+struct PeerInstance {
+    pid: u32,
+    cwd: String,
+    data_dir: Option<PathBuf>,
+}
+
+fn warn_if_concurrent_dev_instance(peers: &[PeerInstance], db_path: &Path) {
+    let our_pid = std::process::id();
+    for peer in peers {
         // Modern `scripts/dev.sh` discovery files include the effective
         // `CLAUDETTE_DATA_DIR`, so we skip peers that are clearly isolated.
         // Older discovery files do not have it; keep warning for those because
@@ -116,9 +146,9 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
         tracing::warn!(
             target: "claudette::startup",
             our_pid,
-            peer_pid = pid,
-            peer_cwd = %cwd,
-            peer_data_dir = peer_data_dir.as_ref().map(|p| p.display().to_string()),
+            peer_pid = peer.pid,
+            peer_cwd = %peer.cwd,
+            peer_data_dir = peer.data_dir.as_ref().map(|p| p.display().to_string()),
             our_db_path = %db_path.display(),
             "another Claudette dev instance is alive — if it's running \
              against the same DB, concurrent SQLite writers can cross-pollute \
@@ -439,7 +469,8 @@ fn main() {
     // most plausible source of cross-session message bleed-through.
     // The dev launcher (`scripts/dev.sh`) drops a discovery file at
     // `${TMPDIR}/claudette-dev/<pid>.json` we can scan here.
-    warn_if_concurrent_dev_instance(&db_path);
+    let peer_instances = live_peer_instances(&db_path);
+    warn_if_concurrent_dev_instance(&peer_instances, &db_path);
 
     // Ensure DB exists and migrations are applied. Stamp the install date on
     // first-ever startup so lifetime stats ("days using Claudette") have an
@@ -457,20 +488,47 @@ fn main() {
     // can never report again. Left alone, each one pins a status pill above
     // the composer on every reload, forever. Non-fatal: a failure here costs
     // a stale pill, not a broken boot.
-    if let Ok(db) = Database::open(&db_path) {
-        match db.resolve_orphaned_workflow_activities() {
-            Ok(0) => {}
-            Ok(count) => tracing::info!(
-                target: "claudette::chat",
-                count,
-                "resolved orphaned workflow activities from a previous session"
-            ),
-            Err(e) => tracing::warn!(
-                target: "claudette::chat",
-                error = %e,
-                "failed to resolve orphaned workflow activities"
-            ),
+    //
+    // Skipped when a peer instance is alive, because the inference above
+    // ("nothing can still be running") only holds for a process lifecycle we
+    // own. A peer may be running workflows against this same database right
+    // now, and sweeping them to `stopped` would blank a live run's pill the
+    // next time that instance re-hydrates from disk.
+    //
+    // The asymmetry is what makes skipping the right default: not sweeping
+    // leaves a stale pill — the status quo this fix targets, recoverable on
+    // the next clean start — whereas sweeping wrongly blanks a run that is
+    // genuinely in flight.
+    //
+    // This does not close the hole, and is not meant to read as if it does:
+    // peers are discovered through `scripts/dev.sh` discovery files, so two
+    // *release* builds sharing a database remain undetectable here. That
+    // configuration is already documented as unsupported for worse reasons —
+    // concurrent SQLite writers cross-pollute `chat_messages` and corrupt
+    // resumed CLI transcripts, per the warning above.
+    if peer_instances.is_empty() {
+        if let Ok(db) = Database::open(&db_path) {
+            match db.resolve_orphaned_workflow_activities() {
+                Ok(0) => {}
+                Ok(count) => tracing::info!(
+                    target: "claudette::chat",
+                    count,
+                    "resolved orphaned workflow activities from a previous session"
+                ),
+                Err(e) => tracing::warn!(
+                    target: "claudette::chat",
+                    error = %e,
+                    "failed to resolve orphaned workflow activities"
+                ),
+            }
         }
+    } else {
+        tracing::info!(
+            target: "claudette::chat",
+            peer_count = peer_instances.len(),
+            "skipped resolving orphaned workflow activities — a peer instance \
+             is alive and may own runs that are still in flight"
+        );
     }
 
     // Load worktree base dir from settings, or use default.
@@ -1678,6 +1736,127 @@ mod tests {
             normalize_dev_data_dir(&spelled),
             normalize_dev_data_dir(&data)
         );
+    }
+
+    /// Peer detection gates the orphaned-workflow sweep, so a wrong
+    /// "no peers" answer now costs a database mutation against rows another
+    /// live instance may still own — not just a missing warning.
+    ///
+    /// Unix-only: `is_pid_alive` is a stub returning `false` on Windows,
+    /// where `scripts/dev.sh` writes no discovery files anyway. PID 1 is the
+    /// fixture's "alive but not us" peer — always present, and `kill(1, 0)`
+    /// reports EPERM rather than ESRCH for an unprivileged caller, which
+    /// `is_pid_alive` correctly reads as alive.
+    #[cfg(unix)]
+    mod peer_instances {
+        use super::super::peer_instances_in;
+        use std::path::Path;
+        use tempfile::tempdir;
+
+        const ALIVE_NOT_US: u32 = 1;
+
+        fn write_peer(dir: &Path, name: &str, contents: &str) {
+            std::fs::write(dir.join(name), contents).unwrap();
+        }
+
+        /// A discovery file for a live peer sharing our data directory.
+        fn peer_json(pid: u32, data_dir: &Path) -> String {
+            format!(
+                r#"{{"pid":{pid},"cwd":"/tmp/peer","claudette_data_dir":"{}"}}"#,
+                data_dir.display()
+            )
+        }
+
+        #[test]
+        fn reports_a_live_peer_sharing_our_data_dir() {
+            let discovery = tempdir().unwrap();
+            let data = tempdir().unwrap();
+            let db_path = data.path().join("claudette.db");
+            write_peer(
+                discovery.path(),
+                "peer.json",
+                &peer_json(ALIVE_NOT_US, data.path()),
+            );
+
+            let peers = peer_instances_in(discovery.path(), &db_path);
+            assert_eq!(peers.len(), 1);
+            assert_eq!(peers[0].pid, ALIVE_NOT_US);
+        }
+
+        /// The isolation `scripts/dev.sh` provides: a peer pointed at its own
+        /// data dir shares no database with us, so it must not suppress the
+        /// sweep.
+        #[test]
+        fn ignores_a_peer_with_a_different_data_dir() {
+            let discovery = tempdir().unwrap();
+            let ours = tempdir().unwrap();
+            let theirs = tempdir().unwrap();
+            let db_path = ours.path().join("claudette.db");
+            write_peer(
+                discovery.path(),
+                "peer.json",
+                &peer_json(ALIVE_NOT_US, theirs.path()),
+            );
+
+            assert!(peer_instances_in(discovery.path(), &db_path).is_empty());
+        }
+
+        /// Legacy discovery files predate `claudette_data_dir` and shared the
+        /// default database by construction, so an absent field counts as a
+        /// peer rather than as isolation.
+        #[test]
+        fn treats_a_peer_without_a_data_dir_as_sharing() {
+            let discovery = tempdir().unwrap();
+            let data = tempdir().unwrap();
+            let db_path = data.path().join("claudette.db");
+            write_peer(
+                discovery.path(),
+                "legacy.json",
+                &format!(r#"{{"pid":{ALIVE_NOT_US},"cwd":"/tmp/peer"}}"#),
+            );
+
+            assert_eq!(peer_instances_in(discovery.path(), &db_path).len(), 1);
+        }
+
+        /// Our own discovery file is always present once `dev.sh` launched
+        /// us. Counting it would make every dev run skip its own sweep.
+        #[test]
+        fn ignores_our_own_discovery_file() {
+            let discovery = tempdir().unwrap();
+            let data = tempdir().unwrap();
+            let db_path = data.path().join("claudette.db");
+            write_peer(
+                discovery.path(),
+                "self.json",
+                &peer_json(std::process::id(), data.path()),
+            );
+
+            assert!(peer_instances_in(discovery.path(), &db_path).is_empty());
+        }
+
+        #[test]
+        fn ignores_non_json_and_unparseable_files() {
+            let discovery = tempdir().unwrap();
+            let data = tempdir().unwrap();
+            let db_path = data.path().join("claudette.db");
+            write_peer(discovery.path(), "notes.txt", "not a discovery file");
+            write_peer(discovery.path(), "broken.json", "{ this is not json");
+            write_peer(discovery.path(), "no-pid.json", r#"{"cwd":"/tmp/peer"}"#);
+
+            assert!(peer_instances_in(discovery.path(), &db_path).is_empty());
+        }
+
+        /// The common case by far — no dev launcher has ever run, so the
+        /// directory does not exist and the sweep must proceed.
+        #[test]
+        fn reports_no_peers_when_the_directory_is_missing() {
+            let data = tempdir().unwrap();
+            let db_path = data.path().join("claudette.db");
+
+            assert!(
+                peer_instances_in(Path::new("/nonexistent/claudette-dev"), &db_path).is_empty()
+            );
+        }
     }
 
     /// Migration is idempotent: a second run after a successful first
