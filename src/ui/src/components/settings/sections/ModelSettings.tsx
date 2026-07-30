@@ -61,11 +61,14 @@ export function ModelSettings() {
   const [defaultEffort, setDefaultEffort] = useState("auto");
   const [defaultShowThinking, setDefaultShowThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Tolerant-loader diagnostics: non-fatal warnings emitted when
-  // stored backend entries have a `kind` this build doesn't recognize
-  // (e.g. a removed kind like `pi_sdk` / `lm_studio` left in the DB).
-  // Backend keeps the entries as opaque passthrough; user just needs
-  // to know they aren't active in this session.
+  // Tolerant-loader diagnostics: non-fatal warnings emitted when stored
+  // backend entries have a `kind` this build doesn't recognize — i.e. a
+  // newer build wrote them, or the user downgraded. The backend keeps
+  // those entries as opaque passthrough, so the banner's job is only to
+  // say they aren't active this session.
+  // Kinds retired for good (`pi_sdk` / `lm_studio`) deliberately do NOT
+  // land here: the loader drops them silently and purges them from
+  // storage, because no future build will revive them.
   const [backendWarnings, setBackendWarnings] = useState<string[]>([]);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
   const alternativeBackendsAvailable = useAppStore((s) => s.alternativeBackendsAvailable);
