@@ -1291,6 +1291,67 @@ mod tests {
     }
 
     #[test]
+    fn purge_is_a_no_op_while_the_stored_blob_is_unreadable() {
+        // A corrupt blob means we cannot tell which ids are live, and an
+        // empty live-id set must not be read as "nothing claims `pi`" —
+        // the user's custom `pi` backend may be sitting in that very JSON,
+        // which the tolerant loader deliberately leaves in place for
+        // external recovery. Nothing may be deleted until it parses again.
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(SETTINGS_KEY, "{ not valid json")
+            .expect("seed should save");
+        db.set_app_setting("default_agent_backend", "pi")
+            .expect("default should save");
+        db.set_app_setting(&auto_detect_disabled_key("pi"), "true")
+            .expect("opt-out should save");
+
+        purge_retired_backend_settings(&db).expect("purge should succeed");
+
+        assert_eq!(
+            db.get_app_setting(SETTINGS_KEY)
+                .expect("read should succeed"),
+            Some("{ not valid json".to_string()),
+            "corrupt blob is left untouched for recovery"
+        );
+        assert_eq!(
+            db.get_app_setting("default_agent_backend")
+                .expect("read should succeed"),
+            Some("pi".to_string()),
+            "id-keyed settings survive while the blob is unreadable"
+        );
+        assert_eq!(
+            db.get_app_setting(&auto_detect_disabled_key("pi"))
+                .expect("read should succeed"),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn purge_clears_orphaned_id_keyed_settings_when_no_blob_is_stored() {
+        // No blob at all is a *known*-empty state, unlike a corrupt one:
+        // nothing is stored, so a default naming a retired backend is a
+        // genuine orphan and should go.
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting("default_agent_backend", "lm-studio")
+            .expect("default should save");
+        db.set_app_setting(&auto_detect_disabled_key("lm-studio"), "true")
+            .expect("opt-out should save");
+
+        purge_retired_backend_settings(&db).expect("purge should succeed");
+
+        assert_eq!(
+            db.get_app_setting("default_agent_backend")
+                .expect("read should succeed"),
+            None
+        );
+        assert_eq!(
+            db.get_app_setting(&auto_detect_disabled_key("lm-studio"))
+                .expect("read should succeed"),
+            None
+        );
+    }
+
+    #[test]
     fn retired_default_backend_falls_back_without_warning() {
         let backends = vec![AgentBackendConfig::builtin_anthropic()];
         let mut warnings = Vec::new();

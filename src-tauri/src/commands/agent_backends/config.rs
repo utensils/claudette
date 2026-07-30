@@ -345,18 +345,42 @@ pub(super) fn read_unknown_passthrough(db: &Database) -> Result<Vec<Value>, Stri
 /// JSON, never a reparse, so unrelated unknown-kind passthrough and any
 /// additive fields written by a newer build survive untouched.
 ///
+/// An unreadable blob makes this a whole no-op, including the id-keyed
+/// settings — see the state table in the body for why.
+///
 /// A DB write failure is returned to the caller rather than swallowed —
 /// the alternative is silently reintroducing the warning-free-but-still-
 /// stored state this is meant to clear.
 pub(super) fn purge_retired_backend_settings(db: &Database) -> Result<(), String> {
-    // A missing or corrupt blob reads as "nothing to purge" rather than an
-    // error: recovering a corrupt blob is `save_backend_configs`'s job, and
-    // this pass must not be the thing that overwrites it.
-    let stored: Vec<Value> = db
+    // The stored blob has three states, and only two are safe to act on:
+    //
+    //   key absent          -> known-empty. Nothing is stored, so an
+    //                          id-keyed setting naming a retired backend
+    //                          is a genuine orphan and can go.
+    //   key present, parses -> known. `live_ids` below is trustworthy.
+    //   key present, corrupt-> unknown. Bail out entirely.
+    //
+    // The corrupt case must not fall through to the id-keyed purge: an
+    // empty `live_ids` there means "couldn't read", not "nothing claims
+    // this id", which would defeat the collision guard below and delete
+    // the default selection of a user-defined backend still sitting in
+    // that unreadable JSON. Repairing a corrupt blob is
+    // `save_backend_configs`' job — the tolerant loader deliberately
+    // leaves it in place for external recovery, so this pass leaves every
+    // related setting alone until the blob is readable again.
+    let Some(raw) = db
         .get_app_setting(SETTINGS_KEY)
         .map_err(|e| e.to_string())?
-        .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
-        .unwrap_or_default();
+    else {
+        return purge_retired_id_keyed_settings(db, &HashSet::new());
+    };
+    let Ok(stored) = serde_json::from_str::<Vec<Value>>(&raw) else {
+        tracing::warn!(
+            target: "agent_backends",
+            "skipping retired-backend purge: stored blob is unreadable"
+        );
+        return Ok(());
+    };
 
     if stored.iter().any(is_retired_backend_entry) {
         let kept: Vec<&Value> = stored
@@ -372,16 +396,23 @@ pub(super) fn purge_retired_backend_settings(db: &Database) -> Result<(), String
         );
     }
 
-    // `default_agent_backend` and the auto-detect opt-out are keyed by id,
-    // and a retired id is not reserved — nothing stops a user-defined
-    // backend from also being called `pi`. Only purge an id-keyed setting
-    // when no surviving entry claims that id, so a custom backend that
-    // happens to reuse the name keeps its default selection and opt-out.
     let live_ids: HashSet<&str> = stored
         .iter()
         .filter(|entry| !is_retired_backend_entry(entry))
         .filter_map(|entry| entry.get("id").and_then(Value::as_str))
         .collect();
+    purge_retired_id_keyed_settings(db, &live_ids)
+}
+
+/// Clear the id-keyed settings (`default_agent_backend`, the auto-detect
+/// opt-out) belonging to a retired backend.
+///
+/// `live_ids` must be the set of ids the *readable* stored blob still
+/// claims — a retired id is not reserved, so nothing stops a user-defined
+/// backend from also being called `pi`, and any id in this set is spared.
+/// Callers must never pass an empty set to mean "couldn't read the blob";
+/// see [`purge_retired_backend_settings`].
+fn purge_retired_id_keyed_settings(db: &Database, live_ids: &HashSet<&str>) -> Result<(), String> {
     let purgeable_ids: Vec<&str> = RETIRED_BACKEND_IDS
         .iter()
         .copied()
