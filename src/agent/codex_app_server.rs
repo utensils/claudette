@@ -143,7 +143,8 @@ impl CodexAppServerSession {
             &args,
             working_dir,
             options.resolved_env.as_ref(),
-        );
+        )
+        .await;
         let mut cmd = built_command.command;
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
