@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.27.1](https://github.com/utensils/claudette/compare/v0.27.0...v0.27.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **chat:** clear the Workflow status pill when a run ends or is killed ([#1013](https://github.com/utensils/claudette/issues/1013)) ([8c22db7](https://github.com/utensils/claudette/commit/8c22db7c975b3a24d7fa4edd742a6c6d26c68e32))
+* **chat:** render insight callouts that the model wrapped in a code fence ([#1016](https://github.com/utensils/claudette/issues/1016)) ([0db5c4e](https://github.com/utensils/claudette/commit/0db5c4e7fe32e0dbd00eb15c81efa01aa96dad46))
+
 ## [0.27.0](https://github.com/utensils/claudette/compare/v0.26.0...v0.27.0) (2026-07-25)
 
 
