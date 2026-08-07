@@ -8,5 +8,8 @@
 //! The actual plugin execution happens in `crate::plugin_runtime`; this
 //! module just provides the SCM-specific shapes on top.
 
+pub mod auto_archive;
 pub mod detect;
+#[cfg(test)]
+mod plugin_tests;
 pub mod types;

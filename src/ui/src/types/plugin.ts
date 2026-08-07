@@ -18,6 +18,10 @@ export interface PullRequest {
   base: string;
   draft: boolean;
   ci_status: "pending" | "success" | "failure" | null;
+  /** RFC 3339 merge time when the provider reports one. Absent on payloads
+   *  from older remote servers and on SCM cache rows written before the
+   *  field existed, so treat it as optional. */
+  merged_at?: string | null;
 }
 
 export interface CiCheck {

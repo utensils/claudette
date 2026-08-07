@@ -8,6 +8,19 @@ local function glab(args)
     return host.json_decode(result.stdout)
 end
 
+-- Copy glab's merged_at onto a canonical PullRequest table, if present.
+-- The host uses it to tell a merge that belongs to the polling workspace
+-- from one it inherited via a branch-name collision (see
+-- src/scm/auto_archive.rs). Assigned conditionally rather than inline so an
+-- unmerged MR leaves the key absent, which is what the host's
+-- Option<String> expects regardless of how JSON null decodes.
+local function with_merged_at(pr, data)
+    if type(data.merged_at) == "string" and #data.merged_at > 0 then
+        pr.merged_at = data.merged_at
+    end
+    return pr
+end
+
 function M.list_pull_requests(args)
     -- Two call-sites: per-branch sidebar lookup (args.branch) and the
     -- repo-wide project-view aggregation (args.scope). Match the
@@ -38,7 +51,7 @@ function M.list_pull_requests(args)
     local data = glab(glab_args)
     local prs = {}
     for _, item in ipairs(data) do
-        table.insert(prs, {
+        table.insert(prs, with_merged_at({
             number = item.iid,
             title = item.title,
             state = item.state == "opened" and "open" or item.state,
@@ -47,7 +60,7 @@ function M.list_pull_requests(args)
             branch = item.source_branch,
             base = item.target_branch,
             draft = item.draft or false,
-        })
+        }, item))
     end
     return prs
 end
@@ -128,7 +141,7 @@ function M.get_pull_request(args)
         "mr", "view", tostring(args.number),
         "--output-format", "json",
     })
-    return {
+    return with_merged_at({
         number = data.iid,
         title = data.title,
         state = data.state == "opened" and "open" or data.state,
@@ -137,12 +150,12 @@ function M.get_pull_request(args)
         branch = data.source_branch,
         base = data.target_branch,
         draft = data.draft or false,
-    }
+    }, data)
 end
 
 -- Normalize glab's MR JSON shape to our canonical PullRequest fields.
 local function normalize_mr(data)
-    return {
+    return with_merged_at({
         number = data.iid,
         title = data.title,
         state = data.state == "opened" and "open" or data.state,
@@ -151,7 +164,7 @@ local function normalize_mr(data)
         branch = data.source_branch or "",
         base = data.target_branch or "",
         draft = data.draft or false,
-    }
+    }, data)
 end
 
 function M.create_pull_request(args)

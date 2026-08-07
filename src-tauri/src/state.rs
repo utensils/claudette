@@ -11,6 +11,7 @@ use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
 use claudette::file_watcher::FileWatcher;
 use claudette::plugin_runtime::PluginRegistry;
+use claudette::scm::auto_archive::ObservedPr;
 use claudette::scm::types::{CiCheck, CiOverallStatus, PullRequest};
 use serde::{Deserialize, Serialize};
 
@@ -690,6 +691,14 @@ pub struct AppState {
     pub diff_load_locks: RwLock<HashMap<String, AsyncGateEntry>>,
     /// Per-workspace CI transition state for auto-fix triggering.
     pub ci_last_status: RwLock<HashMap<String, CiTransitionState>>,
+    /// Per-workspace pull-request state as of the last SCM poll, keyed by
+    /// workspace id. Lets auto-archive-on-merge require a witnessed
+    /// non-merged→merged transition when the provider reports no merge
+    /// timestamp. Deliberately keyed by workspace rather than by branch, so a
+    /// branch rename starts fresh instead of inheriting the previous branch's
+    /// history. In-memory only: a restart simply falls back to the merge-time
+    /// check in `claudette::scm::auto_archive`.
+    pub pr_last_observed: RwLock<HashMap<String, ObservedPr>>,
     /// Limits concurrent SCM CLI invocations.
     pub scm_semaphore: Arc<Semaphore>,
     /// The workspace the user is currently viewing. The polling loop reads
@@ -800,6 +809,7 @@ impl AppState {
             merge_base_cache: MergeBaseCache::new(),
             diff_load_locks: RwLock::new(HashMap::new()),
             ci_last_status: RwLock::new(HashMap::new()),
+            pr_last_observed: RwLock::new(HashMap::new()),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             selected_workspace_id: RwLock::new(None),
             workspace_activity: RwLock::new(HashMap::new()),

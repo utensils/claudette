@@ -47,6 +47,21 @@ If the CLI isn't installed or authenticated, the SCM tab shows a helpful status 
 
 Enable [**Settings > General > Archive on merge**](/claudette/features/settings/#general) to automatically archive a workspace when its PR is detected as merged. The sidebar cleans itself up without manual intervention.
 
+### How Claudette decides the merge is yours
+
+A workspace's PR is resolved by **branch name** — and merged PRs keep resolving for their branch forever, so the sidebar badge still renders after a merge. That creates a trap: a brand-new workspace whose branch happens to match an older, already-merged PR would otherwise be archived within a minute of its first prompt. Branch names collide more easily than you'd expect, because the first prompt of a workspace auto-renames its branch to a slug derived from that prompt — ask for something twice and you get the same slug twice.
+
+Claudette therefore archives only when at least one of these holds:
+
+- **The PR merged at or after the workspace was created.** The merge plausibly came from this workspace's work.
+- **Claudette watched the transition.** This app session polled the *same PR number* and saw it go from open or draft to merged.
+
+Either signal is enough, which keeps the feature working in both directions: providers that report no merge timestamp are covered by the observed transition, and merges that happened while the app was closed are covered by the timestamp. A merged PR inherited purely through a branch-name collision satisfies neither, so the workspace is left alone and a `declining auto-archive` line is written to the log.
+
+This matters most when [**Settings > Git > Auto-delete branch on archive**](/claudette/features/settings/#git) is also on, since that upgrades the archive into a hard delete of the workspace record, worktree, and local branch.
+
+Custom SCM plugins should return `merged_at` (RFC 3339) on merged pull requests so the timestamp check applies. Plugins that omit it still work — they just fall back to the observed-transition check.
+
 ## Auto-Fix on CI Failure
 
 Enable [**Settings > Git > Auto-fix CI failures**](/claudette/features/settings/#git) to automatically create a new agent session when a workspace's CI changes from passing or running to failed. Claudette waits until checks have finished, applies the per-workspace cooldown, then opens a session with a prompt containing failed check names, links, branch and PR context, and failed log output when the provider supports it.

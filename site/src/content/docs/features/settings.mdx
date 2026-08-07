@@ -12,7 +12,7 @@ Open settings with `⌘/Ctrl + ,` or from the sidebar. Settings are organized in
 | App version | Shows the installed version and an inline **Check for updates** button. When an update is available, **Install now** / **When idle** buttons replace it. | — |
 | Update channel | Build channel the updater follows: **Stable** or **Nightly**. Opting into Nightly is gated behind a confirmation dialog. Locked while an install is downloading or queued. | Stable |
 | Worktree base directory | Directory where new workspaces are created | `~/.claudette/workspaces` |
-| Archive on merge | Automatically archive a workspace when its pull request is merged. See [SCM Providers](/claudette/features/scm-providers/). | Off |
+| Archive on merge | Automatically archive a workspace when its pull request is merged. Only fires when the merge is attributable to that workspace — see [Auto-Archive on Merge](/claudette/features/scm-providers/#auto-archive-on-merge). | Off |
 | Claudette Terminal | Show a read-only terminal tab that mirrors workspace provisioning (env-providers + setup script), agent shell commands, and background task output. | On |
 | System tray | Enable/disable system tray integration | Enabled |
 | Tray icon style | Tray icon rendering: `Auto`, `Light`, `Dark`, or `Color`. Disabled when the system tray is off. | Auto |

@@ -28,6 +28,14 @@ pub struct PullRequest {
     pub base: String,
     pub draft: bool,
     pub ci_status: Option<CiOverallStatus>,
+    /// When the PR was merged, as reported by the provider (RFC 3339).
+    /// `None` for unmerged PRs, for providers that don't report it, and for
+    /// `scm_status_cache` rows persisted before this field existed — hence
+    /// `serde(default)`. Consumed by `crate::scm::auto_archive` to tell a
+    /// merge that belongs to a workspace from one it inherited through a
+    /// branch-name collision.
+    #[serde(default)]
+    pub merged_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -10,6 +10,7 @@ use claudette::db::{Database, RepoScmListCacheRow, WorkspaceScmLinkRow};
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::plugin_runtime::PluginError;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
+use claudette::scm::auto_archive::{self, AutoArchiveVerdict, ObservedPr};
 use claudette::scm::detect;
 use claudette::scm::types::{
     CiCheck, CiCheckStatus, CiFailureLog, CiOverallStatus, Issue, IssueScope, PullRequest,
@@ -48,6 +49,9 @@ const SCM_FETCH_LOCK_TTL: Duration = Duration::from_secs(10 * 60);
 
 struct ScmPollSettingsSnapshot {
     workspace_ids: Vec<(String, String)>,
+    /// `workspace_id` → `created_at`, so the auto-archive gate can reject a
+    /// merged PR that predates the workspace without a second DB round-trip.
+    workspace_created_at: HashMap<String, String>,
     global_archive: bool,
     per_repo_archive: HashMap<String, bool>,
     global_ci_auto_fix: bool,
@@ -1639,7 +1643,7 @@ fn parse_ci_auto_fix_cooldown_seconds(raw: Option<String>) -> u64 {
 }
 
 fn load_scm_poll_settings_snapshot(db: &Database) -> ScmPollSettingsSnapshot {
-    let active: Vec<(String, String)> = db
+    let active_workspaces: Vec<claudette::model::Workspace> = db
         .list_workspaces()
         .unwrap_or_default()
         .into_iter()
@@ -1650,6 +1654,13 @@ fn load_scm_poll_settings_snapshot(db: &Database) -> ScmPollSettingsSnapshot {
                     .as_deref()
                     .is_some_and(|path| !path.trim().is_empty())
         })
+        .collect();
+    let workspace_created_at: HashMap<String, String> = active_workspaces
+        .iter()
+        .map(|ws| (ws.id.clone(), ws.created_at.clone()))
+        .collect();
+    let active: Vec<(String, String)> = active_workspaces
+        .into_iter()
         .map(|ws| (ws.id, ws.repository_id))
         .collect();
     let global_archive = db
@@ -1750,6 +1761,7 @@ fn load_scm_poll_settings_snapshot(db: &Database) -> ScmPollSettingsSnapshot {
 
     ScmPollSettingsSnapshot {
         workspace_ids: active,
+        workspace_created_at,
         global_archive,
         per_repo_archive,
         global_ci_auto_fix,
@@ -1883,15 +1895,62 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         .copied()
                         .unwrap_or(settings.global_archive);
 
-                    if should_archive
-                        && detail
-                            .pull_request
-                            .as_ref()
-                            .is_some_and(|pr| pr.state == claudette::scm::types::PrState::Merged)
+                    // Read the prior observation *before* recording this
+                    // poll's, so a non-merged→merged transition is still
+                    // visible to the gate below.
+                    let observed_before =
+                        app_state.pr_last_observed.read().await.get(&ws_id).cloned();
                     {
-                        tracing::info!(target: "claudette::scm", workspace_id = %ws_id, "PR merged — auto-archiving workspace");
-                        let pr_number = detail.pull_request.as_ref().map(|pr| pr.number);
-                        auto_archive_workspace(&handle, &app_state, &ws_id, pr_number).await;
+                        let mut observed = app_state.pr_last_observed.write().await;
+                        match detail.pull_request.as_ref() {
+                            Some(pr) => {
+                                observed.insert(ws_id.clone(), ObservedPr::from_pr(pr));
+                            }
+                            None => {
+                                observed.remove(&ws_id);
+                            }
+                        }
+                    }
+
+                    if should_archive && let Some(pr) = detail.pull_request.as_ref() {
+                        let created_at = settings
+                            .workspace_created_at
+                            .get(&ws_id)
+                            .map(String::as_str)
+                            .unwrap_or_default();
+                        match auto_archive::evaluate(pr, created_at, observed_before.as_ref()) {
+                            AutoArchiveVerdict::Archive => {
+                                tracing::info!(target: "claudette::scm", workspace_id = %ws_id, pr_number = pr.number, "PR merged — auto-archiving workspace");
+                                auto_archive_workspace(
+                                    &handle,
+                                    &app_state,
+                                    &ws_id,
+                                    Some(pr.number),
+                                )
+                                .await;
+                            }
+                            AutoArchiveVerdict::NotMerged => {}
+                            verdict => {
+                                // Only on the first sighting of this merged
+                                // PR — a workspace parked on an adopted
+                                // merged PR would otherwise log every tick.
+                                let already_seen_merged =
+                                    observed_before.as_ref().is_some_and(|prev| {
+                                        prev.number == pr.number
+                                            && prev.state == claudette::scm::types::PrState::Merged
+                                    });
+                                if !already_seen_merged {
+                                    tracing::info!(
+                                        target: "claudette::scm",
+                                        workspace_id = %ws_id,
+                                        pr_number = pr.number,
+                                        branch = %pr.branch,
+                                        ?verdict,
+                                        "declining auto-archive — merged PR is not this workspace's work"
+                                    );
+                                }
+                            }
+                        }
                     }
 
                     // CI auto-fix: detect failure transitions
@@ -2472,6 +2531,7 @@ mod tests {
             base: "main".into(),
             draft: false,
             ci_status: None,
+            merged_at: None,
         }
     }
 
@@ -3029,6 +3089,7 @@ mod ci_auto_fix_tests {
             base: "main".to_string(),
             draft: false,
             ci_status: Some(CiOverallStatus::Failure),
+            merged_at: None,
         };
         let template = "Branch: {{branch}}, PR: {{pr_title}} {{pr_url}} #{{pr_number}}\n{{failed_checks}}\n{{failure_logs}}\n{{all_checks}}";
         let result = format_ci_auto_fix_prompt(template, &checks, &logs, "fix-branch", Some(&pr));

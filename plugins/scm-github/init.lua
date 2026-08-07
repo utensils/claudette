@@ -18,7 +18,10 @@ function M.list_pull_requests(args)
     local limit = tostring(args.limit or 30)
     local gh_args = {
         "pr", "list",
-        "--json", "number,title,state,url,author,headRefName,baseRefName,isDraft,statusCheckRollup",
+        -- mergedAt lets the host tell a merge that belongs to the polling
+        -- workspace from one it inherited via a branch-name collision (see
+        -- src/scm/auto_archive.rs). It is null for unmerged PRs.
+        "--json", "number,title,state,url,author,headRefName,baseRefName,isDraft,statusCheckRollup,mergedAt",
         "--limit", limit,
     }
     if args.branch then
@@ -65,7 +68,7 @@ function M.list_pull_requests(args)
             elseif all_pass then ci = "success"
             else ci = "pending" end
         end
-        table.insert(prs, {
+        local pr = {
             number = item.number,
             title = item.title,
             state = item.isDraft and "draft" or string.lower(item.state),
@@ -75,7 +78,14 @@ function M.list_pull_requests(args)
             base = item.baseRefName,
             draft = item.isDraft,
             ci_status = ci,
-        })
+        }
+        -- Assigned conditionally rather than inline: an unmerged PR's
+        -- mergedAt is JSON null, and leaving the key absent is the shape the
+        -- host's Option<String> expects regardless of how null decodes.
+        if type(item.mergedAt) == "string" and #item.mergedAt > 0 then
+            pr.merged_at = item.mergedAt
+        end
+        table.insert(prs, pr)
     end
     return prs
 end
@@ -155,7 +165,7 @@ end
 function M.get_pull_request(args)
     local data = gh({
         "pr", "view", tostring(args.number),
-        "--json", "number,title,state,url,author,headRefName,baseRefName,isDraft,statusCheckRollup",
+        "--json", "number,title,state,url,author,headRefName,baseRefName,isDraft,statusCheckRollup,mergedAt",
     })
     local ci = nil
     if data.statusCheckRollup and #data.statusCheckRollup > 0 then
@@ -177,7 +187,7 @@ function M.get_pull_request(args)
         elseif all_pass then ci = "success"
         else ci = "pending" end
     end
-    return {
+    local pr = {
         number = data.number,
         title = data.title,
         state = data.isDraft and "draft" or string.lower(data.state),
@@ -188,6 +198,10 @@ function M.get_pull_request(args)
         draft = data.isDraft,
         ci_status = ci,
     }
+    if type(data.mergedAt) == "string" and #data.mergedAt > 0 then
+        pr.merged_at = data.mergedAt
+    end
+    return pr
 end
 
 function M.create_pull_request(args)
