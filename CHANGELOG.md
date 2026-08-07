@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.2](https://github.com/utensils/claudette/compare/v0.27.1...v0.27.2) (2026-08-07)
+
+
+### Bug Fixes
+
+* **scm:** don't auto-archive a workspace that inherited a merged PR ([#1017](https://github.com/utensils/claudette/issues/1017)) ([2fe88ea](https://github.com/utensils/claudette/commit/2fe88ea6e17cf0cd604839c595f7580a1bce62fc))
+
 ## [0.27.1](https://github.com/utensils/claudette/compare/v0.27.0...v0.27.1) (2026-08-05)
 
 
