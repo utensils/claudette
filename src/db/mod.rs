@@ -48,6 +48,24 @@ fn is_busy_error(err: &rusqlite::Error) -> bool {
 ///
 /// `op` must be self-contained (open its own transaction and commit it), as
 /// it may run several times. Keep post-commit housekeeping outside.
+///
+/// **Blocking:** the backoff is a synchronous `thread::sleep`, and callers
+/// are async. That is deliberate rather than overlooked. `rusqlite`'s
+/// `Connection` is not `Send`, so the whole `db` layer is synchronous and
+/// called directly from async commands; no DB path in this codebase runs
+/// under `spawn_blocking`. More to the point, `busy_timeout`
+/// ([`SQLITE_BUSY_TIMEOUT`], 30s) already parks the calling thread inside
+/// `sqlite3_step` on these same paths — two orders of magnitude longer than
+/// this helper's ~300ms worst case — so an async backoff here would leave
+/// the dominant blocking untouched. Making that genuinely non-blocking means
+/// moving the DB layer off the async runtime (opening connections inside
+/// each blocking task), which is a separate architectural change.
+///
+/// Note the interaction with `IMMEDIATE`: taking the write lock at `BEGIN`
+/// means a contended write now *waits* on the busy handler where the
+/// previous `DEFERRED` upgrade failed fast with `SQLITE_BUSY_SNAPSHOT`.
+/// Better for users — the operation succeeds instead of erroring — but it
+/// does make the existing 30s wait more reachable.
 pub(crate) fn retry_on_busy<T>(
     mut op: impl FnMut() -> Result<T, rusqlite::Error>,
 ) -> Result<T, rusqlite::Error> {
