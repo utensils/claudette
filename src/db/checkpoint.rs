@@ -14,7 +14,7 @@ use crate::model::{
     ChatMessage, CheckpointFile, CompletedTurnData, ConversationCheckpoint, TurnToolActivity,
 };
 
-use super::Database;
+use super::{Database, retry_on_busy};
 
 #[derive(Debug)]
 struct MissingCheckpointBlob {
@@ -320,18 +320,69 @@ impl Database {
         &self,
         workspace_id: &str,
     ) -> Result<usize, rusqlite::Error> {
-        let deleted = self.conn.execute(
-            "DELETE FROM checkpoint_files
-             WHERE checkpoint_id IN (
-                 SELECT id FROM conversation_checkpoints WHERE workspace_id = ?1
-             )",
-            params![workspace_id],
-        )?;
-        // Reclaim blobs the purge just orphaned and drain the freelist. Both
-        // short-circuit when nothing was deleted, so an archive of a
-        // file-less workspace is a cheap no-op.
-        self.gc_orphan_blobs_after_delete(deleted);
-        self.best_effort_incremental_vacuum_after_delete(deleted);
+        let deleted = retry_on_busy(|| {
+            let tx = self.conn.unchecked_transaction()?;
+
+            // Collect the blobs this purge is about to orphan *before* the
+            // referencing rows disappear. Scoping the GC to these shas is
+            // what keeps archive proportional to the workspace instead of
+            // to the database: the blanket
+            // `DELETE FROM checkpoint_blobs WHERE NOT EXISTS (...)` plans as
+            // `SCAN checkpoint_blobs`, and since `bytes BLOB` is stored
+            // inline that scan walks every payload page in the table. On a
+            // multi-GB database that meant every archive held the write lock
+            // for a full sweep of the blob store while agents were streaming
+            // into the same DB — surfacing as "database is locked".
+            let candidate_shas: Vec<String> = {
+                let mut stmt = tx.prepare(
+                    "SELECT DISTINCT blob_sha256 FROM checkpoint_files
+                      WHERE blob_sha256 IS NOT NULL
+                        AND checkpoint_id IN (
+                            SELECT id FROM conversation_checkpoints WHERE workspace_id = ?1
+                        )",
+                )?;
+                let rows = stmt.query_map(params![workspace_id], |r| r.get::<_, String>(0))?;
+                rows.collect::<Result<_, _>>()?
+            };
+
+            let deleted = tx.execute(
+                "DELETE FROM checkpoint_files
+                 WHERE checkpoint_id IN (
+                     SELECT id FROM conversation_checkpoints WHERE workspace_id = ?1
+                 )",
+                params![workspace_id],
+            )?;
+
+            // Drop only those candidates nothing references any more. The
+            // `NOT EXISTS` guard is what preserves blobs still shared with
+            // another workspace (content-addressed storage dedupes identical
+            // bytes across workspaces), and it resolves via
+            // `idx_checkpoint_files_blob_sha256` — one indexed probe per
+            // candidate rather than a table scan.
+            {
+                let mut stmt = tx.prepare(
+                    "DELETE FROM checkpoint_blobs
+                      WHERE sha256 = ?1
+                        AND NOT EXISTS (
+                            SELECT 1 FROM checkpoint_files WHERE blob_sha256 = ?1
+                        )",
+                )?;
+                for sha in &candidate_shas {
+                    stmt.execute(params![sha])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(deleted)
+        })?;
+
+        // Space reclaim is deliberately NOT unconditional here. Draining the
+        // freelist on every archive spends write-locked page I/O even when
+        // only a handful of pages were freed; gating on an accumulated
+        // freelist amortizes it across archives. Same rationale as the
+        // retroactive #1002 sweep, which skips reclaim entirely and defers to
+        // the shared post-boot pass in `checkpoint_backfill`.
+        self.best_effort_reclaim_freelist_if_worthwhile();
         Ok(deleted)
     }
 
@@ -2073,6 +2124,86 @@ mod tests {
         let w2_files = db.get_checkpoint_files("cp2").unwrap();
         assert_eq!(w2_files.len(), 1);
         assert_eq!(w2_files[0].content.as_deref(), Some(shared.as_slice()));
+    }
+
+    /// The purge's blob GC is scoped to the shas it just orphaned rather than
+    /// scanning the whole blob store (that blanket `NOT EXISTS` delete plans
+    /// as `SCAN checkpoint_blobs`, which on a multi-GB DB held the write lock
+    /// through every inline payload page on every archive). Scoping is only
+    /// safe if it is *exact* — this pins that the purge leaves behind zero
+    /// blobs it orphaned itself, so nothing accumulates.
+    #[test]
+    fn purge_workspace_checkpoint_files_leaves_none_of_its_own_orphans() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        for i in 0..5 {
+            db.insert_checkpoint_files(&[raw_file(
+                &format!("f{i}"),
+                "cp1",
+                &format!("file{i}.bin"),
+                format!("unique-bytes-{i}").as_bytes(),
+            )])
+            .unwrap();
+        }
+        assert_eq!(blob_count(&db), 5);
+
+        db.purge_workspace_checkpoint_files("w1").unwrap();
+
+        let orphans: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM checkpoint_blobs
+                  WHERE NOT EXISTS (
+                      SELECT 1 FROM checkpoint_files WHERE blob_sha256 = checkpoint_blobs.sha256
+                  )",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0, "purge must not leave blobs it orphaned itself");
+        assert_eq!(blob_count(&db), 0);
+    }
+
+    /// Documents the one intentional behavior change from scoping the GC: an
+    /// archive no longer opportunistically sweeps unrelated pre-existing
+    /// orphans. Those are still collected by the blanket
+    /// `gc_orphan_blobs_after_delete` on the delete/prune paths — an archive
+    /// simply stops paying a whole-table scan to do someone else's cleanup.
+    #[test]
+    fn purge_workspace_checkpoint_files_leaves_unrelated_orphans_to_the_delete_paths() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "a.bin", b"w1-bytes")])
+            .unwrap();
+
+        // A stray blob no `checkpoint_files` row has ever referenced.
+        db.conn()
+            .execute(
+                "INSERT INTO checkpoint_blobs (sha256, bytes, byte_size, compression)
+                 VALUES ('deadbeef', X'00', 1, 'none')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(blob_count(&db), 2);
+
+        db.purge_workspace_checkpoint_files("w1").unwrap();
+
+        let stray: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM checkpoint_blobs WHERE sha256 = 'deadbeef'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stray, 1, "unrelated orphan is out of this purge's scope");
+        assert_eq!(blob_count(&db), 1, "w1's own blob is still reclaimed");
     }
 
     /// Regression pin for the #1002 retroactive sweep: purging archived

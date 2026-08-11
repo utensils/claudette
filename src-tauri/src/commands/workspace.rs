@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use claudette::agent::history_seeder;
-use claudette::db::Database;
+use claudette::db::{Database, PostDeleteHousekeeping};
 use claudette::fork::{self, ForkInputs};
 use claudette::git;
 use claudette::mcp_supervisor::McpSupervisor;
@@ -1329,6 +1329,9 @@ async fn delete_workspaces_bulk_body(
     let mut cancelled: Vec<String> = Vec::new();
     let mut affected_repos: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut env_cleanup_paths: Vec<String> = Vec::new();
+    // Orphan-blob GC + incremental vacuum owed by the rows deleted below,
+    // accumulated across the batch and paid once after the loop.
+    let mut owed_housekeeping = PostDeleteHousekeeping::default();
 
     let emit_progress = |workspace_id: &str, status: &'static str, error: Option<String>| {
         let Some(req_id) = request_id else {
@@ -1369,10 +1372,13 @@ async fn delete_workspaces_bulk_body(
             .map(|w| w.repository_id.clone())
             .unwrap_or_default();
 
-        // DB delete (in-transaction Archived guard inside).
-        match db.try_delete_archived_workspace_with_summary(id) {
-            Ok(true) => {} // success — fall through to cleanup
-            Ok(false) => {
+        // DB delete (in-transaction Archived guard inside). Housekeeping
+        // (orphan-blob GC + incremental vacuum) is deferred and accumulated
+        // into `owed_housekeeping`, then run once after the loop — see
+        // `try_delete_archived_workspace_deferring_housekeeping`.
+        match db.try_delete_archived_workspace_deferring_housekeeping(id) {
+            Ok(Some(work)) => owed_housekeeping.merge(work), // fall through to cleanup
+            Ok(None) => {
                 let err = "workspace no longer archived".to_string();
                 failed.push(BulkDeleteFailure {
                     id: id.clone(),
@@ -1430,6 +1436,13 @@ async fn delete_workspaces_bulk_body(
         deleted.push(id.clone());
         emit_progress(id, "deleted", None);
     }
+
+    // One orphan-blob GC + incremental vacuum for the whole batch. Run
+    // after the loop (not per row) so the batch takes the write lock once
+    // for housekeeping instead of 2N extra times — the per-row version was
+    // contending with agent/metrics writers throughout the run. Best-effort
+    // and post-commit, so it can't affect any row's reported outcome.
+    db.run_post_delete_housekeeping(owed_housekeeping);
 
     // Env-watcher unregister + env-cache invalidate batched at the
     // end so we acquire the watcher read lock once instead of

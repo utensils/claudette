@@ -12,7 +12,7 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::model::{Workspace, WorkspaceStatus};
 
-use super::Database;
+use super::{Database, PostDeleteHousekeeping, retry_on_busy};
 
 pub const WORKSPACE_ORDER_MODE_PREFIX: &str = "workspace_order_mode:";
 
@@ -623,24 +623,52 @@ impl Database {
         &self,
         id: &str,
     ) -> Result<bool, rusqlite::Error> {
-        let tx = self.conn.unchecked_transaction()?;
-        let status: Option<String> = tx
-            .query_row(
-                "SELECT status FROM workspaces WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if status.as_deref() != Some("archived") {
+        let Some(work) = self.try_delete_archived_workspace_deferring_housekeeping(id)? else {
             return Ok(false);
-        }
-        Self::materialize_workspace_summary_tx(&tx, id)?;
-        let file_rows = self.count_workspace_checkpoint_files(id)?;
-        let deleted = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
-        tx.commit()?;
-        self.gc_orphan_blobs_after_delete(file_rows);
-        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
+        };
+        self.run_post_delete_housekeeping(work);
         Ok(true)
+    }
+
+    /// As [`Self::try_delete_archived_workspace_with_summary`], but returns
+    /// the owed post-delete housekeeping instead of performing it.
+    ///
+    /// Bulk callers accumulate the returned counts and make a single
+    /// [`Database::run_post_delete_housekeeping`] call after the batch. Run
+    /// per row, the orphan-blob GC and incremental vacuum take the write
+    /// lock two extra times *per workspace* — pure contention against the
+    /// concurrent writers (agent streaming, metrics, terminal state) that
+    /// this path is already racing, for housekeeping that coalesces
+    /// perfectly well.
+    ///
+    /// `Ok(None)` means the row was missing or no longer Archived.
+    pub fn try_delete_archived_workspace_deferring_housekeeping(
+        &self,
+        id: &str,
+    ) -> Result<Option<PostDeleteHousekeeping>, rusqlite::Error> {
+        // Retried as a unit: the closure opens and commits its own
+        // transaction, so a busy failure replays the Archived guard as well
+        // as the delete. Replaying the guard is required for correctness —
+        // a `restore_workspace` that lands between attempts must still be
+        // able to veto the delete.
+        retry_on_busy(|| {
+            let tx = self.conn.unchecked_transaction()?;
+            let status: Option<String> = tx
+                .query_row(
+                    "SELECT status FROM workspaces WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if status.as_deref() != Some("archived") {
+                return Ok(None);
+            }
+            Self::materialize_workspace_summary_tx(&tx, id)?;
+            let file_rows = self.count_workspace_checkpoint_files(id)?;
+            let deleted = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+            tx.commit()?;
+            Ok(Some(PostDeleteHousekeeping { file_rows, deleted }))
+        })
     }
 
     /// Hard-delete a repository, materializing summaries for all its

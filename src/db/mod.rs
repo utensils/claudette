@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 
 use crate::migrations::{MIGRATIONS, Migration};
 
@@ -10,6 +10,66 @@ pub(crate) const SQLITE_AUTO_VACUUM_FULL: i64 = 1;
 pub(crate) const SQLITE_AUTO_VACUUM_INCREMENTAL: i64 = 2;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 const INCREMENTAL_VACUUM_PAGES_AFTER_DELETE: i64 = 4096;
+/// Freelist size (pages) at which [`Database::best_effort_reclaim_freelist_if_worthwhile`]
+/// decides a drain is worth its write-locked page I/O. Matched to the
+/// per-drain chunk size so a reclaim that fires always has a full chunk of
+/// work to do rather than truncating a few tail pages.
+const FREELIST_RECLAIM_THRESHOLD_PAGES: i64 = INCREMENTAL_VACUUM_PAGES_AFTER_DELETE;
+
+/// Total attempts (initial + retries) for [`retry_on_busy`].
+const BUSY_RETRY_ATTEMPTS: u32 = 5;
+/// First backoff step; doubles per retry (20/40/80/160ms ≈ 300ms worst case).
+const BUSY_RETRY_BASE_DELAY: Duration = Duration::from_millis(20);
+
+/// True for the `SQLITE_BUSY` / `SQLITE_LOCKED` families, including the
+/// extended `SQLITE_BUSY_SNAPSHOT` code (its primary code is `SQLITE_BUSY`,
+/// so it maps to [`ErrorCode::DatabaseBusy`]).
+fn is_busy_error(err: &rusqlite::Error) -> bool {
+    matches!(
+        err.sqlite_error_code(),
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
+}
+
+/// Re-run `op` when SQLite reports the database as busy/locked.
+///
+/// Necessary because `busy_timeout` does **not** cover every contention
+/// case. SQLite skips the busy handler entirely whenever invoking it could
+/// deadlock — most importantly `SQLITE_BUSY_SNAPSHOT`, returned when a
+/// deferred transaction that already took a read snapshot tries to upgrade
+/// to a write after another connection committed. No amount of waiting
+/// clears that: the snapshot is permanently stale and the transaction has
+/// to be rolled back and replayed from the top.
+///
+/// `configure_connection` makes transactions `IMMEDIATE`, which removes the
+/// upgrade path that produces `SQLITE_BUSY_SNAPSHOT`. This retry covers what
+/// remains — two `IMMEDIATE` writers colliding, or a WAL checkpoint holding
+/// the write lock past the busy timeout.
+///
+/// `op` must be self-contained (open its own transaction and commit it), as
+/// it may run several times. Keep post-commit housekeeping outside.
+pub(crate) fn retry_on_busy<T>(
+    mut op: impl FnMut() -> Result<T, rusqlite::Error>,
+) -> Result<T, rusqlite::Error> {
+    let mut attempt: u32 = 0;
+    loop {
+        match op() {
+            Err(e) if is_busy_error(&e) && attempt + 1 < BUSY_RETRY_ATTEMPTS => {
+                let delay = BUSY_RETRY_BASE_DELAY * 2u32.pow(attempt);
+                tracing::debug!(
+                    target: "claudette::db",
+                    attempt = attempt + 1,
+                    delay_ms = delay.as_millis() as u64,
+                    error = %e,
+                    "database busy; retrying transaction"
+                );
+                std::thread::sleep(delay);
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
 
 mod repository;
 pub use repository::is_duplicate_repository_path_error;
@@ -46,6 +106,32 @@ pub struct Database {
     conn: Connection,
 }
 
+/// Freelist / orphan-blob work owed after a workspace delete has committed.
+///
+/// Modelled as a value so bulk callers can accumulate across a batch and pay
+/// the cost once via [`Database::run_post_delete_housekeeping`], rather than
+/// taking the write lock two extra times per deleted row.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PostDeleteHousekeeping {
+    /// `checkpoint_files` rows that belonged to the deleted workspace.
+    pub file_rows: usize,
+    /// `workspaces` rows actually removed (0 or 1 per delete).
+    pub deleted: usize,
+}
+
+impl PostDeleteHousekeeping {
+    /// Fold another delete's owed work into this one.
+    pub fn merge(&mut self, other: Self) {
+        self.file_rows += other.file_rows;
+        self.deleted += other.deleted;
+    }
+
+    /// True when nothing was deleted and so no housekeeping is owed.
+    pub fn is_empty(&self) -> bool {
+        self.file_rows == 0 && self.deleted == 0
+    }
+}
+
 impl Database {
     /// Open (or create) the SQLite database at `path` and run any
     /// pending migrations. Wrapped in a `claudette::db` span at TRACE
@@ -63,8 +149,8 @@ impl Database {
             })?;
         }
         let is_fresh_file = is_fresh_database_file(path);
-        let conn = Connection::open(path)?;
-        Self::configure_connection(&conn, is_fresh_file)?;
+        let mut conn = Connection::open(path)?;
+        Self::configure_connection(&mut conn, is_fresh_file)?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
@@ -72,18 +158,39 @@ impl Database {
 
     #[allow(dead_code)]
     pub fn open_in_memory() -> Result<Self, rusqlite::Error> {
-        let conn = Connection::open_in_memory()?;
-        Self::configure_connection(&conn, true)?;
+        let mut conn = Connection::open_in_memory()?;
+        Self::configure_connection(&mut conn, true)?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
     }
 
     fn configure_connection(
-        conn: &Connection,
+        conn: &mut Connection,
         enable_incremental_auto_vacuum_before_schema: bool,
     ) -> Result<(), rusqlite::Error> {
         conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+        // `BEGIN IMMEDIATE` for every `unchecked_transaction()` in the crate.
+        //
+        // rusqlite defaults to `DEFERRED`, which takes no lock at BEGIN. A
+        // transaction that reads before it writes therefore pins a WAL read
+        // snapshot and only tries to become a writer on its first mutation —
+        // and if any other connection committed in that window SQLite fails
+        // it with `SQLITE_BUSY_SNAPSHOT` *without consulting the busy
+        // handler*, because waiting could never resolve it. That made the
+        // 30s `busy_timeout` above inert on every read-then-write path and
+        // surfaced to users as "database is locked" (most visibly in bulk
+        // archived-workspace cleanup, which runs a read-then-write delete per
+        // row while agents stream concurrently).
+        //
+        // IMMEDIATE takes the write lock at BEGIN, so there is no upgrade and
+        // no stale snapshot — and because the lock is acquired up front, the
+        // busy handler *does* apply and `busy_timeout` starts working.
+        //
+        // Safe as a blanket default here: every `unchecked_transaction()` site
+        // in `src/db/` is a write transaction, so none pay a read-serialization
+        // cost. Revisit if a read-only transaction is ever introduced.
+        conn.set_transaction_behavior(TransactionBehavior::Immediate);
         if enable_incremental_auto_vacuum_before_schema {
             conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
         }
@@ -173,6 +280,43 @@ impl Database {
         if rows_deleted > 0 {
             self.best_effort_incremental_vacuum(INCREMENTAL_VACUUM_PAGES_AFTER_DELETE);
         }
+    }
+
+    /// Drain the freelist only once it has grown past
+    /// [`FREELIST_RECLAIM_THRESHOLD_PAGES`].
+    ///
+    /// For paths on a user-interactive critical section (archive), where the
+    /// alternative is paying write-locked vacuum I/O on *every* invocation to
+    /// reclaim a handful of pages. The threshold check is a single
+    /// `PRAGMA freelist_count` read, so the common case costs nothing and the
+    /// drain still happens — just amortized, once the freed pages are worth
+    /// a full chunk.
+    pub(crate) fn best_effort_reclaim_freelist_if_worthwhile(&self) {
+        match self.freelist_page_count() {
+            Ok(pages) if pages >= FREELIST_RECLAIM_THRESHOLD_PAGES => {
+                self.best_effort_incremental_vacuum(INCREMENTAL_VACUUM_PAGES_AFTER_DELETE);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::db",
+                    error = %e,
+                    "freelist probe failed; skipping opportunistic reclaim"
+                );
+            }
+        }
+    }
+
+    /// Perform the orphan-blob GC + incremental vacuum owed by one or more
+    /// committed workspace deletes. Best-effort — both helpers log and
+    /// swallow their own failures, so a housekeeping problem never fails a
+    /// delete the user already saw succeed.
+    pub fn run_post_delete_housekeeping(&self, work: PostDeleteHousekeeping) {
+        if work.is_empty() {
+            return;
+        }
+        self.gc_orphan_blobs_after_delete(work.file_rows);
+        self.best_effort_incremental_vacuum_after_delete(work.file_rows + work.deleted);
     }
 
     /// Drop `checkpoint_blobs` rows that no `checkpoint_files` row references.
@@ -424,6 +568,12 @@ impl Database {
         &self.conn
     }
 
+    /// Test-only: shorten the busy timeout so lock-contention tests fail
+    /// fast instead of blocking for the production [`SQLITE_BUSY_TIMEOUT`].
+    pub(crate) fn set_busy_timeout_for_test(&self, timeout: Duration) {
+        self.conn.busy_timeout(timeout).unwrap();
+    }
+
     /// Test-only: run the migration runner against a caller-supplied slice.
     /// Used to inject synthetic migrations for error-path and ordering tests.
     pub fn migrate_with(&self, migrations: &[Migration]) -> Result<(), rusqlite::Error> {
@@ -464,6 +614,126 @@ fn is_fresh_database_file(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::db::test_support::*;
+
+    // --- Write-lock / busy-retry tests ---
+
+    fn busy_error() -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("database is locked".into()),
+        )
+    }
+
+    /// Pins the fix: `unchecked_transaction()` must take the write lock at
+    /// `BEGIN`. Under rusqlite's `DEFERRED` default it would return `Ok`
+    /// here and only try to lock on the first write — the read-then-upgrade
+    /// shape that produced `SQLITE_BUSY_SNAPSHOT`.
+    #[test]
+    fn transactions_take_the_write_lock_at_begin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::open(&path).unwrap();
+        db.set_busy_timeout_for_test(Duration::from_millis(50));
+
+        let blocker = Connection::open(&path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let err = db
+            .conn()
+            .unchecked_transaction()
+            .expect_err("BEGIN must acquire the write lock, so this must fail while it is held");
+        assert!(is_busy_error(&err), "expected a busy error, got {err:?}");
+
+        blocker.execute_batch("ROLLBACK").unwrap();
+        db.conn()
+            .unchecked_transaction()
+            .expect("write lock released — BEGIN should succeed again");
+    }
+
+    /// Documents the mechanism the fix removes. A `DEFERRED` transaction
+    /// that reads before it writes pins a WAL snapshot; if another
+    /// connection commits in that window, the upgrade fails with
+    /// `SQLITE_BUSY_SNAPSHOT` *immediately* — SQLite skips the busy handler
+    /// because no amount of waiting can refresh a stale snapshot. That is
+    /// why the 30s `busy_timeout` never protected read-then-write paths,
+    /// and why users saw "database is locked" during bulk cleanup.
+    #[test]
+    fn deferred_read_then_write_upgrade_fails_busy_without_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::open(&path).unwrap();
+        db.conn()
+            .execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER);")
+            .unwrap();
+        db.conn()
+            .execute("INSERT INTO t (id, v) VALUES (1, 1)", [])
+            .unwrap();
+
+        let reader = Connection::open(&path).unwrap();
+        // Deliberately generous — and, on this path, entirely inert.
+        reader.busy_timeout(Duration::from_secs(30)).unwrap();
+        let writer = Connection::open(&path).unwrap();
+
+        reader.execute_batch("BEGIN DEFERRED").unwrap();
+        let _: i64 = reader
+            .query_row("SELECT v FROM t WHERE id = 1", [], |r| r.get(0))
+            .unwrap(); // snapshot pinned here
+
+        writer
+            .execute("UPDATE t SET v = 2 WHERE id = 1", [])
+            .unwrap();
+
+        let started = std::time::Instant::now();
+        let err = reader
+            .execute("UPDATE t SET v = 3 WHERE id = 1", [])
+            .expect_err("upgrade after a concurrent commit must fail");
+        assert!(is_busy_error(&err), "expected a busy error, got {err:?}");
+        assert!(
+            err.to_string().contains("locked"),
+            "this is the string users reported; got {err}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "busy handler should have been skipped, not waited out — took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn retry_on_busy_retries_until_success() {
+        let mut calls: u32 = 0;
+        let result = retry_on_busy(|| {
+            calls += 1;
+            if calls < 3 {
+                Err(busy_error())
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    #[test]
+    fn retry_on_busy_gives_up_after_the_attempt_cap() {
+        let mut calls: u32 = 0;
+        let result = retry_on_busy(|| -> Result<(), rusqlite::Error> {
+            calls += 1;
+            Err(busy_error())
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, BUSY_RETRY_ATTEMPTS);
+    }
+
+    #[test]
+    fn retry_on_busy_does_not_retry_non_busy_errors() {
+        let mut calls: u32 = 0;
+        let result = retry_on_busy(|| -> Result<(), rusqlite::Error> {
+            calls += 1;
+            Err(rusqlite::Error::InvalidQuery)
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 1, "a non-busy error must not be retried");
+    }
 
     // --- Migration runner tests ---
 
