@@ -231,6 +231,24 @@ describe("preparePinnedPromptTarget — active session", () => {
 
     expect(appStore.setSelectedModel).not.toHaveBeenCalled();
   });
+
+  it("throws when the model swap fails, so the caller skips the send", async () => {
+    // Deliberately fatal here: nothing has been committed, so there's no
+    // orphan to strand, and a half-applied swap isn't a state to send a
+    // turn on. Contrast with the new-session path, which degrades.
+    serviceMocks.setAppSetting.mockImplementation((key: string) =>
+      key.startsWith("model:")
+        ? Promise.reject(new Error("db locked"))
+        : Promise.resolve(),
+    );
+
+    await expect(
+      preparePinnedPromptTarget(
+        pin({ model: "sonnet", model_provider: "anthropic" }),
+        CTX,
+      ),
+    ).rejects.toThrow("db locked");
+  });
 });
 
 describe("preparePinnedPromptTarget — new session", () => {
@@ -314,6 +332,32 @@ describe("preparePinnedPromptTarget — new session", () => {
     );
 
     expect(result).toEqual({ sessionId: "sess-new", openedNewSession: true });
+    expect(appStore.selectSession).toHaveBeenCalledWith("ws-1", "sess-new");
+    consoleError.mockRestore();
+  });
+
+  it("still opens the tab when the model fails to apply", async () => {
+    // Same reasoning as the toggle-persist case: the session row is already
+    // committed, so a rejected write inside applySelectedModel must not
+    // abandon a tab that exists in the DB but was never named, added, or
+    // selected. The tab opens on its default model instead.
+    serviceMocks.setAppSetting.mockImplementation((key: string) =>
+      key.startsWith("model:")
+        ? Promise.reject(new Error("db locked"))
+        : Promise.resolve(),
+    );
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await preparePinnedPromptTarget(
+      pin({ new_session: true, model: "sonnet", model_provider: "anthropic" }),
+      CTX,
+    );
+
+    expect(result).toEqual({ sessionId: "sess-new", openedNewSession: true });
+    expect(serviceMocks.renameChatSession).toHaveBeenCalledWith(
+      "sess-new",
+      "Review",
+    );
     expect(appStore.selectSession).toHaveBeenCalledWith("ws-1", "sess-new");
     consoleError.mockRestore();
   });

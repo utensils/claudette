@@ -156,9 +156,23 @@ export interface PinnedPromptLaunchResult {
  * `ChatPanel.handleSend` is bound to whichever session is currently active
  * and the new one isn't mounted yet.
  *
- * Throws only if the session could not be created; every other step
- * degrades (an unresolvable model falls back to the session default, a
- * failed rename leaves the auto-generated name).
+ * Failure semantics differ by path, and the dividing line is whether
+ * anything has been committed yet:
+ *
+ * - **Active session** — throws if the model swap fails. Nothing has been
+ *   created, so there is no orphan to strand, and a half-applied swap
+ *   (`setSelectedModel` runs synchronously before the first failing await,
+ *   so the store is already switched) is not a state to send a turn on.
+ *   The caller surfaces a toast and skips the send.
+ * - **New session** — throws only if `createChatSession` fails. Past that
+ *   point the row is committed and every remaining step degrades rather
+ *   than abandoning a tab that exists in the database but is invisible in
+ *   the UI: a failed toggle write leaves that toggle at its default, a
+ *   failed model apply leaves the tab on its default model, and a failed
+ *   rename leaves the auto-generated name.
+ *
+ * An unresolvable model (its backend is disabled) is not a failure on
+ * either path — it falls back to the session's own model.
  */
 export async function preparePinnedPromptTarget(
   pin: PinnedPrompt,
@@ -193,11 +207,30 @@ export async function preparePinnedPromptTarget(
     // A brand-new session has no prior model recorded, so this is a
     // first-time selection: `applySelectedModel` skips both the reset and
     // the cross-harness migration prelude. Picking Codex here is free.
-    await applySelectedModel(
-      session.id,
-      resolvedModel.model,
-      resolvedModel.provider,
-    );
+    //
+    // Best-effort for the same reason `persistToggleOverrides` is: the
+    // session row is already committed, so letting one of the several
+    // unguarded `setAppSetting` writes inside `applySelectedModel` reject
+    // would abandon a tab that exists in the database but was never named,
+    // added to the store, or selected. The tab opens on its default model
+    // instead — visible and fixable in the composer's model picker, unlike
+    // an invisible orphaned session.
+    //
+    // Note this differs from the active-session path above, which
+    // deliberately stays fatal: there is nothing committed to strand there,
+    // so aborting is the safer response to a half-applied model swap.
+    try {
+      await applySelectedModel(
+        session.id,
+        resolvedModel.model,
+        resolvedModel.provider,
+      );
+    } catch (err) {
+      console.error(
+        "[pinned-prompt] Failed to apply the pin's model to the launched session:",
+        err,
+      );
+    }
   }
 
   // Name the tab after the pin so a review tab is identifiable at a glance.

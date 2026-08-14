@@ -507,6 +507,16 @@ export function ChatInputArea({
           // `onSend` is bound to the session this composer renders, which is
           // no longer the target. Hand the prompt to the store instead and
           // let ChatPanel dispatch it once the new tab is active.
+          //
+          // Only the prompt text travels. Composer attachments and
+          // picker-tracked mentions deliberately stay behind in *this*
+          // tab's composer: they belong to the conversation the user was
+          // having, not to a reusable named prompt, and silently relocating
+          // a pasted screenshot into an unrelated review tab would be
+          // surprising (and would clear it from where they put it). Any
+          // `@path` baked into the prompt body still resolves — the drain in
+          // `ChatPanelSessionView` re-extracts mentions from the text it
+          // dispatches.
           const store = useAppStore.getState();
           if (pin.auto_send) {
             store.enqueueChatPrompt(target.sessionId, pin.prompt);
