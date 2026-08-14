@@ -65,9 +65,13 @@ export function PinnedPromptsBar({
     <div className={styles.bar}>
       <Pin className={styles.label} size={12} />
       {prompts.map((p) => {
-        const tooltipKey = p.auto_send
-          ? "pinned_prompt_tooltip_auto"
-          : "pinned_prompt_tooltip_insert";
+        // A pin that opens its own tab is worth calling out — the click has
+        // a bigger effect than "insert" or "send here" implies.
+        const tooltipKey = p.new_session
+          ? "pinned_prompt_tooltip_new_session"
+          : p.auto_send
+            ? "pinned_prompt_tooltip_auto"
+            : "pinned_prompt_tooltip_insert";
         return (
           <span key={p.id} className={styles.pill}>
             <button

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, Pencil, Plus } from "lucide-react";
 import {
   type PinnedPrompt,
+  type PinnedPromptLaunch,
   type PinnedPromptToggleOverride,
   type PinnedPromptToggleOverrides,
   type SlashCommand,
@@ -18,6 +19,11 @@ import { useSettingsOverlay } from "../../../hooks/useSettingsOverlay";
 import { useSlashAutocomplete } from "../../../hooks/useSlashAutocomplete";
 import { PLAIN_TEXT_INPUT_PROPS } from "../../../utils/textInput";
 import { SlashCommandPicker } from "../../chat/SlashCommandPicker";
+import {
+  EMPTY_LAUNCH_DRAFT,
+  PinnedPromptLaunchControls,
+  type PinnedPromptLaunchDraft,
+} from "./PinnedPromptLaunchControls";
 import styles from "./PinnedPromptsManager.module.css";
 
 export type PinnedPromptScope =
@@ -38,6 +44,7 @@ interface DraftRow {
   fast_mode: PinnedPromptToggleOverride;
   thinking_enabled: PinnedPromptToggleOverride;
   chrome_enabled: PinnedPromptToggleOverride;
+  launch: PinnedPromptLaunchDraft;
 }
 
 interface EditPayload {
@@ -48,6 +55,7 @@ interface EditPayload {
   fast_mode: PinnedPromptToggleOverride;
   thinking_enabled: PinnedPromptToggleOverride;
   chrome_enabled: PinnedPromptToggleOverride;
+  launch: PinnedPromptLaunchDraft;
 }
 
 function extractOverrides(p: {
@@ -62,6 +70,37 @@ function extractOverrides(p: {
     thinkingEnabled: p.thinking_enabled,
     chromeEnabled: p.chrome_enabled,
   };
+}
+
+/** The launch slice of a persisted pin, in editor-draft shape. */
+function extractLaunch(p: PinnedPrompt): PinnedPromptLaunchDraft {
+  return {
+    new_session: p.new_session,
+    model: p.model,
+    model_provider: p.model_provider,
+  };
+}
+
+/** Editor-draft shape as the Tauri command wants it. Same fields, but kept
+ *  as an explicit conversion so a future divergence is a compile error
+ *  rather than a silently-dropped field. */
+function toLaunchPayload(draft: PinnedPromptLaunchDraft): PinnedPromptLaunch {
+  return {
+    new_session: draft.new_session,
+    model: draft.model,
+    model_provider: draft.model_provider,
+  };
+}
+
+function launchEquals(
+  a: PinnedPromptLaunchDraft,
+  b: PinnedPromptLaunchDraft,
+): boolean {
+  return (
+    a.new_session === b.new_session &&
+    a.model === b.model &&
+    a.model_provider === b.model_provider
+  );
 }
 
 function makeDraftId(): string {
@@ -154,6 +193,7 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
         fast_mode: null,
         thinking_enabled: null,
         chrome_enabled: null,
+        launch: EMPTY_LAUNCH_DRAFT,
       },
     ]);
   }, []);
@@ -207,6 +247,7 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
           draft.prompt,
           draft.auto_send,
           extractOverrides(draft),
+          toLaunchPayload(draft.launch),
         );
         upsertPrompt(saved);
         removeDraft(draft.draftId);
@@ -256,7 +297,8 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
         next.plan_mode === original.plan_mode &&
         next.fast_mode === original.fast_mode &&
         next.thinking_enabled === original.thinking_enabled &&
-        next.chrome_enabled === original.chrome_enabled
+        next.chrome_enabled === original.chrome_enabled &&
+        launchEquals(next.launch, extractLaunch(original))
       ) {
         setError(String(original.id), null);
         return true;
@@ -269,6 +311,7 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
           next.prompt,
           next.auto_send,
           extractOverrides(next),
+          toLaunchPayload(next.launch),
         );
         upsertPrompt(saved);
         return true;
@@ -405,6 +448,9 @@ function PromptRow({
   const [fastMode, setFastMode] = useState<PinnedPromptToggleOverride>(prompt.fast_mode);
   const [thinking, setThinking] = useState<PinnedPromptToggleOverride>(prompt.thinking_enabled);
   const [chromeEnabled, setChromeEnabled] = useState<PinnedPromptToggleOverride>(prompt.chrome_enabled);
+  const [launch, setLaunch] = useState<PinnedPromptLaunchDraft>(() =>
+    extractLaunch(prompt),
+  );
   const [cursorPos, setCursorPos] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -419,6 +465,11 @@ function PromptRow({
     setFastMode(prompt.fast_mode);
     setThinking(prompt.thinking_enabled);
     setChromeEnabled(prompt.chrome_enabled);
+    setLaunch({
+      new_session: prompt.new_session,
+      model: prompt.model,
+      model_provider: prompt.model_provider,
+    });
   }, [
     prompt.display_name,
     prompt.prompt,
@@ -427,6 +478,9 @@ function PromptRow({
     prompt.fast_mode,
     prompt.thinking_enabled,
     prompt.chrome_enabled,
+    prompt.new_session,
+    prompt.model,
+    prompt.model_provider,
   ]);
 
   // Auto-focus when entering editing or confirm-delete modes.
@@ -443,6 +497,11 @@ function PromptRow({
     setFastMode(prompt.fast_mode);
     setThinking(prompt.thinking_enabled);
     setChromeEnabled(prompt.chrome_enabled);
+    setLaunch({
+      new_session: prompt.new_session,
+      model: prompt.model,
+      model_provider: prompt.model_provider,
+    });
   }, [
     prompt.display_name,
     prompt.prompt,
@@ -451,6 +510,9 @@ function PromptRow({
     prompt.fast_mode,
     prompt.thinking_enabled,
     prompt.chrome_enabled,
+    prompt.new_session,
+    prompt.model,
+    prompt.model_provider,
   ]);
 
   const enterEdit = useCallback(() => {
@@ -474,9 +536,10 @@ function PromptRow({
       fast_mode: fastMode,
       thinking_enabled: thinking,
       chrome_enabled: chromeEnabled,
+      launch,
     });
     if (ok) setMode("display");
-  }, [onCommit, name, body, autoSend, planMode, fastMode, thinking, chromeEnabled]);
+  }, [onCommit, name, body, autoSend, planMode, fastMode, thinking, chromeEnabled, launch]);
 
   const onSlashInsert = useCallback(
     (replacement: string, start: number, end: number) => {
@@ -593,8 +656,9 @@ function PromptRow({
           </div>
         </div>
         <div className={styles.displayPreview}>{prompt.prompt}</div>
-        {(prompt.auto_send || hasAnyOverride(prompt)) && (
+        {(prompt.auto_send || hasAnyOverride(prompt) || hasLaunchOptions(prompt)) && (
           <div className={styles.displayMeta}>
+            <LaunchSummary prompt={prompt} />
             <OverrideSummary prompt={prompt} />
             {prompt.auto_send && <span>{t("pinned_prompts_auto_send")}</span>}
           </div>
@@ -670,6 +734,12 @@ function PromptRow({
         onFastModeChange={setFastMode}
         onThinkingChange={setThinking}
         onChromeEnabledChange={setChromeEnabled}
+      />
+
+      <PinnedPromptLaunchControls
+        disabled={mode === "confirm-delete"}
+        value={launch}
+        onChange={setLaunch}
       />
 
       {mode === "editing" ? (
@@ -871,6 +941,11 @@ function DraftRowView({
         onChromeEnabledChange={(v) => onChange({ chrome_enabled: v })}
       />
 
+      <PinnedPromptLaunchControls
+        value={draft.launch}
+        onChange={(launch) => onChange({ launch })}
+      />
+
       <div className={styles.footer}>
         <div className={styles.footerSpacer} />
         <button type="button" className={styles.btnGhost} onClick={onCancel}>
@@ -1046,6 +1121,36 @@ function SegmentedTriState({ label, value, onChange, disabled }: SegmentedTriSta
         })}
       </div>
     </div>
+  );
+}
+
+function hasLaunchOptions(p: PinnedPrompt): boolean {
+  return p.new_session || p.model !== null;
+}
+
+/**
+ * Collapsed-row summary of the launch options.
+ *
+ * Shows the raw stored model id rather than the registry label — this
+ * renders even when the model's backend is currently disabled, and a bare
+ * id is more useful than a blank chip when the pretty label is unavailable.
+ */
+function LaunchSummary({ prompt }: { prompt: PinnedPrompt }) {
+  const { t } = useTranslation("settings");
+  if (!hasLaunchOptions(prompt)) return null;
+  return (
+    <>
+      {prompt.new_session && (
+        <span className={styles.launchSummaryChip}>
+          {t("pinned_prompts_launch_summary_new_session")}
+        </span>
+      )}
+      {prompt.model && (
+        <span className={styles.launchSummaryChip}>
+          {t("pinned_prompts_launch_summary_model", { model: prompt.model })}
+        </span>
+      )}
+    </>
   );
 }
 

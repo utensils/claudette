@@ -274,4 +274,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260723155203_turn_tool_activity_workflow_progress.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260814002638_pinned_prompt_launch_options",
+        sql: include_str!("20260814002638_pinned_prompt_launch_options.sql"),
+        legacy_version: None,
+    },
 ];

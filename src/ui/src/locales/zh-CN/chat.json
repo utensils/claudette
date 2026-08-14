@@ -173,6 +173,8 @@
   "pinned_prompts_label": "已固定",
   "pinned_prompt_tooltip_auto": "发送 {{name}}",
   "pinned_prompt_tooltip_insert": "插入 {{name}}",
+  "pinned_prompt_tooltip_new_session": "在新标签页中发送 {{name}}",
+  "pinned_prompt_launch_failed": "无法运行固定提示词“{{name}}”",
 
   "code_block_copy": "复制代码",
   "code_block_copied": "已复制",

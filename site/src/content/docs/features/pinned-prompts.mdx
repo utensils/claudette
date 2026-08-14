@@ -52,6 +52,42 @@ A typical use: an "Incorporate feedback" prompt that must run outside plan mode 
 
 Overrides apply whether **Auto-send** is on or off. With auto-send off you'll see the toolbar update *before* you edit the inserted prompt.
 
+## Launch Options
+
+Beyond the toolbar toggles, a pinned prompt can decide **where** it runs and **on which model**. Both live under **Launch options** in the prompt editor and are independent of each other.
+
+### Open in a new tab
+
+With **Open in a new tab** enabled, clicking the pill:
+
+1. Creates a fresh chat session in the current workspace
+2. Names that tab after the prompt's display name
+3. Applies the prompt's toolbar overrides and model to it
+4. Switches to it and runs the prompt there
+
+The tab you clicked from is left untouched — its conversation, toolbar state, and any in-progress turn all continue undisturbed.
+
+Because the tab is explicitly named after the prompt, Claudette's automatic session naming is skipped for it. You can still rename it by double-clicking the tab.
+
+With **Auto-send** off, the new tab opens with the prompt text already in its composer instead of sending it.
+
+### Model
+
+The **Model** dropdown selects a model before the prompt runs. Leave it on **Inherit (don't change)** — the default — for the prompt to use whatever model the target session already has.
+
+| Combination | What happens |
+|-------------|--------------|
+| Model + **new tab** | The fresh tab starts on that model. Nothing to migrate, so switching backends here is free |
+| Model, **no new tab** | The active session switches models before the prompt runs — exactly like the `/model` slash command, including its context handling |
+
+Switching model in the active session follows the same rules as the toolbar picker: a swap within the same runtime (say Opus to Sonnet) keeps the conversation, while a swap across runtimes (say Claude Code to Codex) carries the prior turns over as a summary prelude.
+
+If a pinned prompt's model becomes unavailable — you disabled its backend, or the provider stopped offering it — the prompt still runs, on the session's own model. The editor keeps your choice and flags it as unavailable so re-enabling the backend restores it.
+
+:::tip[The review-in-Codex workflow]
+A common setup: a global **Review** prompt with the body `/code-review`, **Auto-send** on, **Open in a new tab** on, and **Model** set to a Codex model. One click on the pill while you're mid-implementation opens a separate, named review tab on a second opinion — without disturbing the session doing the work.
+:::
+
 ## Using "/" in Prompt Bodies
 
 When creating or editing a pinned prompt, the prompt body field supports the same **/** slash command picker as the main chat composer. Type `/` to open the picker and select a command to insert it.
@@ -70,11 +106,12 @@ To create a global prompt:
 3. Enter a **Display name** (shown on the pill) and the **Prompt body**
 4. Toggle **Auto-send** on or off
 5. Under **Toolbar overrides**, set each toggle — **Plan mode**, **Fast mode**, **Thinking**, **Claude in Chrome** — to `Inherit`, `On`, or `Off` (see [Toolbar Overrides](#toolbar-overrides) above; leave them on `Inherit` if the prompt doesn't care)
-6. Click **Save**
+6. Under **Launch options**, optionally enable **Open in a new tab** and pick a **Model** (see [Launch Options](#launch-options) above)
+7. Click **Save**
 
 Use the **↑** and **↓** buttons to reorder prompts within the list. Order is preserved in the pill bar.
 
-In the prompt list, a prompt that forces any toggle shows small chips (e.g. `Plan mode: Off`) next to its name, alongside the **Auto-send** indicator.
+In the prompt list, a prompt that forces any toggle shows small chips (e.g. `Plan mode: Off`) next to its name, alongside the **Auto-send** indicator. Launch options get their own chips — `New tab` and `Model: <id>`.
 
 ## Repo-Specific Prompts
 

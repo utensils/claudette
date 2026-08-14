@@ -18,6 +18,13 @@ const appStore = vi.hoisted(() => ({
   loadRepoPinnedPrompts: vi.fn(() => Promise.resolve()),
   pushSettingsOverlay: vi.fn(),
   popSettingsOverlay: vi.fn(),
+  // Read by `useModelRegistry`, which the launch-options model picker
+  // mounts. Empty backends means the picker shows only the curated
+  // Claude Code models — enough for these tests, which assert on the
+  // prompt CRUD flow rather than on registry contents.
+  alternativeBackendsEnabled: false,
+  codexEnabled: false,
+  agentBackends: [],
 }));
 
 const serviceMocks = vi.hoisted(() => ({
@@ -67,6 +74,9 @@ function prompt(overrides: Partial<PinnedPrompt> = {}): PinnedPrompt {
     fast_mode: null,
     thinking_enabled: null,
     chrome_enabled: null,
+    new_session: false,
+    model: null,
+    model_provider: null,
     sort_order: 0,
     created_at: "2026-05-14T00:00:00Z",
     ...overrides,
@@ -163,6 +173,93 @@ describe("PinnedPromptsManager", () => {
     });
 
     expect(container.textContent).toContain("pinned_prompts_override_plan_mode");
+  });
+
+  it("summarises launch options on the collapsed row", async () => {
+    appStore.globalPinnedPrompts = [
+      prompt({ new_session: true, model: "opus", model_provider: "anthropic" }),
+    ];
+    const container = await renderManager();
+
+    expect(container.textContent).toContain(
+      "pinned_prompts_launch_summary_new_session",
+    );
+    expect(container.textContent).toContain(
+      "pinned_prompts_launch_summary_model",
+    );
+  });
+
+  it("round-trips launch options through the edit form", async () => {
+    appStore.globalPinnedPrompts = [
+      prompt({ new_session: true, model: "sonnet", model_provider: "anthropic" }),
+    ];
+    serviceMocks.updatePinnedPrompt.mockImplementation((..._args: unknown[]) =>
+      Promise.resolve(appStore.globalPinnedPrompts[0]),
+    );
+    const container = await renderManager();
+
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="pinned_prompts_edit_action:Ship it"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // The picker reflects the stored model...
+    const select = container.querySelector("select");
+    if (!select) throw new Error("Expected a model picker");
+    expect(select.value).toBe("sonnet");
+
+    // ...and toggling "open in a new tab" off saves that change while
+    // carrying the model through untouched, rather than silently resetting
+    // the pin to "inherit".
+    const newTabLabel = Array.from(container.querySelectorAll("label")).find(
+      (l) => l.textContent?.includes("pinned_prompts_new_session"),
+    );
+    const newTabCheckbox = newTabLabel?.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    if (!newTabCheckbox) throw new Error("Expected the new-tab checkbox");
+    expect(newTabCheckbox.checked).toBe(true);
+
+    await act(async () => {
+      newTabCheckbox.click();
+    });
+    await act(async () => {
+      Array.from(container.querySelectorAll("button"))
+        .find((b) => b.textContent === "pinned_prompts_save_changes")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(serviceMocks.updatePinnedPrompt).toHaveBeenCalledWith(
+      1,
+      "Ship it",
+      expect.any(String),
+      expect.any(Boolean),
+      expect.anything(),
+      { new_session: false, model: "sonnet", model_provider: "anthropic" },
+    );
+  });
+
+  it("keeps a model whose backend is no longer exposed, flagged as unavailable", async () => {
+    // `qwen3-coder` only exists behind an Ollama backend, and the store stub
+    // has none — so the registry can't resolve it. The pin must not lose the
+    // user's choice just because the backend is off right now.
+    appStore.globalPinnedPrompts = [
+      prompt({ model: "qwen3-coder", model_provider: "ollama" }),
+    ];
+    const container = await renderManager();
+
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="pinned_prompts_edit_action:Ship it"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const select = container.querySelector("select");
+    expect(select?.value).toBe("ollama/qwen3-coder");
+    expect(container.textContent).toContain(
+      "pinned_prompts_launch_model_unavailable_hint",
+    );
   });
 
   it("Escape cancels an active row edit without deleting the prompt", async () => {

@@ -546,3 +546,45 @@
   color: var(--accent-primary);
   flex-shrink: 0;
 }
+
+/* ----- Launch options (new tab / model) ----- */
+
+.launchHint {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  margin-top: -2px;
+}
+
+.launchSelect {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  background: var(--chat-input-bg);
+  color: var(--text-primary);
+  max-width: 60%;
+}
+
+.launchSelect:disabled {
+  opacity: 0.5;
+}
+
+.launchWarning {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--accent-warning-fg);
+}
+
+.launchSummaryChip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  color: var(--accent-primary);
+  text-transform: none;
+  letter-spacing: 0;
+}

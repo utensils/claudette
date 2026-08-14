@@ -17,6 +17,15 @@ export interface PinnedPrompt {
   fast_mode: PinnedPromptToggleOverride;
   thinking_enabled: PinnedPromptToggleOverride;
   chrome_enabled: PinnedPromptToggleOverride;
+  /** Open a fresh chat tab in the current workspace and run the prompt
+   *  there instead of in the active session. */
+  new_session: boolean;
+  /** Model to select before the prompt runs. `null` inherits whatever the
+   *  target session already has. */
+  model: string | null;
+  /** Backend id qualifying `model` — model ids are only unique per backend.
+   *  Always `null` when `model` is `null`. */
+  model_provider: string | null;
   sort_order: number;
   created_at: string;
 }
@@ -42,12 +51,28 @@ export interface PinnedPromptToggleOverrides {
   chromeEnabled: PinnedPromptToggleOverride;
 }
 
+/** Where a pinned prompt runs and on which model. Mirrors the Rust
+ *  `PinnedPromptLaunch`; the backend normalizes blanks and drops a
+ *  `model_provider` that has no `model` to qualify. */
+export interface PinnedPromptLaunch {
+  new_session: boolean;
+  model: string | null;
+  model_provider: string | null;
+}
+
+export const DEFAULT_PINNED_PROMPT_LAUNCH: PinnedPromptLaunch = {
+  new_session: false,
+  model: null,
+  model_provider: null,
+};
+
 export function createPinnedPrompt(
   repoId: string | null,
   displayName: string,
   prompt: string,
   autoSend: boolean,
   overrides: PinnedPromptToggleOverrides,
+  launch: PinnedPromptLaunch = DEFAULT_PINNED_PROMPT_LAUNCH,
 ): Promise<PinnedPrompt> {
   return invoke("create_pinned_prompt", {
     repoId,
@@ -58,6 +83,7 @@ export function createPinnedPrompt(
     fastMode: overrides.fastMode,
     thinkingEnabled: overrides.thinkingEnabled,
     chromeEnabled: overrides.chromeEnabled,
+    launch,
   });
 }
 
@@ -67,6 +93,7 @@ export function updatePinnedPrompt(
   prompt: string,
   autoSend: boolean,
   overrides: PinnedPromptToggleOverrides,
+  launch: PinnedPromptLaunch = DEFAULT_PINNED_PROMPT_LAUNCH,
 ): Promise<PinnedPrompt> {
   return invoke("update_pinned_prompt", {
     id,
@@ -77,6 +104,7 @@ export function updatePinnedPrompt(
     fastMode: overrides.fastMode,
     thinkingEnabled: overrides.thinkingEnabled,
     chromeEnabled: overrides.chromeEnabled,
+    launch,
   });
 }
 

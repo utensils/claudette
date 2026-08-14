@@ -117,6 +117,17 @@ See [CLI Client](/claudette/features/cli-client/) for what the `claudette` comma
 
 Manage global [pinned prompts](/claudette/features/pinned-prompts/) — reusable prompt snippets available from the composer in every workspace. Per-repo pinned prompts are configured in **Settings > Repository**.
 
+Each prompt in the list has these controls:
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Display name | Label shown on the composer pill. Must be unique within its scope (global or per-repo). | — |
+| Prompt body | Text sent when the pill is clicked. Supports the **/** slash command picker. | — |
+| Auto-send when clicked | Send immediately on click instead of inserting the text into the composer for editing. | Off |
+| Toolbar overrides | Tri-state (`Inherit` / `On` / `Off`) overrides for **Plan mode**, **Fast mode**, **Thinking**, and **Claude in Chrome**, applied before the prompt runs. | Inherit |
+| Open in a new tab | Run the prompt in a fresh chat session named after the prompt, instead of the tab it was clicked from. | Off |
+| Model | Model to select before the prompt runs. `Inherit` leaves the target session's model alone. | Inherit |
+
 ## Notifications
 
 | Setting | Description | Default |

@@ -7,9 +7,34 @@
 
 use rusqlite::params;
 
-use crate::model::PinnedPrompt;
+use crate::model::{PinnedPrompt, PinnedPromptLaunch};
 
 use super::Database;
+
+/// Maps a `pinned_prompts` row into the model type.
+///
+/// Every read site selects the same column list in the same order, so this
+/// lives as one free function rather than being re-inlined per query — a
+/// column added to the table only needs the `SELECT` lists and this mapper
+/// updated in lockstep.
+fn map_pinned_prompt_row(row: &rusqlite::Row<'_>) -> Result<PinnedPrompt, rusqlite::Error> {
+    Ok(PinnedPrompt {
+        id: row.get(0)?,
+        repo_id: row.get(1)?,
+        display_name: row.get(2)?,
+        prompt: row.get(3)?,
+        auto_send: row.get::<_, i64>(4)? != 0,
+        plan_mode: row.get::<_, Option<i64>>(5)?.map(|v| v != 0),
+        fast_mode: row.get::<_, Option<i64>>(6)?.map(|v| v != 0),
+        thinking_enabled: row.get::<_, Option<i64>>(7)?.map(|v| v != 0),
+        chrome_enabled: row.get::<_, Option<i64>>(8)?.map(|v| v != 0),
+        new_session: row.get::<_, i64>(9)? != 0,
+        model: row.get(10)?,
+        model_provider: row.get(11)?,
+        sort_order: row.get(12)?,
+        created_at: row.get(13)?,
+    })
+}
 
 impl Database {
     // --- Slash Command Usage ---
@@ -60,6 +85,7 @@ impl Database {
             Some(_) => self.conn.prepare(
                 "SELECT id, repo_id, display_name, prompt, auto_send,
                         plan_mode, fast_mode, thinking_enabled, chrome_enabled,
+                        new_session, model, model_provider,
                         sort_order, created_at
                  FROM pinned_prompts
                  WHERE repo_id = ?1
@@ -68,27 +94,14 @@ impl Database {
             None => self.conn.prepare(
                 "SELECT id, repo_id, display_name, prompt, auto_send,
                         plan_mode, fast_mode, thinking_enabled, chrome_enabled,
+                        new_session, model, model_provider,
                         sort_order, created_at
                  FROM pinned_prompts
                  WHERE repo_id IS NULL
                  ORDER BY sort_order, id",
             )?,
         };
-        let map_row = |row: &rusqlite::Row<'_>| {
-            Ok(PinnedPrompt {
-                id: row.get(0)?,
-                repo_id: row.get(1)?,
-                display_name: row.get(2)?,
-                prompt: row.get(3)?,
-                auto_send: row.get::<_, i64>(4)? != 0,
-                plan_mode: row.get::<_, Option<i64>>(5)?.map(|v| v != 0),
-                fast_mode: row.get::<_, Option<i64>>(6)?.map(|v| v != 0),
-                thinking_enabled: row.get::<_, Option<i64>>(7)?.map(|v| v != 0),
-                chrome_enabled: row.get::<_, Option<i64>>(8)?.map(|v| v != 0),
-                sort_order: row.get(9)?,
-                created_at: row.get(10)?,
-            })
-        };
+        let map_row = map_pinned_prompt_row;
         match repo_id {
             Some(rid) => stmt.query_map(params![rid], map_row)?.collect(),
             None => stmt.query_map([], map_row)?.collect(),
@@ -133,7 +146,9 @@ impl Database {
         fast_mode: Option<bool>,
         thinking_enabled: Option<bool>,
         chrome_enabled: Option<bool>,
+        launch: &PinnedPromptLaunch,
     ) -> Result<PinnedPrompt, rusqlite::Error> {
+        let launch = launch.normalized();
         let max_order: i32 = match repo_id {
             Some(rid) => self.conn.query_row(
                 "SELECT COALESCE(MAX(sort_order), -1) FROM pinned_prompts WHERE repo_id = ?1",
@@ -159,8 +174,9 @@ impl Database {
             "INSERT INTO pinned_prompts (
                  repo_id, display_name, prompt, auto_send,
                  plan_mode, fast_mode, thinking_enabled, chrome_enabled,
+                 new_session, model, model_provider,
                  sort_order, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 repo_id,
                 display_name,
@@ -170,6 +186,9 @@ impl Database {
                 fast_mode_int,
                 thinking_int,
                 chrome_int,
+                launch.new_session as i64,
+                launch.model,
+                launch.model_provider,
                 next_order,
                 created_at,
             ],
@@ -184,6 +203,9 @@ impl Database {
             fast_mode,
             thinking_enabled,
             chrome_enabled,
+            new_session: launch.new_session,
+            model: launch.model,
+            model_provider: launch.model_provider,
             sort_order: next_order,
             created_at,
         })
@@ -200,7 +222,9 @@ impl Database {
         fast_mode: Option<bool>,
         thinking_enabled: Option<bool>,
         chrome_enabled: Option<bool>,
+        launch: &PinnedPromptLaunch,
     ) -> Result<PinnedPrompt, rusqlite::Error> {
+        let launch = launch.normalized();
         let auto_send_int: i64 = if auto_send { 1 } else { 0 };
         let plan_mode_int = plan_mode.map(|v| v as i64);
         let fast_mode_int = fast_mode.map(|v| v as i64);
@@ -209,8 +233,9 @@ impl Database {
         self.conn.execute(
             "UPDATE pinned_prompts
              SET display_name = ?1, prompt = ?2, auto_send = ?3,
-                 plan_mode = ?4, fast_mode = ?5, thinking_enabled = ?6, chrome_enabled = ?7
-             WHERE id = ?8",
+                 plan_mode = ?4, fast_mode = ?5, thinking_enabled = ?6, chrome_enabled = ?7,
+                 new_session = ?8, model = ?9, model_provider = ?10
+             WHERE id = ?11",
             params![
                 display_name,
                 prompt,
@@ -219,30 +244,20 @@ impl Database {
                 fast_mode_int,
                 thinking_int,
                 chrome_int,
+                launch.new_session as i64,
+                launch.model,
+                launch.model_provider,
                 id,
             ],
         )?;
         self.conn.query_row(
             "SELECT id, repo_id, display_name, prompt, auto_send,
                     plan_mode, fast_mode, thinking_enabled, chrome_enabled,
+                    new_session, model, model_provider,
                     sort_order, created_at
              FROM pinned_prompts WHERE id = ?1",
             params![id],
-            |row| {
-                Ok(PinnedPrompt {
-                    id: row.get(0)?,
-                    repo_id: row.get(1)?,
-                    display_name: row.get(2)?,
-                    prompt: row.get(3)?,
-                    auto_send: row.get::<_, i64>(4)? != 0,
-                    plan_mode: row.get::<_, Option<i64>>(5)?.map(|v| v != 0),
-                    fast_mode: row.get::<_, Option<i64>>(6)?.map(|v| v != 0),
-                    thinking_enabled: row.get::<_, Option<i64>>(7)?.map(|v| v != 0),
-                    chrome_enabled: row.get::<_, Option<i64>>(8)?.map(|v| v != 0),
-                    sort_order: row.get(9)?,
-                    created_at: row.get(10)?,
-                })
-            },
+            map_pinned_prompt_row,
         )
     }
 
@@ -356,7 +371,8 @@ mod tests {
     // --- Pinned prompt tests ---
 
     /// Test helper: insert with all four toggle overrides defaulting to "inherit"
-    /// (`None`). Keeps the existing tests focused on scope/CRUD semantics
+    /// (`None`) and the default launch options (active session, inherited
+    /// model). Keeps the existing tests focused on scope/CRUD semantics
     /// without ballooning every call site with `None, None, None, None`.
     fn insert_pin(
         db: &Database,
@@ -374,6 +390,7 @@ mod tests {
             None,
             None,
             None,
+            &PinnedPromptLaunch::default(),
         )
     }
 
@@ -408,6 +425,7 @@ mod tests {
                 None,
                 None,
                 None,
+                &PinnedPromptLaunch::default(),
             )
             .unwrap();
         assert_eq!(updated.display_name, "Code review");
@@ -574,6 +592,7 @@ mod tests {
                 None,        // fast_mode inherits
                 Some(true),  // thinking forced on
                 Some(false), // chrome forced off
+                &PinnedPromptLaunch::default(),
             )
             .unwrap();
         assert_eq!(inserted.plan_mode, Some(false));
@@ -601,11 +620,122 @@ mod tests {
                 Some(true),
                 Some(true),
                 Some(false),
+                &PinnedPromptLaunch::default(),
             )
             .unwrap();
         assert_eq!(updated.plan_mode, None);
         assert_eq!(updated.fast_mode, Some(true));
         assert_eq!(updated.thinking_enabled, Some(true));
         assert_eq!(updated.chrome_enabled, Some(false));
+    }
+
+    /// Test helper: insert a pin carrying explicit launch options.
+    fn insert_pin_with_launch(
+        db: &Database,
+        display_name: &str,
+        launch: &PinnedPromptLaunch,
+    ) -> Result<PinnedPrompt, rusqlite::Error> {
+        db.insert_pinned_prompt(
+            None,
+            display_name,
+            "/review",
+            true,
+            None,
+            None,
+            None,
+            None,
+            launch,
+        )
+    }
+
+    #[test]
+    fn test_pinned_prompt_launch_options_roundtrip() {
+        let db = Database::open_in_memory().unwrap();
+
+        let inserted = insert_pin_with_launch(
+            &db,
+            "Codex review",
+            &PinnedPromptLaunch {
+                new_session: true,
+                model: Some("gpt-5.5".to_string()),
+                model_provider: Some("codex-native".to_string()),
+            },
+        )
+        .unwrap();
+        assert!(inserted.new_session);
+        assert_eq!(inserted.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(inserted.model_provider.as_deref(), Some("codex-native"));
+
+        // Round-trip through SELECT.
+        let listed = db.list_pinned_prompts_in_scope(None).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].new_session);
+        assert_eq!(listed[0].model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(listed[0].model_provider.as_deref(), Some("codex-native"));
+
+        // Update clears the model back to "inherit" while keeping new_session.
+        let updated = db
+            .update_pinned_prompt(
+                inserted.id,
+                "Codex review",
+                "/review",
+                true,
+                None,
+                None,
+                None,
+                None,
+                &PinnedPromptLaunch {
+                    new_session: true,
+                    model: None,
+                    model_provider: None,
+                },
+            )
+            .unwrap();
+        assert!(updated.new_session);
+        assert_eq!(updated.model, None);
+        assert_eq!(updated.model_provider, None);
+    }
+
+    #[test]
+    fn test_pinned_prompt_launch_defaults_preserve_legacy_behavior() {
+        let db = Database::open_in_memory().unwrap();
+        let pin = insert_pin(&db, None, "Review", "/review", false).unwrap();
+        assert!(!pin.new_session);
+        assert_eq!(pin.model, None);
+        assert_eq!(pin.model_provider, None);
+    }
+
+    #[test]
+    fn test_pinned_prompt_launch_normalizes_blank_and_dangling_values() {
+        let db = Database::open_in_memory().unwrap();
+
+        // Blank strings collapse to "inherit"...
+        let blank = insert_pin_with_launch(
+            &db,
+            "Blank",
+            &PinnedPromptLaunch {
+                new_session: false,
+                model: Some("   ".to_string()),
+                model_provider: Some("anthropic".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(blank.model, None);
+        assert_eq!(blank.model_provider, None);
+
+        // ...and a provider with no model to qualify is dropped rather than
+        // persisted as an unrepresentable "inherit model, force backend".
+        let dangling = insert_pin_with_launch(
+            &db,
+            "Dangling",
+            &PinnedPromptLaunch {
+                new_session: true,
+                model: None,
+                model_provider: Some("codex-native".to_string()),
+            },
+        )
+        .unwrap();
+        assert!(dangling.new_session);
+        assert_eq!(dangling.model_provider, None);
     }
 }

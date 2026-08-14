@@ -20,6 +20,9 @@ function makePrompt(
     fast_mode: null,
     thinking_enabled: null,
     chrome_enabled: null,
+    new_session: false,
+    model: null,
+    model_provider: null,
     sort_order: id,
     created_at: "",
   };

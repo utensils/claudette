@@ -173,6 +173,8 @@
   "pinned_prompts_label": "ピン留め",
   "pinned_prompt_tooltip_auto": "{{name}} を送信",
   "pinned_prompt_tooltip_insert": "{{name}} を挿入",
+  "pinned_prompt_tooltip_new_session": "{{name}} を新しいタブで送信",
+  "pinned_prompt_launch_failed": "ピン留めプロンプト「{{name}}」を実行できませんでした",
 
   "code_block_copy": "コードをコピー",
   "code_block_copied": "コピーしました",

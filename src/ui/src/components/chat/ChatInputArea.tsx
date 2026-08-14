@@ -53,6 +53,7 @@ import { useSlashPicker } from "../../hooks/useSlashPicker";
 import { formatEnvProviderName } from "../../utils/workspaceEnvironment";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
 import { setPlanModeAndPersist } from "./planModePersistence";
+import { preparePinnedPromptTarget } from "./pinnedPromptLaunch";
 import styles from "./ChatPanel.module.css";
 
 type ComposerMode = "prompt" | "shell";
@@ -464,65 +465,107 @@ export function ChatInputArea({
 
   const handleUsePinnedPrompt = useCallback(
     (pin: PinnedPrompt) => {
-      // Apply any tri-state toolbar overrides BEFORE sending. Each null
-      // override means "inherit current session value"; a `true`/`false`
-      // forces the toolbar toggle, which is sticky — ChatPanel.handleSend
-      // reads these out of the store at send time, so the override is in
-      // effect for this turn and also visible in the toolbar for any
-      // follow-up turns.
-      //
-      // We use getState() rather than subscribing — this component should
-      // not re-render every time a toolbar toggle changes.
-      const store = useAppStore.getState();
-      if (pin.plan_mode !== null) void setPlanModeAndPersist(sessionId, pin.plan_mode);
-      if (pin.fast_mode !== null) store.setFastMode(sessionId, pin.fast_mode);
-      if (pin.thinking_enabled !== null)
-        store.setThinkingEnabled(sessionId, pin.thinking_enabled);
-      if (pin.chrome_enabled !== null)
-        store.setChromeEnabled(sessionId, pin.chrome_enabled);
+      // Auto-send cancels any in-flight recording, mirroring handleSend —
+      // otherwise a one-click launch leaves the recorder running in the
+      // background. A new-tab launch cancels regardless, since the recording
+      // belongs to the tab being navigated away from.
+      if (pin.auto_send || pin.new_session) voice.cancel();
 
-      if (pin.auto_send) {
-        // Cancel any in-flight voice recording before submitting, mirroring
-        // handleSend — otherwise an auto-send click leaves the recorder
-        // running in the background.
-        voice.cancel();
-        // Send immediately. mentionedFilesRef only tracks paths inserted via
-        // the file picker into the textarea, but a pinned prompt's text was
-        // never picker-typed — so we extract any baked-in @path mentions from
-        // pin.prompt itself, then union them with picker-tracked paths that
-        // also appear in the prompt body.
-        const activeFiles = extractMentionPaths(pin.prompt);
-        for (const path of mentionedFilesRef.current) {
-          if (pin.prompt.includes(`@${path}`)) {
-            activeFiles.add(path);
+      // Snapshot the composer payload synchronously. `preparePinnedPromptTarget`
+      // awaits real IPC (setting persistence, session creation), and the user
+      // could keep typing or attach a file in the meantime — the prompt they
+      // clicked should ship with the state that was on screen at click time.
+      const attachmentsAtClick = pendingAttachments;
+      const mentionsAtClick = new Set(mentionedFilesRef.current);
+
+      void (async () => {
+        let target;
+        try {
+          // Applies the pin's tri-state toolbar overrides and its model.
+          // For `new_session` pins this also creates, names, and selects the
+          // tab; for everything else it configures the active session in
+          // place, which is the pre-existing behaviour.
+          //
+          // Awaited rather than fired-and-forgotten: a cross-harness model
+          // swap mints a fresh session id mid-flight, so sending before it
+          // settles would dispatch against the id that's being replaced.
+          target = await preparePinnedPromptTarget(pin, {
+            workspaceId: selectedWorkspaceId,
+            sessionId,
+          });
+        } catch (err) {
+          console.error("[pinned-prompt] Failed to prepare the session:", err);
+          useAppStore
+            .getState()
+            .addToast(
+              t("pinned_prompt_launch_failed", { name: pin.display_name }),
+            );
+          return;
+        }
+
+        if (target.openedNewSession) {
+          // `onSend` is bound to the session this composer renders, which is
+          // no longer the target. Hand the prompt to the store instead and
+          // let ChatPanel dispatch it once the new tab is active.
+          const store = useAppStore.getState();
+          if (pin.auto_send) {
+            store.enqueueChatPrompt(target.sessionId, pin.prompt);
+          } else {
+            // Seed the new tab's composer instead. The session-switch effect
+            // below reads `chatDrafts[sessionId]` when it sees the id change,
+            // so the text is already there when the tab renders.
+            store.setChatDraft(target.sessionId, pin.prompt);
           }
+          return;
         }
-        const files = activeFiles.size > 0 ? activeFiles : undefined;
-        const attachmentPayload =
-          pendingAttachments.length > 0
-            ? pendingAttachments.map((a) => ({
-                filename: a.filename,
-                media_type: a.media_type,
-                data_base64: a.data_base64,
-                text_content: a.text_content ?? undefined,
-              }))
-            : undefined;
-        onSend(pin.prompt, files, attachmentPayload);
+
+        if (pin.auto_send) {
+          // mentionedFilesRef only tracks paths inserted via the file picker
+          // into the textarea, but a pinned prompt's text was never
+          // picker-typed — so we extract any baked-in @path mentions from
+          // pin.prompt itself, then union them with picker-tracked paths that
+          // also appear in the prompt body.
+          const activeFiles = extractMentionPaths(pin.prompt);
+          for (const path of mentionsAtClick) {
+            if (pin.prompt.includes(`@${path}`)) {
+              activeFiles.add(path);
+            }
+          }
+          const files = activeFiles.size > 0 ? activeFiles : undefined;
+          const attachmentPayload =
+            attachmentsAtClick.length > 0
+              ? attachmentsAtClick.map((a) => ({
+                  filename: a.filename,
+                  media_type: a.media_type,
+                  data_base64: a.data_base64,
+                  text_content: a.text_content ?? undefined,
+                }))
+              : undefined;
+          void onSend(pin.prompt, files, attachmentPayload);
+          setComposerMode("prompt");
+          setChatInput("");
+          for (const a of attachmentsAtClick) {
+            if (a.preview_url.startsWith("blob:"))
+              URL.revokeObjectURL(a.preview_url);
+          }
+          setPendingAttachmentsBoth(sessionId, () => []);
+          mentionedFilesRef.current = new Set();
+          return;
+        }
         setComposerMode("prompt");
-        setChatInput("");
-        for (const a of pendingAttachments) {
-          if (a.preview_url.startsWith("blob:"))
-            URL.revokeObjectURL(a.preview_url);
-        }
-        setPendingAttachmentsBoth(sessionId, () => []);
-        mentionedFilesRef.current = new Set();
-        return;
-      }
-      setComposerMode("prompt");
-      setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
-      textareaRef.current?.focus();
+        setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
+        textareaRef.current?.focus();
+      })();
     },
-    [onSend, pendingAttachments, voice, sessionId, setPendingAttachmentsBoth],
+    [
+      onSend,
+      pendingAttachments,
+      voice,
+      selectedWorkspaceId,
+      sessionId,
+      setPendingAttachmentsBoth,
+      t,
+    ],
   );
 
   // Don't subscribe to chatDrafts — drafts are read inside the session-switch

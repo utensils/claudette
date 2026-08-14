@@ -1,7 +1,7 @@
 use tauri::State;
 
 use claudette::db::Database;
-use claudette::model::PinnedPrompt;
+use claudette::model::{PinnedPrompt, PinnedPromptLaunch};
 
 use crate::state::AppState;
 
@@ -28,6 +28,9 @@ pub async fn list_pinned_prompts_in_scope(
         .map_err(|e| e.to_string())
 }
 
+/// `launch` is optional so an older/undecorated caller (or a payload built
+/// before launch options existed) still round-trips to the pre-existing
+/// behaviour: run in the active session, inherit its model.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_pinned_prompt(
@@ -39,6 +42,7 @@ pub async fn create_pinned_prompt(
     fast_mode: Option<bool>,
     thinking_enabled: Option<bool>,
     chrome_enabled: Option<bool>,
+    launch: Option<PinnedPromptLaunch>,
     state: State<'_, AppState>,
 ) -> Result<PinnedPrompt, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -51,6 +55,7 @@ pub async fn create_pinned_prompt(
         fast_mode,
         thinking_enabled,
         chrome_enabled,
+        &launch.unwrap_or_default(),
     )
     .map_err(|e| e.to_string())
 }
@@ -66,6 +71,7 @@ pub async fn update_pinned_prompt(
     fast_mode: Option<bool>,
     thinking_enabled: Option<bool>,
     chrome_enabled: Option<bool>,
+    launch: Option<PinnedPromptLaunch>,
     state: State<'_, AppState>,
 ) -> Result<PinnedPrompt, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -78,6 +84,7 @@ pub async fn update_pinned_prompt(
         fast_mode,
         thinking_enabled,
         chrome_enabled,
+        &launch.unwrap_or_default(),
     )
     .map_err(|e| e.to_string())
 }

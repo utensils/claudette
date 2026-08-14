@@ -37,6 +37,8 @@ import { SetupScriptBanner } from "./SetupScriptBanner";
 import { StreamingMessage } from "./StreamingMessage";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
 import { formatElapsedSeconds } from "./chatHelpers";
+import { extractMentionPaths } from "./queuedMessageEditing";
+import { usePendingChatPrompt } from "./usePendingChatPrompt";
 import styles from "./ChatPanel.module.css";
 import type { useChatPanelStore } from "./useChatPanelStore";
 
@@ -186,6 +188,19 @@ export function ChatPanelSessionView({
   const { t } = useTranslation("chat");
   const cliInvocation = activeChatSessionRecord?.cli_invocation ?? null;
   const formatElapsed = formatElapsedSeconds;
+
+  // Prompts handed off by a pinned prompt that opened its own tab. The
+  // launcher can't call `onSend` directly — that closure is bound to
+  // whichever session is active — so it queues the prompt and we dispatch
+  // once the target tab becomes the active one. Mentions are re-extracted
+  // from the text because a queued prompt was never typed through the file
+  // picker. This lives here rather than in ChatPanel because ChatPanel
+  // returns early when it has no workspace, which would make the hook call
+  // conditional.
+  usePendingChatPrompt(activeSessionId, (content) => {
+    const mentioned = extractMentionPaths(content);
+    return onSend(content, mentioned.size > 0 ? mentioned : undefined);
+  });
 
   return (
     <>

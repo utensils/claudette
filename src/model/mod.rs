@@ -26,7 +26,7 @@ pub use metrics::{
     AgentCommit, AgentSession, AnalyticsMetrics, DashboardMetrics, DeletedWorkspaceSummary,
     HeatmapCell, RepoLeaderRow, SessionDot, WorkspaceMetrics,
 };
-pub use pinned_prompt::PinnedPrompt;
+pub use pinned_prompt::{PinnedPrompt, PinnedPromptLaunch};
 pub use remote_connection::RemoteConnection;
 pub use repository::Repository;
 pub use repository_input::{

@@ -1,6 +1,7 @@
 import type { StateCreator } from "zustand";
 import type { ChatSession } from "../../types";
 import type { AppState } from "../useAppStore";
+import { withoutPromptsForSession } from "./pendingChatPromptsSlice";
 
 export interface ChatSessionsSlice {
   sessionsByWorkspace: Record<string, ChatSession[]>;
@@ -143,10 +144,19 @@ export const createChatSessionsSlice: StateCreator<
       delete nextQueuedSteering[sessionId];
       const nextQueuedSteeringContent = { ...s.queuedMessageSteeringContent };
       delete nextQueuedSteeringContent[sessionId];
+      // A pinned prompt that opened this tab may still have its prompt in
+      // the handoff queue (e.g. the user closed the tab before the send
+      // landed). Dropping it here stops the drain from firing against a
+      // session that no longer exists.
+      const nextPendingPrompts = withoutPromptsForSession(
+        s.pendingChatPrompts,
+        sessionId,
+      );
       return {
         sessionsByWorkspace: next,
         selectedSessionIdByWorkspaceId: nextSelected,
         chatDrafts: nextDrafts,
+        pendingChatPrompts: nextPendingPrompts,
         pendingAttachmentsBySession: nextAttachments,
         queuedMessages: nextQueuedMessages,
         queuedMessageAutoDispatchPaused: nextQueuedPaused,

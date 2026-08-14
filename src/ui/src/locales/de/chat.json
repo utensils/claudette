@@ -178,6 +178,8 @@
   "pinned_prompts_label": "gepinnt",
   "pinned_prompt_tooltip_auto": "{{name}} senden",
   "pinned_prompt_tooltip_insert": "{{name}} einfügen",
+  "pinned_prompt_tooltip_new_session": "{{name}} in neuem Tab senden",
+  "pinned_prompt_launch_failed": "Angehefteter Prompt „{{name}}“ konnte nicht ausgeführt werden",
 
   "code_block_copy": "Code kopieren",
   "code_block_copied": "Kopiert",
