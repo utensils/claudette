@@ -30,7 +30,7 @@ import {
 } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { applySelectedModel } from "./applySelectedModel";
-import { buildModelRegistry, findModelInRegistry } from "./modelRegistry";
+import { buildModelRegistry, findProviderQualifiedModel } from "./modelRegistry";
 import { setPlanModeAndPersist } from "./planModePersistence";
 
 /** A pin's model, resolved to ids the chat model-switch path accepts. */
@@ -48,6 +48,11 @@ export interface ResolvedPinnedPromptModel {
  * session's own model beats hard-failing the click: the user still gets
  * their prompt, just on the default model. The settings UI surfaces the
  * same staleness as a badge so the pin can be repaired.
+ *
+ * Resolution is provider-strict. A pin stores `(model, provider)` as one
+ * identity, so a disabled backend must read as "stale" rather than
+ * resolving to whichever other backend happens to expose the same model
+ * id — a substitution that can silently change the runtime harness too.
  */
 export function resolvePinnedPromptModel(
   pin: Pick<PinnedPrompt, "model" | "model_provider">,
@@ -59,8 +64,11 @@ export function resolvePinnedPromptModel(
     store.agentBackends,
     store.codexEnabled,
   );
-  const provider = pin.model_provider ?? "anthropic";
-  const entry = findModelInRegistry(registry, pin.model, provider);
+  const entry = findProviderQualifiedModel(
+    registry,
+    pin.model,
+    pin.model_provider,
+  );
   if (!entry) return null;
   return { model: entry.id, provider: entry.providerId ?? "anthropic" };
 }

@@ -3,6 +3,7 @@ import {
   MODELS,
   buildModelRegistry,
   findModelInRegistry,
+  findProviderQualifiedModel,
   getHarnessForModel,
   is1mContextModel,
   get1mFallback,
@@ -457,6 +458,90 @@ describe("modelRegistry", () => {
         findModelInRegistry(registry, "gpt-5.4", "openai-api")
           ?.contextWindowTokens,
       ).toBe(272_000);
+    });
+  });
+
+  describe("findProviderQualifiedModel", () => {
+    const overlapping = () =>
+      buildModelRegistry(true, [
+        {
+          id: "openai-api",
+          label: "OpenAI API",
+          kind: "openai_api",
+          enabled: true,
+          capabilities: { thinking: false, effort: false, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "gpt-5.5", label: "gpt-5.5", context_window_tokens: 272_000 },
+          ],
+        },
+        {
+          id: "codex-native",
+          label: "Codex",
+          kind: "codex_native",
+          enabled: true,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "gpt-5.5", label: "gpt-5.5", context_window_tokens: 272_000 },
+          ],
+        },
+      ], true);
+
+    it("resolves each backend's copy of a shared model id", () => {
+      const registry = overlapping();
+      expect(
+        findProviderQualifiedModel(registry, "gpt-5.5", "codex-native")
+          ?.providerId,
+      ).toBe("codex-native");
+      expect(
+        findProviderQualifiedModel(registry, "gpt-5.5", "openai-api")
+          ?.providerId,
+      ).toBe("openai-api");
+    });
+
+    it("returns undefined instead of substituting another backend", () => {
+      // The lenient lookup falls back across providers so a loosely-typed
+      // `/model gpt-5.5` still resolves; callers holding a persisted
+      // (model, provider) pair need the opposite, because a substitution
+      // can silently change the runtime harness too.
+      const registry = buildModelRegistry(true, [
+        {
+          id: "openai-api",
+          label: "OpenAI API",
+          kind: "openai_api",
+          enabled: true,
+          capabilities: { thinking: false, effort: false, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "gpt-5.5", label: "gpt-5.5", context_window_tokens: 272_000 },
+          ],
+        },
+      ], true);
+
+      expect(findModelInRegistry(registry, "gpt-5.5", "codex-native")?.providerId)
+        .toBe("openai-api");
+      expect(findProviderQualifiedModel(registry, "gpt-5.5", "codex-native"))
+        .toBeUndefined();
+    });
+
+    it("treats a curated Claude Code model as provider 'anthropic'", () => {
+      const registry = buildModelRegistry(false, []);
+      expect(findProviderQualifiedModel(registry, "opus", "anthropic")?.id)
+        .toBe("opus");
+      // Curated entries carry no providerId; null/undefined normalize the
+      // same way the pair is persisted.
+      expect(findProviderQualifiedModel(registry, "opus", null)?.id).toBe("opus");
+      expect(findProviderQualifiedModel(registry, "opus", "ollama"))
+        .toBeUndefined();
+    });
+
+    it("returns undefined for a missing or blank model id", () => {
+      const registry = overlapping();
+      expect(findProviderQualifiedModel(registry, null, "codex-native"))
+        .toBeUndefined();
+      expect(findProviderQualifiedModel(registry, undefined, "codex-native"))
+        .toBeUndefined();
     });
   });
 });

@@ -29,14 +29,25 @@ export function usePendingChatPrompt(
     sendRef.current = send;
   }, [send]);
 
-  const drainingRef = useRef(false);
+  // Keyed by session rather than a single boolean for the whole hook.
+  // `ChatPanelSessionView` stays mounted across session switches, so one
+  // shared flag meant an in-flight drain for session A blocked the effect
+  // run that should have started draining session B — and A's `finally`
+  // only writes a ref, which triggers no render and therefore no retry, so
+  // B's prompt sat queued indefinitely. Two sessions draining at once is
+  // fine: their queue entries are disjoint and they dispatch into separate
+  // agent subprocesses. (`TerminalPanel` solves the same problem with a
+  // drain tick, but its queue isn't partitioned the way this one is, so it
+  // has to serialize where we don't.)
+  const drainingSessionsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!activeSessionId) return;
-    if (drainingRef.current) return;
+    if (drainingSessionsRef.current.has(activeSessionId)) return;
     if (!pendingChatPrompts.some((p) => p.sessionId === activeSessionId)) return;
 
-    drainingRef.current = true;
+    const draining = drainingSessionsRef.current;
+    draining.add(activeSessionId);
     // Pin the send function for the whole drain, alongside the
     // `activeSessionId` this effect closed over. Each render's `send`
     // dispatches into *that* render's active session, so re-reading
@@ -61,7 +72,7 @@ export function usePendingChatPrompt(
         }
       }
     })().finally(() => {
-      drainingRef.current = false;
+      draining.delete(activeSessionId);
     });
   }, [activeSessionId, pendingChatPrompts, completeChatPrompt]);
 }

@@ -1,7 +1,7 @@
 import { useId, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useModelRegistry } from "../../chat/useModelRegistry";
-import { findModelInRegistry, type Model } from "../../chat/modelRegistry";
+import { findProviderQualifiedModel, type Model } from "../../chat/modelRegistry";
 import styles from "./PinnedPromptsManager.module.css";
 
 /** The launch slice of a pinned prompt as the editor holds it. */
@@ -27,7 +27,7 @@ const INHERIT = "__inherit__";
  * backend-injected entry precisely because model ids collide across
  * backends; curated Claude Code entries have no provider and use their bare
  * id. Reusing that field keeps this in lockstep with the chat model picker
- * and with `findModelInRegistry`'s lookup order.
+ * and with `findProviderQualifiedModel`'s lookup order.
  */
 function optionValue(model: Model): string {
   return modelOptionValue(model.id, model.providerId ?? null);
@@ -126,15 +126,13 @@ export function PinnedPromptLaunchControls({ disabled, value, onChange }: Props)
 
   const grouped = useMemo(() => groupModels(registry), [registry]);
 
+  // Provider-strict on purpose. The lenient `findModelInRegistry` would
+  // resolve a stored `(model, provider)` pair against a *different* backend
+  // that happens to expose the same model id, presenting a pin whose own
+  // backend is disabled as available and hiding the stale warning.
   const selected = useMemo(
     () =>
-      value.model
-        ? findModelInRegistry(
-            registry,
-            value.model,
-            value.model_provider ?? "anthropic",
-          )
-        : undefined,
+      findProviderQualifiedModel(registry, value.model, value.model_provider),
     [registry, value.model, value.model_provider],
   );
 

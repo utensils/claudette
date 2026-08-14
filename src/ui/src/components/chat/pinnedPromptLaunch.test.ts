@@ -175,6 +175,33 @@ describe("resolvePinnedPromptModel", () => {
     ).toEqual({ model: "gpt-5.5", provider: "codex-native" });
   });
 
+  it("does not substitute another backend that shares the model id", () => {
+    // `findModelInRegistry` ends with a cross-provider bare-id fallback so a
+    // loosely-typed `/model gpt-5.5` still resolves. That is wrong for a
+    // persisted (model, provider) pair: silently running on a different
+    // backend can also mean a different runtime harness. The pin must read
+    // as stale instead and inherit the session's model.
+    appStore.agentBackends = [
+      backend("openai-api", "openai_api", ["gpt-5.5"]),
+    ];
+    expect(
+      resolvePinnedPromptModel(
+        pin({ model: "gpt-5.5", model_provider: "codex-native" }),
+      ),
+    ).toBeNull();
+
+    // Re-enabling the pinned backend resolves it again, to the right one.
+    appStore.agentBackends = [
+      backend("openai-api", "openai_api", ["gpt-5.5"]),
+      backend("codex-native", "codex_native", ["gpt-5.5"]),
+    ];
+    expect(
+      resolvePinnedPromptModel(
+        pin({ model: "gpt-5.5", model_provider: "codex-native" }),
+      ),
+    ).toEqual({ model: "gpt-5.5", provider: "codex-native" });
+  });
+
   it("returns null when the model's backend is no longer exposed", () => {
     // Backend exists but the alt-backends gate is off, so the registry
     // never surfaces its models.

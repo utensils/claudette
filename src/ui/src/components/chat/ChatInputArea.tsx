@@ -529,6 +529,25 @@ export function ChatInputArea({
           return;
         }
 
+        // This component instance is shared across sessions — switching tabs
+        // swaps the `sessionId` prop rather than remounting. A model-bearing
+        // pin awaits real IPC above (longest on a cross-harness swap, which
+        // builds a transcript prelude), so by the time we get here the
+        // composer on screen may belong to a different session than the one
+        // this click was for. `onSend` is still correctly bound to the
+        // clicked session, but the composer mutations below are not
+        // session-scoped, so they'd land on whatever tab is now visible —
+        // wiping text the user typed there, or inserting the prompt into it.
+        //
+        // When we've been navigated away from, write to the clicked
+        // session's persisted draft instead. `ChatInputArea` rehydrates from
+        // `chatDrafts` on session switch, so the result is the same as if
+        // the user had never left.
+        const stillOnClickedSession =
+          useAppStore.getState().selectedSessionIdByWorkspaceId[
+            selectedWorkspaceId
+          ] === sessionId;
+
         if (pin.auto_send) {
           // mentionedFilesRef only tracks paths inserted via the file picker
           // into the textarea, but a pinned prompt's text was never
@@ -552,19 +571,38 @@ export function ChatInputArea({
                 }))
               : undefined;
           void onSend(pin.prompt, files, attachmentPayload);
-          setComposerMode("prompt");
-          setChatInput("");
           for (const a of attachmentsAtClick) {
             if (a.preview_url.startsWith("blob:"))
               URL.revokeObjectURL(a.preview_url);
           }
-          setPendingAttachmentsBoth(sessionId, () => []);
-          mentionedFilesRef.current = new Set();
+          if (stillOnClickedSession) {
+            setComposerMode("prompt");
+            setChatInput("");
+            // `setPendingAttachmentsBoth` writes component-local state as
+            // well as the slice, so it's only safe while this composer is
+            // still showing the clicked session.
+            setPendingAttachmentsBoth(sessionId, () => []);
+            mentionedFilesRef.current = new Set();
+          } else {
+            const store = useAppStore.getState();
+            store.setChatDraft(sessionId, "");
+            store.setPendingAttachmentsForSession(sessionId, []);
+          }
           return;
         }
-        setComposerMode("prompt");
-        setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
-        textareaRef.current?.focus();
+
+        if (stillOnClickedSession) {
+          setComposerMode("prompt");
+          setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
+          textareaRef.current?.focus();
+          return;
+        }
+        const store = useAppStore.getState();
+        const existing = store.chatDrafts[sessionId] ?? "";
+        store.setChatDraft(
+          sessionId,
+          pin.prompt + (existing ? " " + existing : ""),
+        );
       })();
     },
     [

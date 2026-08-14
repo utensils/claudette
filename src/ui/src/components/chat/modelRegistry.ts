@@ -366,6 +366,40 @@ export function findModelInRegistry(
 }
 
 /**
+ * Strict variant of {@link findModelInRegistry}: resolves only when the
+ * entry's own backend matches `providerId`.
+ *
+ * `findModelInRegistry` deliberately ends with two cross-provider bare-id
+ * fallbacks so a loosely-specified selection (a user typing
+ * `/model gpt-5.5` without naming a backend) still lands somewhere. That is
+ * wrong for anything holding a *persisted* `(model, provider)` pair, where
+ * the provider is part of the stored identity: if the named backend is
+ * disabled and some other one happens to expose the same model id, the
+ * lenient lookup silently substitutes that other backend — which can also
+ * mean a different runtime harness (`codex_app_server` vs `claude_code`).
+ *
+ * Callers holding a persisted pair want "resolve exactly, or tell me it's
+ * unavailable" instead, so they can fall back deliberately rather than
+ * silently running somewhere the user never chose.
+ *
+ * Curated Claude Code entries carry no `providerId` and normalize to
+ * `"anthropic"`, matching how the pair is persisted.
+ */
+export function findProviderQualifiedModel(
+  registry: readonly Model[],
+  modelId: string | null | undefined,
+  providerId: string | null | undefined,
+): Model | undefined {
+  if (!modelId) return undefined;
+  const normalizedProvider = providerId || "anthropic";
+  const entry = findModelInRegistry(registry, modelId, normalizedProvider);
+  if (!entry) return undefined;
+  return (entry.providerId ?? "anthropic") === normalizedProvider
+    ? entry
+    : undefined;
+}
+
+/**
  * Resolve the runtime harness a given model resolves to at send time.
  *
  * Used by the chat-toolbar model picker to decide whether a model swap
