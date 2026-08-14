@@ -47,7 +47,7 @@ const appStore = vi.hoisted(() => ({
 const serviceMocks = vi.hoisted(() => ({
   createChatSession: vi.fn(),
   renameChatSession: vi.fn(() => Promise.resolve()),
-  setAppSetting: vi.fn(() => Promise.resolve()),
+  setAppSetting: vi.fn((_key: string, _value: string) => Promise.resolve()),
   resetAgentSession: vi.fn(() => Promise.resolve()),
   prepareCrossHarnessMigration: vi.fn(() => Promise.resolve()),
 }));
@@ -152,6 +152,7 @@ beforeEach(() => {
     Promise.resolve(session("sess-new")),
   );
   serviceMocks.renameChatSession.mockImplementation(() => Promise.resolve());
+  serviceMocks.setAppSetting.mockImplementation(() => Promise.resolve());
 });
 
 describe("resolvePinnedPromptModel", () => {
@@ -279,6 +280,42 @@ describe("preparePinnedPromptTarget — new session", () => {
       "thinking_enabled:sess-new",
       expect.anything(),
     );
+  });
+
+  it("persists plan mode exactly once", async () => {
+    // `persistToggleOverrides` used to write plan_mode too, duplicating the
+    // write that `applyToggleOverridesToStore` already performs.
+    await preparePinnedPromptTarget(
+      pin({ new_session: true, plan_mode: true }),
+      CTX,
+    );
+
+    expect(planModeMocks.setPlanModeAndPersist).toHaveBeenCalledTimes(1);
+    expect(planModeMocks.setPlanModeAndPersist).toHaveBeenCalledWith(
+      "sess-new",
+      true,
+    );
+  });
+
+  it("still opens the tab when a toggle fails to persist", async () => {
+    // Persistence runs after createChatSession has already committed a row,
+    // so a rejected write must not abort the launch — that would strand a
+    // session that exists in the DB but was never named, added, or selected.
+    serviceMocks.setAppSetting.mockImplementation((key: string) =>
+      key.startsWith("fast_mode:")
+        ? Promise.reject(new Error("db locked"))
+        : Promise.resolve(),
+    );
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await preparePinnedPromptTarget(
+      pin({ new_session: true, fast_mode: true }),
+      CTX,
+    );
+
+    expect(result).toEqual({ sessionId: "sess-new", openedNewSession: true });
+    expect(appStore.selectSession).toHaveBeenCalledWith("ws-1", "sess-new");
+    consoleError.mockRestore();
   });
 
   it("selects the pin's model on the new tab without a cross-harness reset", async () => {

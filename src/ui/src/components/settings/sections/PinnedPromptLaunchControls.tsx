@@ -30,18 +30,49 @@ const INHERIT = "__inherit__";
  * and with `findModelInRegistry`'s lookup order.
  */
 function optionValue(model: Model): string {
-  return model.providerQualifiedId ?? model.id;
+  return modelOptionValue(model.id, model.providerId ?? null);
 }
 
-/** Inverse of `optionValue`. Unknown values fall back to "inherit". */
+/**
+ * The option key for a model id + backend pair, whether or not the registry
+ * currently knows about it.
+ *
+ * Matches `providerQualifiedId`'s `<backend>/<model>` shape so a stale entry
+ * and a live one are keyed identically — which is what lets a stale value
+ * start resolving again the moment its backend comes back.
+ */
+function modelOptionValue(model: string, provider: string | null): string {
+  return provider ? `${provider}/${model}` : model;
+}
+
+/**
+ * Inverse of `optionValue`.
+ *
+ * `current` is consulted for the one option we render that the registry
+ * can't resolve: the stale entry for this pin's own stored model. Without
+ * that fallback, re-selecting the stale option would decode to "inherit"
+ * and silently discard the user's choice — the exact thing rendering it as
+ * selectable was meant to prevent. Comparing against `current` rather than
+ * splitting the string also sidesteps model ids that contain `/`
+ * themselves (Ollama's `hf.co/org/model`, for instance).
+ */
 function decodeOptionValue(
   registry: readonly Model[],
   value: string,
+  current: PinnedPromptLaunchDraft,
 ): Pick<PinnedPromptLaunchDraft, "model" | "model_provider"> {
   if (value === INHERIT) return { model: null, model_provider: null };
   const entry = registry.find((m) => optionValue(m) === value);
-  if (!entry) return { model: null, model_provider: null };
-  return { model: entry.id, model_provider: entry.providerId ?? "anthropic" };
+  if (entry) {
+    return { model: entry.id, model_provider: entry.providerId ?? "anthropic" };
+  }
+  if (
+    current.model &&
+    value === modelOptionValue(current.model, current.model_provider)
+  ) {
+    return { model: current.model, model_provider: current.model_provider };
+  }
+  return { model: null, model_provider: null };
 }
 
 /**
@@ -58,9 +89,7 @@ function staleOptionValue(
   selected: Model | undefined,
 ): string | null {
   if (!value.model || selected) return null;
-  return value.model_provider
-    ? `${value.model_provider}/${value.model}`
-    : value.model;
+  return modelOptionValue(value.model, value.model_provider);
 }
 
 /** Groups in registry order, so the picker reads like the chat one. */
@@ -143,7 +172,12 @@ export function PinnedPromptLaunchControls({ disabled, value, onChange }: Props)
           id={selectId}
           className={styles.launchSelect}
           value={staleValue ?? (selected ? optionValue(selected) : INHERIT)}
-          onChange={(e) => onChange({ ...value, ...decodeOptionValue(registry, e.target.value) })}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              ...decodeOptionValue(registry, e.target.value, value),
+            })
+          }
           disabled={disabled}
         >
           <option value={INHERIT}>

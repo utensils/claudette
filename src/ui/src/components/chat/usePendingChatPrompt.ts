@@ -37,6 +37,13 @@ export function usePendingChatPrompt(
     if (!pendingChatPrompts.some((p) => p.sessionId === activeSessionId)) return;
 
     drainingRef.current = true;
+    // Pin the send function for the whole drain, alongside the
+    // `activeSessionId` this effect closed over. Each render's `send`
+    // dispatches into *that* render's active session, so re-reading
+    // `sendRef.current` per iteration would pair a prompt dequeued for the
+    // old session with a closure bound to whichever session the user
+    // switched to mid-drain — delivering it into the wrong tab.
+    const send = sendRef.current;
     void (async () => {
       while (true) {
         const queued = useAppStore
@@ -48,7 +55,7 @@ export function usePendingChatPrompt(
         // resolved would let a re-run of this effect dispatch it twice.
         completeChatPrompt(queued.id);
         try {
-          await sendRef.current(queued.prompt);
+          await send(queued.prompt);
         } catch (err) {
           console.error("[chat] Failed to send queued prompt:", err);
         }

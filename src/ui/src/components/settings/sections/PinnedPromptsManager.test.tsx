@@ -262,6 +262,86 @@ describe("PinnedPromptsManager", () => {
     );
   });
 
+  it("decodes the stale option back to itself rather than to inherit", async () => {
+    // The stale option's value isn't in the registry, so decoding used to
+    // fall through to "inherit" and drop the pin's model. Re-selecting the
+    // already-selected option doesn't fire `change` in a real browser, so
+    // this guards the decode path rather than a reachable click — but the
+    // path is one `<option>` away from being reachable, and silently
+    // discarding a stored model is the exact failure the stale entry
+    // exists to prevent.
+    appStore.globalPinnedPrompts = [
+      prompt({ model: "qwen3-coder", model_provider: "ollama" }),
+    ];
+    serviceMocks.updatePinnedPrompt.mockImplementation(() =>
+      Promise.resolve(appStore.globalPinnedPrompts[0]),
+    );
+    const container = await renderManager();
+
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="pinned_prompts_edit_action:Ship it"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const select = container.querySelector("select");
+    if (!select) throw new Error("Expected a model picker");
+    await act(async () => {
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(container.querySelector("select")?.value).toBe("ollama/qwen3-coder");
+    expect(container.textContent).toContain(
+      "pinned_prompts_launch_model_unavailable_hint",
+    );
+  });
+
+  it("treats moving off a stale model as a deliberate change", async () => {
+    // The counterpart to the guard above: picking a live model really does
+    // replace the stale one, and the phantom option disappears with it.
+    // Cancelling the edit is the recovery path if that was a mistake.
+    appStore.globalPinnedPrompts = [
+      prompt({ model: "qwen3-coder", model_provider: "ollama" }),
+    ];
+    serviceMocks.updatePinnedPrompt.mockImplementation(() =>
+      Promise.resolve(appStore.globalPinnedPrompts[0]),
+    );
+    const container = await renderManager();
+
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="pinned_prompts_edit_action:Ship it"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const select = container.querySelector("select");
+    if (!select) throw new Error("Expected a model picker");
+    await act(async () => {
+      select.value = "opus";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(container.querySelector("select")?.value).toBe("opus");
+    expect(container.textContent).not.toContain(
+      "pinned_prompts_launch_model_unavailable_hint",
+    );
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button"))
+        .find((b) => b.textContent === "pinned_prompts_save_changes")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(serviceMocks.updatePinnedPrompt).toHaveBeenCalledWith(
+      1,
+      "Ship it",
+      expect.any(String),
+      expect.any(Boolean),
+      expect.anything(),
+      { new_session: false, model: "opus", model_provider: "anthropic" },
+    );
+  });
+
   it("Escape cancels an active row edit without deleting the prompt", async () => {
     const container = await renderManager();
     const editButton = container.querySelector(

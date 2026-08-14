@@ -101,19 +101,31 @@ function applyToggleOverridesToStore(sessionId: string, pin: PinnedPrompt): void
  * Only used on the new-session path — see rule 2 in the module docs. The
  * active-session path deliberately stays store-only, matching the
  * pre-existing "sticky for this app run" semantics of toolbar overrides.
+ *
+ * `plan_mode` is not written here: `applyToggleOverridesToStore` runs right
+ * after and persists it via `setPlanModeAndPersist`. Writing it in both
+ * places would fire two `app_settings` writes for one launch.
+ *
+ * Best-effort by design. This runs *after* `createChatSession` has already
+ * committed a row, so letting a failed write reject would abandon a tab
+ * that exists in the database but was never named, added to the store, or
+ * selected. A launched tab with one stale toolbar toggle is a far better
+ * outcome than an orphaned session, and the toggle is still visible and
+ * fixable in the composer.
  */
 async function persistToggleOverrides(
   sessionId: string,
   pin: PinnedPrompt,
 ): Promise<void> {
-  const writes: Promise<void>[] = [];
+  const writes: Promise<unknown>[] = [];
   for (const field of DIRECT_TOGGLE_FIELDS) {
     const value = pin[field];
     if (value === null) continue;
-    writes.push(setAppSetting(`${field}:${sessionId}`, String(value)));
-  }
-  if (pin.plan_mode !== null) {
-    writes.push(setPlanModeAndPersist(sessionId, pin.plan_mode));
+    writes.push(
+      setAppSetting(`${field}:${sessionId}`, String(value)).catch((err) =>
+        console.error(`[pinned-prompt] Failed to persist ${field}:${sessionId}`, err),
+      ),
+    );
   }
   await Promise.all(writes);
 }
