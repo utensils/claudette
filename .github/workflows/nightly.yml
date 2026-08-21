@@ -627,8 +627,39 @@ jobs:
           # pipefail`, `-f` would hard-fail the promote whenever `nightly` is
           # legitimately absent, wedging recovery. And not `sort -V`, which
           # orders 0.28.0 BEFORE 0.28.0-dev.3 — the opposite of semver.)
-          LIVE=$(curl -sL "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json" \
-                   | jq -r '.version // empty' 2>/dev/null || true)
+          MANIFEST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json"
+
+          # Fail CLOSED. An earlier draft swallowed every curl/jq failure into
+          # an empty $LIVE, which disabled the guard exactly when the API is
+          # misbehaving — i.e. when a bad promote is most likely. Only an
+          # explicit 404 means "no live release" (first promote, or recovery
+          # after the release was deleted); transport, non-2xx and parse
+          # failures abort rather than promote blind.
+          LIVE=""
+          LIVE_MANIFEST="${RUNNER_TEMP:-/tmp}/live-nightly-manifest.json"
+          for attempt in 1 2 3; do
+            http=$(curl -sL -o "$LIVE_MANIFEST" -w "%{http_code}" "$MANIFEST_URL" || echo "000")
+            if [ "$http" = "404" ]; then
+              echo "No live nightly manifest (HTTP 404) — first promote or post-recovery; skipping monotonicity check"
+              break
+            fi
+            if [ "$http" = "200" ]; then
+              LIVE=$(jq -r '.version // empty' "$LIVE_MANIFEST" 2>/dev/null || echo "")
+              if [ -n "$LIVE" ]; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::live nightly manifest at $MANIFEST_URL is unparseable or has no .version — refusing to promote blind"
+                exit 1
+              fi
+            elif [ "$attempt" -eq 3 ]; then
+              echo "::error::could not read live nightly manifest (HTTP $http) after 3 attempts — refusing to promote blind"
+              exit 1
+            fi
+            echo "Live-manifest read attempt $attempt returned HTTP $http; retrying in 5s"
+            sleep 5
+          done
+
           if [ -n "$LIVE" ]; then
             if [ "$LIVE" = "$VERSION" ]; then
               echo "::warning::republishing identical version $VERSION"
@@ -646,22 +677,34 @@ jobs:
           # stranded as a draft. Verified against the live API: a draft can
           # be PATCHed to tag_name=nightly while a published release still
           # owns that tag (HTTP 200, not 422).
-          STAGING_ID=$(gh release view nightly-staging --repo "$GITHUB_REPOSITORY" --json id --jq '.id')
+          # `--json id` returns the GraphQL node ID (RE_kwDO...), which
+          # `GET/PATCH /repos/{owner}/{repo}/releases/{release_id}` rejects with
+          # a 404. The REST endpoints need the numeric database ID.
+          STAGING_ID=$(gh release view nightly-staging --repo "$GITHUB_REPOSITORY" --json databaseId --jq '.databaseId')
           echo "Promoting staging release id=$STAGING_ID to nightly"
 
           # Delete the live `nightly`, with the same retry the rest of this
           # step uses, then verify it is actually gone. Swallowing this
           # failure is what makes the stale-nightly path silent.
+          # Verify via the Releases LIST endpoint, which includes drafts. A
+          # by-tag lookup cannot see them, so a draft left tagged `nightly` by
+          # a run that retagged but died before un-drafting would be reported
+          # as absent — and the next run would retag onto an already-owned
+          # tag. Counting matches also fails closed: `! gh release view` is
+          # true for rate limits, auth failures and outages, not just 404, so
+          # it would break out of this loop as though the delete had worked.
           for attempt in 1 2 3; do
             gh release delete nightly --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-            if ! gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            remaining=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+              --jq '[.[] | select(.tag_name == "nightly")] | length' 2>/dev/null || echo "unknown")
+            if [ "$remaining" = "0" ]; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::old nightly release still present after 3 delete attempts; aborting rather than publishing a stale nightly"
+              echo "::error::nightly release still present after 3 delete attempts (remaining=$remaining — \"unknown\" means the query itself failed); aborting rather than risking a stale nightly"
               exit 1
             fi
-            echo "Delete attempt $attempt left nightly present; retrying in 5s"
+            echo "Delete attempt $attempt left remaining=$remaining; retrying in 5s"
             sleep 5
           done
 
@@ -727,7 +770,6 @@ jobs:
           # is reachable by clients that don't carry a GitHub auth
           # token. A short CDN propagation lag after the un-draft is
           # normal; retry a few times before failing.
-          MANIFEST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json"
           for attempt in 1 2 3 4 5; do
             # `set -e` is active for this step; `var=$(failing-cmd)`
             # exits the script on transient curl failures (DNS, TLS,
