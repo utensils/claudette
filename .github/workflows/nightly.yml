@@ -46,11 +46,27 @@ jobs:
           NEXT_MINOR="${MAJ}.$((MIN + 1)).0"
 
           LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "")
-          if [ -n "$LAST_TAG" ]; then
-            COMMITS=$(git rev-list --count "${LAST_TAG}..HEAD")
-          else
-            COMMITS=$(git rev-list --count HEAD)
-          fi
+
+          # Total commit count on HEAD — strictly increasing across tags.
+          # Counting from LAST_TAG rewinds the counter whenever a release
+          # tag lands. semver reads a rewind as a DOWNGRADE, so
+          # tauri-plugin-updater (which gates on `release.version >
+          # current_version`, and we set no version_comparator) silently
+          # reports "up to date" and strands nightly users on their
+          # installed build. It rewound two ways:
+          #
+          #   1. The nightly for a release commit races the tag: the run
+          #      fires on the push, before release-please creates the tag,
+          #      so `git describe` finds the PREVIOUS tag and inflates the
+          #      count (ac716c73 -> dev.4). The next build counts from the
+          #      new tag and drops to dev.1.
+          #   2. A patch release leaves NEXT_MINOR unchanged (still 0.28.0)
+          #      while resetting the count (v0.27.1 sent dev.3 -> dev.0).
+          #
+          # Observed: a client on 0.28.0-dev.4.gac716c7 (2026-07-27) was
+          # refused all 7 subsequent nightlies over 25 days.
+          # LAST_TAG is still used below for the release-notes compare link.
+          COMMITS=$(git rev-list --count HEAD)
 
           SHORT=$(git rev-parse --short=7 HEAD)
           VERSION="${NEXT_MINOR}-dev.${COMMITS}.g${SHORT}"
@@ -602,7 +618,52 @@ jobs:
             sleep "$backoff"
           done
 
-          gh release delete nightly --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          # Monotonicity guard. tauri-plugin-updater gates on
+          # `release.version > current_version` using plain semver and we set
+          # no version_comparator, so publishing a version that sorts BELOW
+          # the live one silently strands every client already on the newer
+          # build — they are told "up to date" indefinitely. Refuse rather
+          # than demote. (Deliberately not `curl -sfL`: with `set -euo
+          # pipefail`, `-f` would hard-fail the promote whenever `nightly` is
+          # legitimately absent, wedging recovery. And not `sort -V`, which
+          # orders 0.28.0 BEFORE 0.28.0-dev.3 — the opposite of semver.)
+          LIVE=$(curl -sL "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json" \
+                   | jq -r '.version // empty' 2>/dev/null || true)
+          if [ -n "$LIVE" ]; then
+            if [ "$LIVE" = "$VERSION" ]; then
+              echo "::warning::republishing identical version $VERSION"
+            elif ! python3 -c 'import sys; k=lambda v:(lambda b,p:([int(x) for x in b.split(".")],(1,[]) if not p else (0,[(0,int(i),"") if i.isdigit() else (1,0,i) for i in p.split(".")])))(*v.split("-",1) if "-" in v else (v,"")); sys.exit(0 if k(sys.argv[1])>k(sys.argv[2]) else 1)' "$VERSION" "$LIVE"; then
+              echo "::error::new version $VERSION sorts at or below live nightly $LIVE — refusing to demote"
+              exit 1
+            fi
+          fi
+
+          # Capture the staging release by ID before the retag. Stages 2/3
+          # must not resolve `nightly` by tag: GitHub's get-release-by-tag
+          # endpoint does not return drafts, so if the delete below silently
+          # no-ops, a by-tag lookup resolves to the OLD published release,
+          # reports draft=false, and the job goes green with the new build
+          # stranded as a draft. Verified against the live API: a draft can
+          # be PATCHed to tag_name=nightly while a published release still
+          # owns that tag (HTTP 200, not 422).
+          STAGING_ID=$(gh release view nightly-staging --repo "$GITHUB_REPOSITORY" --json id --jq '.id')
+          echo "Promoting staging release id=$STAGING_ID to nightly"
+
+          # Delete the live `nightly`, with the same retry the rest of this
+          # step uses, then verify it is actually gone. Swallowing this
+          # failure is what makes the stale-nightly path silent.
+          for attempt in 1 2 3; do
+            gh release delete nightly --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+            if ! gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::old nightly release still present after 3 delete attempts; aborting rather than publishing a stale nightly"
+              exit 1
+            fi
+            echo "Delete attempt $attempt left nightly present; retrying in 5s"
+            sleep 5
+          done
 
           # Promotion runs in three explicitly-verified stages because
           # combining the tag rename and the draft flip in a single
@@ -634,14 +695,16 @@ jobs:
           done
 
           # Stage 2: un-draft the (now-renamed) release as a separate
-          # PATCH so the API can't drop the flip on the floor. Verify
-          # the post-state via `gh api releases/tags/nightly` rather
-          # than trusting `gh release edit`'s exit code — it has been
-          # observed to print the release URL and return 0 while
-          # `draft` stayed `true`.
+          # PATCH so the API can't drop the flip on the floor. Both the
+          # PATCH and the verification address the release by ID, never
+          # by tag — a by-tag lookup cannot see drafts and would happily
+          # verify a stale published release instead. Verify the
+          # post-state rather than trusting the call's exit code — it has
+          # been observed to return 0 while `draft` stayed `true`.
           for attempt in 1 2 3; do
-            gh release edit nightly --repo "$GITHUB_REPOSITORY" --draft=false || true
-            draft_state=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${STAGING_ID}" \
+              -F draft=false >/dev/null 2>&1 || true
+            draft_state=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${STAGING_ID}" \
               --jq '.draft' 2>/dev/null || echo "unknown")
             if [ "$draft_state" = "false" ]; then
               echo "nightly release is now draft=false"
