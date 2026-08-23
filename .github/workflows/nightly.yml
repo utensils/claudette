@@ -715,18 +715,42 @@ jobs:
               gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${rid}" >/dev/null 2>&1 || true
             done
             # The by-ID delete has no `--cleanup-tag` equivalent, so drop the
-            # tag ref separately. Absent ref => 422, which is benign here.
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" >/dev/null 2>&1 || true
+            # tag ref separately. Only the documented absent-ref response is
+            # benign — swallowing a 5xx/403 here would leave the OLD ref in
+            # place while the release list reads empty, letting stage 1 retag
+            # against a stale ref.
+            if ref_err=$(gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" 2>&1 >/dev/null); then
+              :
+            else
+              case "$ref_err" in
+                *"Reference does not exist"*|*"Not Found"*) ;;
+                *) echo "Tag-ref delete attempt $attempt did not succeed: $ref_err" ;;
+              esac
+            fi
 
+            # Post-condition: BOTH the release objects and the git ref must be
+            # gone. Checking only the release list would let a surviving ref
+            # through. `ref_state` distinguishes a real 404 from a transport
+            # error so an outage cannot masquerade as "already deleted".
             NIGHTLY_JSON=$(list_nightly_releases 2>/dev/null || echo "")
-            if [ -n "$NIGHTLY_JSON" ] && [ "$(printf '%s' "$NIGHTLY_JSON" | jq 'length')" = "0" ]; then
+            if ref_out=$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" 2>&1 >/dev/null); then
+              ref_state="present"
+            else
+              case "$ref_out" in
+                *"Not Found"*) ref_state="absent" ;;
+                *) ref_state="unknown" ;;
+              esac
+            fi
+            if [ -n "$NIGHTLY_JSON" ] \
+               && [ "$(printf '%s' "$NIGHTLY_JSON" | jq 'length')" = "0" ] \
+               && [ "$ref_state" = "absent" ]; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::releases tagged nightly still present after 3 delete attempts (${NIGHTLY_JSON:-enumeration failed}); aborting rather than risking a stale nightly"
+              echo "::error::nightly not fully removed after 3 delete attempts (releases=${NIGHTLY_JSON:-enumeration failed}, tag ref=$ref_state); aborting rather than retagging against a stale ref"
               exit 1
             fi
-            echo "Delete attempt $attempt left ${NIGHTLY_JSON:-enumeration failed}; retrying in 5s"
+            echo "Delete attempt $attempt left releases=${NIGHTLY_JSON:-enumeration failed}, tag ref=$ref_state; retrying in 5s"
             sleep 5
           done
 
