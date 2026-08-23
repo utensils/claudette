@@ -9,6 +9,7 @@ mod naming;
 mod process;
 mod session;
 mod types;
+pub mod workflow_progress;
 
 use serde::{Deserialize, Serialize};
 

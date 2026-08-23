@@ -16,6 +16,18 @@ use crate::model::{
 
 use super::{Database, retry_on_busy};
 
+/// Outcome of [`Database::finish_workflow_activity`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowActivityResolution {
+    /// Rows the UPDATE touched. `0` means the activity was never checkpointed.
+    pub rows_updated: usize,
+    /// The row's progress tree after the write — reconciled when the terminal
+    /// status closed out stragglers, otherwise the stored value verbatim.
+    /// `None` when no row matched. Callers forward this to the UI so a live
+    /// card stops contradicting the status it just received.
+    pub tree_json: Option<String>,
+}
+
 #[derive(Debug)]
 struct MissingCheckpointBlob {
     sha: String,
@@ -975,6 +987,113 @@ impl Database {
         )
     }
 
+    /// Record a background `Workflow` run's terminal outcome on its activity
+    /// row, reconciling the stored progress tree against it.
+    ///
+    /// This is the durable half of the fix for the status pill that never
+    /// cleared. The row used to be written only by the webview, from the
+    /// stream handler for a `task_notification` — but that notification
+    /// arrives *between* turns for a backgrounded run, and the `agent-stream`
+    /// feed the webview listens on is torn down at each turn's `Result`
+    /// (`src/agent/session.rs`). Nothing forwarded it, so the write never
+    /// happened and the row sat at `"running"` forever. Persisting from the
+    /// Rust side, where the notification actually lands, makes the outcome
+    /// independent of whether a webview was listening or the transcript
+    /// happened to be hydrated.
+    ///
+    /// The tree is reconciled in the same statement because status alone is
+    /// not enough: the card and pill derive their fraction purely from the
+    /// tree, and the last snapshot that reached us usually predates the run's
+    /// final transitions. Left alone it would keep reading "48/49" behind a
+    /// pill that had otherwise cleared. See
+    /// [`crate::agent::workflow_progress::reconcile_tree_on_terminal`].
+    ///
+    /// Scoped to `tool_name = 'Workflow'` so a `task_id` collision with some
+    /// other tool's activity cannot rewrite it.
+    ///
+    /// Pass `incoming_tree_json` when the caller holds a fresher snapshot than
+    /// the row does — the webview does, since only it sees the `task_progress`
+    /// ticks that arrive after the launching turn was checkpointed. Passing
+    /// `None` reconciles whatever is already stored.
+    ///
+    /// Reconciling on *every* terminal write, not just the first, is what
+    /// makes this safe against write ordering: Rust persists from the
+    /// notification path and the webview may persist the same run moments
+    /// later from its own handler. Whichever lands last still leaves a
+    /// reconciled tree, so the stale fraction cannot come back.
+    ///
+    /// A row whose turn was never checkpointed matches nothing, which reports
+    /// [`WorkflowActivityResolution::rows_updated`] `== 0` rather than
+    /// erroring — that is the normal outcome for a run stopped before its
+    /// first checkpoint, and there is no row to resurrect a pill from either.
+    /// The `tool_use_id` of the `Workflow` activity a background task belongs
+    /// to, found by the task id the CLI assigned it.
+    ///
+    /// The fallback for a `task_notification` that identifies its task but not
+    /// the originating tool use — `tool_use_id` is optional on that event, and
+    /// nothing in this repo pins whether the CLI populates it for every
+    /// workflow. `agent_task_id` is recorded on the row from the
+    /// `task_started` / `task_progress` events, which do carry both, so the
+    /// join is always available by the time a run can end.
+    ///
+    /// Newest row wins. Task ids are effectively unique, but a resumed or
+    /// forked session can duplicate one, and the most recent row is the live
+    /// one in that case.
+    pub fn find_workflow_activity_by_task_id(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT tool_use_id FROM turn_tool_activities
+                  WHERE tool_name = 'Workflow' AND agent_task_id = ?1
+                  ORDER BY rowid DESC LIMIT 1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    pub fn finish_workflow_activity(
+        &self,
+        tool_use_id: &str,
+        status: &str,
+        incoming_tree_json: Option<&str>,
+    ) -> Result<WorkflowActivityResolution, rusqlite::Error> {
+        let stored_tree: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT workflow_progress_json FROM turn_tool_activities
+                  WHERE tool_use_id = ?1 AND tool_name = 'Workflow'",
+                params![tool_use_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(stored_tree) = stored_tree else {
+            return Ok(WorkflowActivityResolution {
+                rows_updated: 0,
+                tree_json: None,
+            });
+        };
+        let effective_tree = incoming_tree_json.unwrap_or(&stored_tree);
+        let reconciled = crate::agent::workflow_progress::reconcile_tree_json_on_terminal(
+            effective_tree,
+            status,
+        );
+        // Write the reconciled tree when reconciliation changed something,
+        // else the caller's own tree when it supplied one, else nothing —
+        // `None` leaves the stored value untouched via COALESCE, which is the
+        // right outcome for a run that never reported agents and for a tree we
+        // could not parse.
+        let to_write = reconciled.as_deref().or(incoming_tree_json);
+        let rows_updated =
+            self.update_turn_tool_activity_progress(tool_use_id, to_write, Some(status))?;
+        Ok(WorkflowActivityResolution {
+            rows_updated,
+            tree_json: Some(to_write.unwrap_or(&stored_tree).to_string()),
+        })
+    }
+
     /// Resolve `Workflow` activities left mid-run by a previous app session.
     ///
     /// A workflow's background task lives inside the Claude CLI process, so
@@ -1003,21 +1122,41 @@ impl Database {
     ///
     /// Returns the number of rows resolved.
     pub fn resolve_orphaned_workflow_activities(&self) -> Result<usize, rusqlite::Error> {
-        // Keep the terminal set in sync with `isTerminalBackgroundTaskStatus`
-        // in `src/ui/src/types/backgroundTaskStatus.ts`, which is where the
-        // vocabulary is documented. `"stopped"` is the CLI's own value for a
-        // task that ended without completing, so a resolved row needs no
-        // special-casing on the read side.
-        self.conn.execute(
-            "UPDATE turn_tool_activities
-                SET agent_status = 'stopped'
+        use crate::agent::workflow_progress::{REAPED_TASK_STATUS, TERMINAL_TASK_STATUSES};
+
+        // The terminal vocabulary is bound from the shared constant rather
+        // than spelled out as a SQL literal. It used to be a third hand-
+        // maintained copy behind a "keep this in sync" comment, and the last
+        // time these copies drifted (`"stopped"` missing from two of them) a
+        // terminated run pinned its pill forever — the bug this function
+        // exists to clean up after.
+        let placeholders = std::iter::repeat_n("?", TERMINAL_TASK_STATUSES.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT tool_use_id FROM turn_tool_activities
               WHERE tool_name = 'Workflow'
                 AND (agent_status IS NULL
-                     OR LOWER(agent_status) NOT IN
-                        ('completed', 'failed', 'stopped', 'killed',
-                         'error', 'cancelled', 'canceled'))",
-            [],
-        )
+                     OR LOWER(TRIM(agent_status)) NOT IN ({placeholders}))"
+        );
+        let orphaned: Vec<String> = {
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows =
+                stmt.query_map(params_from_iter(TERMINAL_TASK_STATUSES), |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+
+        // Resolved one row at a time rather than with a bulk UPDATE so each
+        // one's progress tree is reconciled too. A status-only sweep left the
+        // pill cleared but the replayed card still reading "0/5" — a run
+        // relabelled as ended while its own tree insisted it was mid-flight.
+        let mut resolved = 0;
+        for tool_use_id in orphaned {
+            resolved += self
+                .finish_workflow_activity(&tool_use_id, REAPED_TASK_STATUS, None)?
+                .rows_updated;
+        }
+        Ok(resolved)
     }
 
     /// Load all completed turns for a workspace: checkpoints joined with their
@@ -1659,6 +1798,171 @@ mod tests {
 
         // Idempotent: a second boot has nothing left to do.
         assert_eq!(db.resolve_orphaned_workflow_activities().unwrap(), 0);
+    }
+
+    /// The bug this whole path exists for: a run reports `completed` while the
+    /// last progress snapshot that reached us still shows every agent in
+    /// flight. Status alone is not enough — the pill clears but the card keeps
+    /// reading "0/5" — so the tree has to be reconciled in the same write.
+    #[test]
+    fn test_finish_workflow_activity_reconciles_a_stale_tree() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        let mut activity = make_tool_activity("a1", "cp1", "Workflow", 0);
+        activity.agent_status = Some("running".into());
+        activity.workflow_progress_json = r#"[
+            {"type":"workflow_phase","index":0,"title":"Investigate"},
+            {"type":"workflow_agent","index":1,"label":"probe-a","state":"progress"},
+            {"type":"workflow_agent","index":2,"label":"probe-b","state":"done"}
+        ]"#
+        .into();
+        db.insert_turn_tool_activities(&[activity]).unwrap();
+
+        let resolution = db
+            .finish_workflow_activity("tu_a1", "completed", None)
+            .unwrap();
+        assert_eq!(resolution.rows_updated, 1);
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        let stored = &turns[0].activities[0];
+        assert_eq!(stored.agent_status.as_deref(), Some("completed"));
+        let tree: Vec<crate::agent::WorkflowProgressEntry> =
+            serde_json::from_str(&stored.workflow_progress_json).unwrap();
+        let states: Vec<&str> = tree
+            .iter()
+            .filter_map(|e| match e {
+                crate::agent::WorkflowProgressEntry::Agent(a) => Some(a.state.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states, vec!["done", "done"], "stragglers closed out");
+        // The caller forwards this to the UI so a live card settles too.
+        assert!(resolution.tree_json.is_some());
+    }
+
+    /// The `tool_use_id` fallback path: a terminal notification that names its
+    /// task but not the tool use it came from must still resolve the run.
+    #[test]
+    fn test_find_workflow_activity_by_task_id() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let mut wf = make_tool_activity("a1", "cp1", "Workflow", 0);
+        wf.agent_task_id = Some("w2lwlmfps".into());
+        wf.agent_status = Some("running".into());
+        // A background Bash sharing the notification path must not be matched.
+        let mut bash = make_tool_activity("a2", "cp1", "Bash", 1);
+        bash.agent_task_id = Some("task_bash".into());
+        db.insert_turn_tool_activities(&[wf, bash]).unwrap();
+
+        assert_eq!(
+            db.find_workflow_activity_by_task_id("w2lwlmfps").unwrap(),
+            Some("tu_a1".to_string())
+        );
+        assert_eq!(
+            db.find_workflow_activity_by_task_id("task_bash").unwrap(),
+            None,
+            "non-Workflow rows are out of scope"
+        );
+        assert_eq!(db.find_workflow_activity_by_task_id("nope").unwrap(), None);
+    }
+
+    /// A run that ends without ever reporting agents still has to resolve its
+    /// status, and passing no tree must not blank the column.
+    #[test]
+    fn test_finish_workflow_activity_without_a_tree_still_records_status() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let mut activity = make_tool_activity("a1", "cp1", "Workflow", 0);
+        activity.agent_status = Some("running".into());
+        db.insert_turn_tool_activities(&[activity]).unwrap();
+
+        assert_eq!(
+            db.finish_workflow_activity("tu_a1", "failed", None)
+                .unwrap()
+                .rows_updated,
+            1
+        );
+        let turns = db.list_completed_turns("w1").unwrap();
+        assert_eq!(
+            turns[0].activities[0].agent_status.as_deref(),
+            Some("failed")
+        );
+        assert_eq!(turns[0].activities[0].workflow_progress_json, "[]");
+    }
+
+    /// Background Bash and backgrounded subagents share the notification path
+    /// that calls this, but own no `Workflow` row. They must not be rewritten,
+    /// and an unmatched id is not an error.
+    #[test]
+    fn test_finish_workflow_activity_ignores_other_tools_and_missing_rows() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let mut bash = make_tool_activity("a1", "cp1", "Bash", 0);
+        bash.agent_status = Some("running".into());
+        db.insert_turn_tool_activities(&[bash]).unwrap();
+
+        let resolution = db
+            .finish_workflow_activity("tu_a1", "completed", None)
+            .unwrap();
+        assert_eq!(resolution.rows_updated, 0, "Bash row is out of scope");
+        assert_eq!(resolution.tree_json, None);
+        let turns = db.list_completed_turns("w1").unwrap();
+        assert_eq!(
+            turns[0].activities[0].agent_status.as_deref(),
+            Some("running")
+        );
+
+        assert_eq!(
+            db.finish_workflow_activity("tu_missing", "completed", None)
+                .unwrap()
+                .rows_updated,
+            0
+        );
+    }
+
+    /// The boot sweep relabels a wedged run as `stopped`; without reconciling
+    /// the tree it would leave a card insisting the run is mid-flight while
+    /// its own status says it ended.
+    #[test]
+    fn test_resolve_orphaned_workflow_activities_reconciles_trees() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let mut wedged = make_tool_activity("a1", "cp1", "Workflow", 0);
+        wedged.agent_status = Some("running".into());
+        wedged.workflow_progress_json =
+            r#"[{"type":"workflow_agent","index":1,"label":"probe","state":"progress"}]"#.into();
+        db.insert_turn_tool_activities(&[wedged]).unwrap();
+
+        assert_eq!(db.resolve_orphaned_workflow_activities().unwrap(), 1);
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        let stored = &turns[0].activities[0];
+        assert_eq!(stored.agent_status.as_deref(), Some("stopped"));
+        let tree: Vec<crate::agent::WorkflowProgressEntry> =
+            serde_json::from_str(&stored.workflow_progress_json).unwrap();
+        match &tree[0] {
+            crate::agent::WorkflowProgressEntry::Agent(a) => assert_eq!(
+                a.state, "stopped",
+                "a reaped run must not claim its agents finished"
+            ),
+            other => panic!("expected an agent entry, got {other:?}"),
+        }
     }
 
     /// An unknown `tool_use_id` is normal (the turn may never have been

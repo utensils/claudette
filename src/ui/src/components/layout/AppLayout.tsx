@@ -18,6 +18,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { ToastContainer } from "./Toast";
 import { AppTooltip } from "../shared/AppTooltip";
 import { useAgentStream } from "../../hooks/useAgentStream";
+import { useWorkflowActivityStatus } from "../../hooks/useWorkflowActivityStatus";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useBranchRefresh } from "../../hooks/useBranchRefresh";
 import { useAutoUpdater } from "../../hooks/useAutoUpdater";
@@ -44,6 +45,7 @@ export function AppLayout() {
   const commandPaletteOpen = useAppStore((s) => s.commandPaletteOpen);
 
   useAgentStream();
+  useWorkflowActivityStatus();
   useKeyboardShortcuts();
   useBranchRefresh();
   useAutoUpdater();

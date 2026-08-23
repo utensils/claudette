@@ -43,6 +43,9 @@ vi.mock("./ResizeHandle", () => ({ ResizeHandle: () => <div /> }));
 vi.mock("./Toast", () => ({ ToastContainer: () => <div /> }));
 vi.mock("../shared/AppTooltip", () => ({ AppTooltip: () => <div /> }));
 vi.mock("../../hooks/useAgentStream", () => ({ useAgentStream: vi.fn() }));
+vi.mock("../../hooks/useWorkflowActivityStatus", () => ({
+  useWorkflowActivityStatus: vi.fn(),
+}));
 vi.mock("../../hooks/useKeyboardShortcuts", () => ({ useKeyboardShortcuts: vi.fn() }));
 vi.mock("../../hooks/useBranchRefresh", () => ({ useBranchRefresh: vi.fn() }));
 vi.mock("../../hooks/useAutoUpdater", () => ({ useAutoUpdater: vi.fn() }));

@@ -47,6 +47,11 @@ function stateIcon(state: string): string {
       return "✕";
     case "progress":
       return "◐";
+    case "stopped":
+      // Reconciled straggler: the run ended before this agent did. Distinct
+      // from "queued" so a cancelled run doesn't read as one that never
+      // started, and from "error" so it doesn't read as a failure.
+      return "–";
     default:
       // Covers "queued" and any state we don't recognize — both mean
       // "hasn't produced anything yet" as far as the reader is concerned.
@@ -62,6 +67,8 @@ function stateClass(state: string): string {
       return styles.stateError;
     case "progress":
       return styles.stateProgress;
+    // "stopped" shares the muted treatment with "queued": neither produced
+    // a result, and neither is a failure worth colouring.
     default:
       return styles.stateQueued;
   }

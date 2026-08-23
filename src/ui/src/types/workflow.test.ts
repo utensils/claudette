@@ -300,6 +300,26 @@ describe("isAgentTerminal", () => {
     expect(isAgentTerminal(agent(1, "error"))).toBe(true);
   });
 
+  // Stamped by `reconcile_tree_on_terminal` on a run that ended without
+  // completing. If this did not read as terminal, reconciliation could not
+  // close out the stragglers and the pill would keep advertising an
+  // unfinished fraction for a run that is over — the bug it exists to fix.
+  it("treats a reconciled stopped agent as terminal", () => {
+    expect(isAgentTerminal(agent(1, "stopped"))).toBe(true);
+  });
+
+  // "stopped" is deliberately not "error": a cancelled run must not light
+  // up the card's failure badge.
+  it("does not count a stopped agent as a failure", () => {
+    const summary = summarizeWorkflowProgress([
+      agent(1, "stopped"),
+      agent(2, "done"),
+    ]);
+    expect(summary.doneCount).toBe(2);
+    expect(summary.errorCount).toBe(0);
+    expect(summary.running).toBe(false);
+  });
+
   // A state we've never seen must read as "still going", so a run can't
   // report itself finished on the strength of a value we don't understand.
   it("treats queued, progress, and unrecognized states as in-flight", () => {

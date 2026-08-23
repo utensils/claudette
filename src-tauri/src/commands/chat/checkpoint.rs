@@ -299,6 +299,15 @@ pub async fn save_turn_tool_activities(
 /// already been checkpointed. See
 /// [`claudette::db::Database::update_turn_tool_activity_progress`] for why a
 /// targeted update is needed rather than a re-save of the whole turn.
+///
+/// A terminal `agent_status` routes through
+/// [`claudette::db::Database::finish_workflow_activity`] so the caller's tree
+/// is reconciled against it. The webview holds the freshest snapshot (only it
+/// sees the `task_progress` ticks that arrive after the turn was
+/// checkpointed), but that snapshot predates the run's final transitions —
+/// writing it verbatim would put back the stale "48/49" the Rust-side
+/// notification handler had just resolved, since the two writers race.
+/// Reconciling on both paths makes the outcome order-independent.
 #[tauri::command]
 pub async fn update_turn_tool_activity_progress(
     tool_use_id: String,
@@ -307,12 +316,20 @@ pub async fn update_turn_tool_activity_progress(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.update_turn_tool_activity_progress(
-        &tool_use_id,
-        workflow_progress_json.as_deref(),
-        agent_status.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    match agent_status.as_deref() {
+        Some(status) if claudette::agent::workflow_progress::is_terminal_task_status(status) => {
+            db.finish_workflow_activity(&tool_use_id, status, workflow_progress_json.as_deref())
+                .map_err(|e| e.to_string())?;
+        }
+        _ => {
+            db.update_turn_tool_activity_progress(
+                &tool_use_id,
+                workflow_progress_json.as_deref(),
+                agent_status.as_deref(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
     Ok(())
 }
 

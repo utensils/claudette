@@ -11,7 +11,10 @@ use claudette::agent::background::{
     AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, append_terminal_output_sync,
     parse_bash_start, parse_task_notification, workspace_terminal_output_path,
 };
-use claudette::agent::{AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent};
+use claudette::agent::workflow_progress::WorkflowActivityStatusEvent;
+use claudette::agent::{
+    AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent, WorkflowProgressEntry,
+};
 use claudette::chat::{
     BuildAssistantArgs, assistant_usage_fields_from_result, build_assistant_chat_message,
     extract_assistant_text, extract_event_thinking,
@@ -239,11 +242,14 @@ pub(super) fn get_or_create_agent_shell_terminal_tab(
     Some(tab)
 }
 
+/// Whether a background task's status means the task has ended.
+///
+/// Delegates to the shared vocabulary in `claudette::agent::workflow_progress`.
+/// This used to be a local `matches!` that omitted `"error"` while the two
+/// other copies of the set (the frontend's and a SQL literal) included it —
+/// so an `error` notification re-armed the wake instead of resolving the run.
 fn is_terminal_task_status(status: &str) -> bool {
-    matches!(
-        status.to_ascii_lowercase().as_str(),
-        "completed" | "failed" | "stopped" | "killed" | "cancelled" | "canceled"
-    )
+    claudette::agent::workflow_progress::is_terminal_task_status(status)
 }
 
 pub(super) fn is_final_terminal_task_status(status: &str) -> bool {
@@ -598,6 +604,107 @@ impl BackgroundTaskInputTracker {
     }
 }
 
+/// Persist a backgrounded `Workflow` run's terminal outcome and tell the open
+/// UI about it.
+///
+/// This is the fix for the status pill that never cleared. The activity row
+/// used to be written only from the webview's `task_notification` handler, but
+/// for a backgrounded run that notification arrives *after* the launching turn
+/// has ended — and the per-turn `agent-stream` forwarder is torn down at the
+/// turn's `Result` (`claudette::agent::session`), so nothing carried it to the
+/// webview. The write never happened, the row stayed `"running"`, and the pill
+/// came back on every reload, forever.
+///
+/// Doing it here covers all three notification routes at once, since every one
+/// of them funnels through [`apply_task_notification_status`]: the in-turn
+/// stream, the wake loop's terminal break, and the post-wake drain.
+///
+/// Failures are logged and swallowed. A missed write costs a stale pill until
+/// the next boot sweep — it must not take down the wake machinery that reports
+/// the task's result back to the user.
+#[allow(clippy::too_many_arguments)]
+fn resolve_workflow_activity(
+    app: &AppHandle,
+    db: &Database,
+    workspace_id: &str,
+    chat_session_id: &str,
+    task_id: &str,
+    tool_use_id: Option<&str>,
+    status: &str,
+) {
+    // `tool_use_id` is optional on `task_notification`, and nothing in this
+    // repo pins whether the CLI populates it for every workflow. Fall back to
+    // the task id, which the row records from the `task_started` /
+    // `task_progress` events — those carry both, so the join is always
+    // available by the time a run can end.
+    let resolved_id;
+    let tool_use_id = match tool_use_id {
+        Some(id) => id,
+        None => match db.find_workflow_activity_by_task_id(task_id) {
+            Ok(Some(id)) => {
+                resolved_id = id;
+                resolved_id.as_str()
+            }
+            // No match is the ordinary case for background Bash and
+            // backgrounded subagents: they share this notification path but
+            // own no `Workflow` row.
+            Ok(None) => return,
+            Err(err) => {
+                tracing::warn!(
+                    target: "claudette::chat",
+                    task_id,
+                    error = %err,
+                    "failed to resolve workflow activity by task id"
+                );
+                return;
+            }
+        },
+    };
+    let resolution = match db.finish_workflow_activity(tool_use_id, status, None) {
+        Ok(resolution) => resolution,
+        Err(err) => {
+            tracing::warn!(
+                target: "claudette::chat",
+                tool_use_id,
+                status,
+                error = %err,
+                "failed to persist terminal workflow status"
+            );
+            return;
+        }
+    };
+    // Zero rows is the ordinary outcome for every non-Workflow background task
+    // (a background Bash, a backgrounded subagent) — they share this
+    // notification path but own no `Workflow` activity row. Staying quiet
+    // keeps the log signal about workflows only.
+    if resolution.rows_updated == 0 {
+        return;
+    }
+    // Logged at info because this pipeline was previously invisible: a search
+    // of the shipped logs for "workflow" or "task_notification" returned
+    // nothing, which is part of why the wedge went undiagnosed for so long.
+    tracing::info!(
+        target: "claudette::chat",
+        tool_use_id,
+        status,
+        "resolved workflow activity from terminal task notification"
+    );
+    let workflow_progress = resolution
+        .tree_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<Vec<WorkflowProgressEntry>>(json).ok());
+    let _ = app.emit(
+        "workflow-activity-status",
+        &WorkflowActivityStatusEvent {
+            workspace_id: workspace_id.to_string(),
+            chat_session_id: chat_session_id.to_string(),
+            tool_use_id: tool_use_id.to_string(),
+            status: status.to_string(),
+            workflow_progress,
+        },
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn apply_task_notification_status(
     app: &AppHandle,
@@ -634,15 +741,26 @@ pub(super) async fn apply_task_notification_status(
         })
     };
     if is_terminal_task_status(status) {
-        let mut agents = app_state.agents.write().await;
-        if let Some(session) = agents.get_mut(chat_session_id) {
-            session.running_background_tasks.remove(task_id);
-            session.background_task_output_paths.remove(task_id);
-            if let Some(tool_use_id) = tool_use_id {
-                session.running_background_tasks.remove(tool_use_id);
-                session.background_task_output_paths.remove(tool_use_id);
+        {
+            let mut agents = app_state.agents.write().await;
+            if let Some(session) = agents.get_mut(chat_session_id) {
+                session.running_background_tasks.remove(task_id);
+                session.background_task_output_paths.remove(task_id);
+                if let Some(tool_use_id) = tool_use_id {
+                    session.running_background_tasks.remove(tool_use_id);
+                    session.background_task_output_paths.remove(tool_use_id);
+                }
             }
         }
+        resolve_workflow_activity(
+            app,
+            &db,
+            workspace_id,
+            chat_session_id,
+            task_id,
+            tool_use_id,
+            status,
+        );
     }
     let _ = db.update_agent_task_terminal_tab_status(
         chat_session_id,
@@ -1138,7 +1256,7 @@ pub(super) fn schedule_background_task_wake(
 mod tests {
     use super::{
         BackgroundTaskCompletion, BackgroundTaskInputTracker,
-        build_background_task_completion_prompt, markdown_code_fence_for,
+        build_background_task_completion_prompt, is_terminal_task_status, markdown_code_fence_for,
         should_arm_wake_for_status, should_defer_persistent_restart_for_state, terminal_text,
     };
     use claudette::agent::{
@@ -1237,6 +1355,27 @@ mod tests {
             !tracker.is_bash_tool_result("cmd-1"),
             "a structured Codex terminal completion must prevent the legacy ToolResult fallback"
         );
+    }
+
+    /// Regression: this module carried its own copy of the terminal-status
+    /// set that omitted `"error"`, while the frontend's copy and the boot
+    /// sweep's SQL literal both included it. An `error` notification therefore
+    /// re-armed the wake instead of resolving the run, and the activity row
+    /// stayed in flight forever. All three now read one shared vocabulary.
+    #[test]
+    fn terminal_task_statuses_match_the_shared_vocabulary() {
+        for status in claudette::agent::workflow_progress::TERMINAL_TASK_STATUSES {
+            assert!(
+                is_terminal_task_status(status),
+                "{status} must be terminal here too"
+            );
+            assert!(
+                !should_arm_wake_for_status(status),
+                "{status} must not re-arm the wake"
+            );
+        }
+        assert!(should_arm_wake_for_status("running"));
+        assert!(should_arm_wake_for_status("starting"));
     }
 
     #[test]

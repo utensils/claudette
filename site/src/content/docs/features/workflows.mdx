@@ -30,7 +30,9 @@ The pill disappears when the run ends — whether it completed, failed, or was t
 
 A completed run's tree is stored with the turn, so it renders the same after an app restart, in [forked sessions](/claudette/features/checkpoints-and-forking/), and when history is replayed from disk.
 
-Because a workflow typically finishes long after its turn was saved, Claudette writes the final tree back to that turn when the completion notification arrives.
+Because a workflow typically finishes long after its turn was saved, Claudette writes the final tree back to that turn when the completion notification arrives. That happens whether or not the run's session is the one on screen — you can start a workflow, switch to another workspace, and still find the finished tree waiting when you come back.
+
+A run's last progress update usually predates its final agent transitions, so a workflow that ends while agents are still shown mid-flight has them settled to match: finished for a completed run, stopped for one that ended early. Genuine failures keep their own state and still count toward the card's failure badge.
 
 A workflow runs inside the Claude Code process that started it, so it does not survive that process going away — quitting Claudette, stopping the agent, or resetting the session ends the run. Claudette marks those runs stopped rather than leaving them mid-flight: any still marked running when Claudette starts belongs to a process that is gone, and is resolved at launch. Their cards keep the tree as of the last progress update before the process ended.
 

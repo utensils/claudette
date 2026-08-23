@@ -138,8 +138,16 @@ export function isWorkflowAgent(
 /** Terminal states — an agent in one of these will not change again.
  *  Anything else (including a state we've never seen) counts as in-flight,
  *  so an unrecognized value degrades to "still running" rather than
- *  silently reporting a run as finished. */
-const TERMINAL_AGENT_STATES = new Set(["done", "error"]);
+ *  silently reporting a run as finished.
+ *
+ *  `"done"` and `"error"` are the CLI's own values. `"stopped"` is ours:
+ *  when a run reports a terminal status while its last progress snapshot
+ *  still showed agents in flight, Rust stamps the stragglers so the tree
+ *  can't keep advertising an unfinished fraction for a finished run — see
+ *  `reconcile_tree_on_terminal` in `src/agent/workflow_progress.rs`. It is
+ *  used only when the run did *not* complete, so it stays out of
+ *  `errorCount` and never inflates the failure badge. */
+const TERMINAL_AGENT_STATES = new Set(["done", "error", "stopped"]);
 
 export function isAgentTerminal(agent: WorkflowAgentEntry): boolean {
   return TERMINAL_AGENT_STATES.has(agent.state);
