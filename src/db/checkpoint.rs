@@ -1086,8 +1086,22 @@ impl Database {
         // right outcome for a run that never reported agents and for a tree we
         // could not parse.
         let to_write = reconciled.as_deref().or(incoming_tree_json);
-        let rows_updated =
-            self.update_turn_tool_activity_progress(tool_use_id, to_write, Some(status))?;
+        // Carries the same `tool_name = 'Workflow'` predicate as the SELECT
+        // above rather than delegating to `update_turn_tool_activity_progress`,
+        // which matches on `tool_use_id` alone. There is no unique constraint
+        // on that column, so a duplicate id shared with a non-Workflow row
+        // would otherwise be rewritten too — and the caller may have arrived
+        // here from `find_workflow_activity_by_task_id`, where the id came out
+        // of a lookup rather than straight from the event. Same COALESCE
+        // semantics: `None` leaves the stored column untouched.
+        let rows_updated = self.conn.execute(
+            "UPDATE turn_tool_activities
+                SET workflow_progress_json =
+                        COALESCE(?1, workflow_progress_json),
+                    agent_status = COALESCE(?2, agent_status)
+              WHERE tool_use_id = ?3 AND tool_name = 'Workflow'",
+            params![to_write, status, tool_use_id],
+        )?;
         Ok(WorkflowActivityResolution {
             rows_updated,
             tree_json: Some(to_write.unwrap_or(&stored_tree).to_string()),
@@ -1930,6 +1944,55 @@ mod tests {
                 .unwrap()
                 .rows_updated,
             0
+        );
+    }
+
+    /// `tool_use_id` has no unique index, so the terminal write carries the
+    /// same `tool_name = 'Workflow'` predicate as the read that precedes it.
+    /// Without it a duplicate id shared with another tool's row would be
+    /// rewritten too, contradicting what this method documents about its own
+    /// scope.
+    #[test]
+    fn test_finish_workflow_activity_update_is_scoped_to_workflow_rows() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        let mut wf = make_tool_activity("a1", "cp1", "Workflow", 0);
+        wf.agent_status = Some("running".into());
+        // Same `tool_use_id`, different tool. Contrived — ids from the API are
+        // unique in practice — but nothing in the schema prevents it, and the
+        // write must not depend on that holding.
+        let mut collided = make_tool_activity("a2", "cp1", "Bash", 1);
+        collided.tool_use_id = "tu_a1".into();
+        collided.agent_status = Some("running".into());
+        db.insert_turn_tool_activities(&[wf, collided]).unwrap();
+
+        let resolution = db
+            .finish_workflow_activity("tu_a1", "completed", None)
+            .unwrap();
+        assert_eq!(
+            resolution.rows_updated, 1,
+            "only the Workflow row is written"
+        );
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        let by_tool = |tool: &str| {
+            turns[0]
+                .activities
+                .iter()
+                .find(|a| a.tool_name == tool)
+                .unwrap()
+                .agent_status
+                .clone()
+        };
+        assert_eq!(by_tool("Workflow").as_deref(), Some("completed"));
+        assert_eq!(
+            by_tool("Bash").as_deref(),
+            Some("running"),
+            "the colliding non-Workflow row must be left alone"
         );
     }
 
