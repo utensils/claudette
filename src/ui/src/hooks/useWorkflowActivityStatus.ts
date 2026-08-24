@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
 import { findToolActivity } from "../stores/findToolActivity";
+import { updateTurnToolActivityProgress } from "../services/tauri";
 import {
   isWorkflowProgressEntry,
   reconcileAgentStatesOnTerminal,
@@ -100,6 +101,31 @@ export function useWorkflowActivityStatus() {
           agents: updates.workflowProgress?.length ?? null,
         });
         updateToolActivity(chat_session_id, tool_use_id, updates);
+
+        // Write the live tree back when it is the one that survived above.
+        // Rust has already recorded the terminal status, so the pill is
+        // safe either way — but on the background-wake path this event is
+        // the *only* webview notification for the run: the wake loop
+        // consumes the `task_notification` without forwarding it, so
+        // `useAgentStream`'s persistence handler never fires. Without this
+        // the row keeps Rust's checkpoint-era tree (often `[]`), and a card
+        // that looked right all session regresses on the next reload.
+        //
+        // Skipped when the payload's tree is the one we used: that is
+        // already exactly what Rust wrote.
+        if (live && live.length > 0 && updates.workflowProgress) {
+          void updateTurnToolActivityProgress(
+            tool_use_id,
+            JSON.stringify(updates.workflowProgress),
+            status,
+            chat_session_id,
+          ).catch((err) => {
+            debugChat("stream", "persist resolved workflow tree failed", {
+              toolUseId: tool_use_id,
+              error: String(err),
+            });
+          });
+        }
       },
     );
 

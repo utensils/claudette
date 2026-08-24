@@ -39,6 +39,15 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }));
 
+const persistSpy = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
+vi.mock("../services/tauri", async () => {
+  const actual = await vi.importActual<typeof import("../services/tauri")>(
+    "../services/tauri",
+  );
+  return { ...actual, updateTurnToolActivityProgress: persistSpy };
+});
+
 import { useWorkflowActivityStatus } from "./useWorkflowActivityStatus";
 import {
   useAppStore,
@@ -158,6 +167,7 @@ function pillWouldRender(): boolean {
 
 beforeEach(() => {
   registeredHandlers.clear();
+  persistSpy.mockClear();
   useAppStore.setState({ toolActivities: {}, completedTurns: {} });
 });
 
@@ -356,6 +366,65 @@ describe("useWorkflowActivityStatus", () => {
 
     expect(useAppStore.getState().toolActivities[SESSION_ID]).toBeUndefined();
     expect(useAppStore.getState().completedTurns[SESSION_ID]).toBeUndefined();
+  });
+
+  it("persists the live tree it kept, so a reload cannot rewind the card", async () => {
+    // On the background-wake path this event is the ONLY webview
+    // notification for the run: the wake loop consumes the
+    // `task_notification` without forwarding it, so `useAgentStream`'s
+    // persistence handler never fires. Rust wrote the status and its own
+    // checkpoint-era tree (often `[]`), so without this the card looks right
+    // all session and regresses on the next reload.
+    useAppStore.setState({
+      completedTurns: { [SESSION_ID]: [turn("t1", [workflowActivity()])] },
+    });
+    await mountHook();
+
+    await fireStatus({ status: "completed", workflow_progress: [] });
+
+    expect(persistSpy).toHaveBeenCalledTimes(1);
+    const [toolUseId, treeJson, status, sessionId] = persistSpy.mock.calls[0];
+    expect(toolUseId).toBe(WF_ID);
+    expect(status).toBe("completed");
+    expect(sessionId).toBe(SESSION_ID);
+    expect(summarizeWorkflowProgress(JSON.parse(treeJson as string))).toMatchObject({
+      doneCount: 5,
+      totalCount: 5,
+      running: false,
+    });
+  });
+
+  it("does not write back a tree that came from the payload", async () => {
+    // That tree is already exactly what Rust wrote; echoing it is a pointless
+    // round-trip through the command.
+    useAppStore.setState({
+      completedTurns: {
+        [SESSION_ID]: [turn("t1", [workflowActivity({ workflowProgress: [] })])],
+      },
+    });
+    await mountHook();
+
+    await fireStatus({
+      status: "completed",
+      workflow_progress: RECONCILED_TREE,
+    });
+
+    expect(persistSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not write back when there is no tree anywhere", async () => {
+    useAppStore.setState({
+      completedTurns: {
+        [SESSION_ID]: [
+          turn("t1", [workflowActivity({ workflowProgress: undefined })]),
+        ],
+      },
+    });
+    await mountHook();
+
+    await fireStatus({ status: "completed", workflow_progress: null });
+
+    expect(persistSpy).not.toHaveBeenCalled();
   });
 
   it("ignores a payload with no session or tool id", async () => {

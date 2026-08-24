@@ -4,6 +4,7 @@ import { useAppStore } from "../stores/useAppStore";
 import { findToolActivity } from "../stores/findToolActivity";
 import { collectInFlightWorkflows } from "../stores/inFlightWorkflows";
 import { REAPED_BACKGROUND_TASK_STATUS } from "../types/backgroundTaskStatus";
+import { reconcileAgentStatesOnTerminal } from "../types/workflow";
 import {
   loadChatHistory,
   saveTurnToolActivities,
@@ -102,15 +103,27 @@ function reapInFlightWorkflows(
     toolUseIds: orphaned.map((a) => a.toolUseId),
   });
   for (const activity of orphaned) {
+    // Reconcile the live tree, not just the status. A status-only update
+    // leaves the open card counting agents that stopped when the process
+    // did — an unfinished fraction behind a run the same write just marked
+    // ended, until the next reload disagrees with it.
+    const reconciled = activity.workflowProgress?.length
+      ? reconcileAgentStatesOnTerminal(
+          activity.workflowProgress,
+          REAPED_BACKGROUND_TASK_STATUS,
+        )
+      : null;
     updateToolActivity(sessionId, activity.toolUseId, {
       agentStatus: REAPED_BACKGROUND_TASK_STATUS,
+      ...(reconciled ? { workflowProgress: reconciled } : {}),
     });
-    // `null` for the tree: whatever the last `task_progress` tick left in
-    // the store is already the stored value, and both columns COALESCE, so
-    // a status-only write can't blank a good tree.
+    // The store's tree is the freshest one anywhere — it holds every
+    // `task_progress` tick since the launching turn was checkpointed, which
+    // the row does not. Send it when we have one; `null` otherwise, where
+    // both columns COALESCE so a status-only write can't blank a good tree.
     void updateTurnToolActivityProgress(
       activity.toolUseId,
-      null,
+      reconciled ? JSON.stringify(reconciled) : null,
       REAPED_BACKGROUND_TASK_STATUS,
       sessionId,
     ).catch((err) => {

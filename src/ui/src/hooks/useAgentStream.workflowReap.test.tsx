@@ -64,7 +64,10 @@ import {
   type ToolActivity,
 } from "../stores/useAppStore";
 import { findToolActivity } from "../stores/findToolActivity";
-import type { WorkflowProgressEntry } from "../types/workflow";
+import {
+  summarizeWorkflowProgress,
+  type WorkflowProgressEntry,
+} from "../types/workflow";
 
 const WS_ID = "ws-1";
 const SESSION_ID = "session-1";
@@ -186,8 +189,9 @@ describe("useAgentStream — reaping orphaned workflows on ProcessExited", () =>
 
   // Persisted as well as applied in-store: the store copy dies with the
   // session view, and it is the stale DB row that resurrects the pill on
-  // the next load. `null` for the tree so the COALESCE keeps whatever the
-  // last progress tick stored.
+  // the next load. The store's tree goes with it — it holds every
+  // `task_progress` tick since the launching turn was checkpointed, which
+  // the row does not.
   it("persists the resolved status so a reload cannot resurrect the pill", async () => {
     useAppStore.setState({
       completedTurns: { [SESSION_ID]: [turn("turn-1", [workflowActivity()])] },
@@ -199,6 +203,53 @@ describe("useAgentStream — reaping orphaned workflows on ProcessExited", () =>
     expect(persistSpy).toHaveBeenCalledTimes(1);
     // The session id scopes the write: forking copies `tool_use_id` into the
     // fork's own rows, so an unscoped update would reach every fork's copy.
+    const [toolUseId, treeJson, status, sessionId] = persistSpy.mock.calls[0];
+    expect(toolUseId).toBe(WF_ID);
+    expect(status).toBe("stopped");
+    expect(sessionId).toBe(SESSION_ID);
+    // Reconciled on the way out: the reaped run's in-flight agents are
+    // stamped, so the persisted tree can't contradict the status beside it.
+    expect(JSON.parse(treeJson as string)).toEqual([
+      TREE[0],
+      { ...TREE[1], state: "stopped" },
+    ]);
+  });
+
+  // The open card has to settle too. A status-only update left it counting
+  // agents that stopped when the process did — an unfinished fraction behind
+  // a run the same write had just marked ended.
+  it("reconciles the live tree so the open card stops counting", async () => {
+    useAppStore.setState({
+      completedTurns: { [SESSION_ID]: [turn("turn-1", [workflowActivity()])] },
+    });
+    await mountHook();
+
+    await fireProcessExited();
+
+    const tree = findToolActivity(useAppStore.getState(), SESSION_ID, WF_ID)
+      ?.workflowProgress;
+    expect(summarizeWorkflowProgress(tree)).toMatchObject({
+      doneCount: 1,
+      totalCount: 1,
+      running: false,
+      errorCount: 0,
+    });
+  });
+
+  // Nothing to reconcile must not turn into a tree write: `null` lets the
+  // COALESCE keep whatever the last progress tick stored.
+  it("sends no tree when the reaped run never reported agents", async () => {
+    useAppStore.setState({
+      completedTurns: {
+        [SESSION_ID]: [
+          turn("turn-1", [workflowActivity({ workflowProgress: [] })]),
+        ],
+      },
+    });
+    await mountHook();
+
+    await fireProcessExited();
+
     expect(persistSpy).toHaveBeenCalledWith(WF_ID, null, "stopped", SESSION_ID);
   });
 

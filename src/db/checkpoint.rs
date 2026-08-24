@@ -991,49 +991,6 @@ impl Database {
         )
     }
 
-    /// Record a background `Workflow` run's terminal outcome on its activity
-    /// row, reconciling the stored progress tree against it.
-    ///
-    /// This is the durable half of the fix for the status pill that never
-    /// cleared. The row used to be written only by the webview, from the
-    /// stream handler for a `task_notification` — but that notification
-    /// arrives *between* turns for a backgrounded run, and the `agent-stream`
-    /// feed the webview listens on is torn down at each turn's `Result`
-    /// (`src/agent/session.rs`). Nothing forwarded it, so the write never
-    /// happened and the row sat at `"running"` forever. Persisting from the
-    /// Rust side, where the notification actually lands, makes the outcome
-    /// independent of whether a webview was listening or the transcript
-    /// happened to be hydrated.
-    ///
-    /// The tree is reconciled in the same statement because status alone is
-    /// not enough: the card and pill derive their fraction purely from the
-    /// tree, and the last snapshot that reached us usually predates the run's
-    /// final transitions. Left alone it would keep reading "48/49" behind a
-    /// pill that had otherwise cleared. See
-    /// [`crate::agent::workflow_progress::reconcile_tree_on_terminal`].
-    ///
-    /// Identified by `tool_use_id` within `chat_session_id`, falling back to
-    /// `task_id`. Both ids are copied verbatim into a fork's own rows
-    /// (`crate::fork`), so neither identifies a single activity on its own —
-    /// without the session scope, completing a run in one session would
-    /// rewrite the copied history in every fork of it, and `rows_updated` and
-    /// the returned tree would stop describing one activity.
-    ///
-    /// Pass `incoming_tree_json` when the caller holds a fresher snapshot than
-    /// the row does — the webview does, since only it sees the `task_progress`
-    /// ticks that arrive after the launching turn was checkpointed. Passing
-    /// `None` reconciles whatever is already stored.
-    ///
-    /// Reconciling on *every* terminal write, not just the first, is what
-    /// makes this safe against write ordering: Rust persists from the
-    /// notification path and the webview may persist the same run moments
-    /// later from its own handler. Whichever lands last still leaves a
-    /// reconciled tree, so the stale fraction cannot come back.
-    ///
-    /// A run whose turn was never checkpointed resolves to no row, which
-    /// reports [`WorkflowActivityResolution::rows_updated`] `== 0` rather than
-    /// erroring — that is the normal outcome for a run stopped before its
-    /// first checkpoint, and there is no row to resurrect a pill from either.
     /// The row id of the `Workflow` activity a background task belongs to,
     /// within one chat session.
     ///
@@ -1089,6 +1046,49 @@ impl Database {
             .optional()
     }
 
+    /// Record a background `Workflow` run's terminal outcome on its activity
+    /// row, reconciling the stored progress tree against it.
+    ///
+    /// This is the durable half of the fix for the status pill that never
+    /// cleared. The row used to be written only by the webview, from the
+    /// stream handler for a `task_notification` — but that notification
+    /// arrives *between* turns for a backgrounded run, and the `agent-stream`
+    /// feed the webview listens on is torn down at each turn's `Result`
+    /// (`src/agent/session.rs`). Nothing forwarded it, so the write never
+    /// happened and the row sat at `"running"` forever. Persisting from the
+    /// Rust side, where the notification actually lands, makes the outcome
+    /// independent of whether a webview was listening or the transcript
+    /// happened to be hydrated.
+    ///
+    /// The tree is reconciled in the same statement because status alone is
+    /// not enough: the card and pill derive their fraction purely from the
+    /// tree, and the last snapshot that reached us usually predates the run's
+    /// final transitions. Left alone it would keep reading "48/49" behind a
+    /// pill that had otherwise cleared. See
+    /// [`crate::agent::workflow_progress::reconcile_tree_on_terminal`].
+    ///
+    /// Identified by `tool_use_id` within `chat_session_id`, falling back to
+    /// `task_id`. Both ids are copied verbatim into a fork's own rows
+    /// (`crate::fork`), so neither identifies a single activity on its own —
+    /// without the session scope, completing a run in one session would
+    /// rewrite the copied history in every fork of it, and `rows_updated` and
+    /// the returned tree would stop describing one activity.
+    ///
+    /// Pass `incoming_tree_json` when the caller holds a fresher snapshot than
+    /// the row does — the webview does, since only it sees the `task_progress`
+    /// ticks that arrive after the launching turn was checkpointed. Passing
+    /// `None` reconciles whatever is already stored.
+    ///
+    /// Reconciling on *every* terminal write, not just the first, is what
+    /// makes this safe against write ordering: Rust persists from the
+    /// notification path and the webview may persist the same run moments
+    /// later from its own handler. Whichever lands last still leaves a
+    /// reconciled tree, so the stale fraction cannot come back.
+    ///
+    /// A run whose turn was never checkpointed resolves to no row, which
+    /// reports [`WorkflowActivityResolution::rows_updated`] `== 0` rather than
+    /// erroring — that is the normal outcome for a run stopped before its
+    /// first checkpoint, and there is no row to resurrect a pill from either.
     pub fn finish_workflow_activity(
         &self,
         chat_session_id: &str,
@@ -1148,16 +1148,25 @@ impl Database {
                 tool_use_id: None,
             });
         };
+        // Screened before use, because `reconcile_tree_json_on_terminal`
+        // returns `None` both for "already consistent" and "could not parse".
+        // Falling back to an unscreened `incoming_tree_json` on that shared
+        // `None` would write the caller's garbage straight over a readable
+        // stored tree — the one case the reconciler explicitly refuses to
+        // handle, undone by its own caller.
+        let incoming_tree_json = incoming_tree_json.filter(|json| {
+            serde_json::from_str::<Vec<crate::agent::WorkflowProgressEntry>>(json).is_ok()
+        });
         let effective_tree = incoming_tree_json.unwrap_or(&stored_tree);
         let reconciled = crate::agent::workflow_progress::reconcile_tree_json_on_terminal(
             effective_tree,
             status,
         );
         // Write the reconciled tree when reconciliation changed something,
-        // else the caller's own tree when it supplied one, else nothing —
-        // `None` leaves the stored value untouched via COALESCE, which is the
-        // right outcome for a run that never reported agents and for a tree we
-        // could not parse.
+        // else the caller's own (screened) tree when it supplied one, else
+        // nothing — `None` leaves the stored value untouched via COALESCE,
+        // which is the right outcome for a run that never reported agents and
+        // for a tree we could not parse.
         let to_write = reconciled.as_deref().or(incoming_tree_json);
         // Keyed on the primary key rather than delegating to
         // `update_turn_tool_activity_progress`, which matches on `tool_use_id`
@@ -2211,6 +2220,50 @@ mod tests {
             .rows_updated,
             0
         );
+    }
+
+    /// `reconcile_tree_json_on_terminal` returns `None` both for "already
+    /// consistent" and "could not parse", so an unscreened fallback to the
+    /// caller's tree on that shared `None` would write garbage over a
+    /// readable stored tree — undoing the one case the reconciler explicitly
+    /// refuses to handle.
+    #[test]
+    fn test_finish_workflow_activity_rejects_a_malformed_incoming_tree() {
+        let db = setup_db_with_workspace();
+        let session = session_of(&db, "w1");
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let good = r#"[{"type":"workflow_agent","index":1,"label":"probe","state":"progress"}]"#;
+        let mut activity = make_tool_activity("a1", "cp1", "Workflow", 0);
+        activity.agent_status = Some("running".into());
+        activity.workflow_progress_json = good.into();
+        db.insert_turn_tool_activities(&[activity]).unwrap();
+
+        let resolution = db
+            .finish_workflow_activity(
+                &session,
+                Some("tu_a1"),
+                None,
+                "completed",
+                Some("{ not a tree"),
+            )
+            .unwrap();
+        assert_eq!(resolution.rows_updated, 1, "the status still lands");
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        let stored = &turns[0].activities[0];
+        assert_eq!(stored.agent_status.as_deref(), Some("completed"));
+        // The stored tree was readable, so it is reconciled — never replaced
+        // by the caller's garbage.
+        let tree: Vec<crate::agent::WorkflowProgressEntry> =
+            serde_json::from_str(&stored.workflow_progress_json)
+                .expect("stored tree must still parse");
+        match &tree[0] {
+            crate::agent::WorkflowProgressEntry::Agent(a) => assert_eq!(a.state, "done"),
+            other => panic!("expected an agent entry, got {other:?}"),
+        }
     }
 
     /// The boot sweep relabels a wedged run as `stopped`; without reconciling
