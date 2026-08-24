@@ -632,39 +632,22 @@ fn resolve_workflow_activity(
     tool_use_id: Option<&str>,
     status: &str,
 ) {
-    // `tool_use_id` is optional on `task_notification`, and nothing in this
-    // repo pins whether the CLI populates it for every workflow. Fall back to
-    // the task id, which the row records from the `task_started` /
-    // `task_progress` events — those carry both, so the join is always
-    // available by the time a run can end.
-    let resolved_id;
-    let tool_use_id = match tool_use_id {
-        Some(id) => id,
-        None => match db.find_workflow_activity_by_task_id(task_id) {
-            Ok(Some(id)) => {
-                resolved_id = id;
-                resolved_id.as_str()
-            }
-            // No match is the ordinary case for background Bash and
-            // backgrounded subagents: they share this notification path but
-            // own no `Workflow` row.
-            Ok(None) => return,
-            Err(err) => {
-                tracing::warn!(
-                    target: "claudette::chat",
-                    task_id,
-                    error = %err,
-                    "failed to resolve workflow activity by task id"
-                );
-                return;
-            }
-        },
-    };
-    let resolution = match db.finish_workflow_activity(tool_use_id, status, None) {
+    // Resolution is session-scoped and falls back from `tool_use_id` (optional
+    // on `task_notification`) to `task_id`, which the row records from the
+    // `task_started` / `task_progress` events — those carry both, so the join
+    // is always available by the time a run can end.
+    let resolution = match db.finish_workflow_activity(
+        chat_session_id,
+        tool_use_id,
+        Some(task_id),
+        status,
+        None,
+    ) {
         Ok(resolution) => resolution,
         Err(err) => {
             tracing::warn!(
                 target: "claudette::chat",
+                task_id,
                 tool_use_id,
                 status,
                 error = %err,
@@ -685,6 +668,7 @@ fn resolve_workflow_activity(
     // nothing, which is part of why the wedge went undiagnosed for so long.
     tracing::info!(
         target: "claudette::chat",
+        task_id,
         tool_use_id,
         status,
         "resolved workflow activity from terminal task notification"
@@ -693,12 +677,17 @@ fn resolve_workflow_activity(
         .tree_json
         .as_deref()
         .and_then(|json| serde_json::from_str::<Vec<WorkflowProgressEntry>>(json).ok());
+    // The resolved id, not the one on the event: a notification may name only
+    // its `task_id`, and the UI keys on the tool use.
+    let Some(resolved_tool_use_id) = resolution.tool_use_id else {
+        return;
+    };
     let _ = app.emit(
         "workflow-activity-status",
         &WorkflowActivityStatusEvent {
             workspace_id: workspace_id.to_string(),
             chat_session_id: chat_session_id.to_string(),
-            tool_use_id: tool_use_id.to_string(),
+            tool_use_id: resolved_tool_use_id,
             status: status.to_string(),
             workflow_progress,
         },

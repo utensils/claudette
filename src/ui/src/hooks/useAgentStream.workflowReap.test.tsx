@@ -197,7 +197,9 @@ describe("useAgentStream — reaping orphaned workflows on ProcessExited", () =>
     await fireProcessExited();
 
     expect(persistSpy).toHaveBeenCalledTimes(1);
-    expect(persistSpy).toHaveBeenCalledWith(WF_ID, null, "stopped");
+    // The session id scopes the write: forking copies `tool_use_id` into the
+    // fork's own rows, so an unscoped update would reach every fork's copy.
+    expect(persistSpy).toHaveBeenCalledWith(WF_ID, null, "stopped", SESSION_ID);
   });
 
   // A run checkpointed before its first `task_progress` tick has no status

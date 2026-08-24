@@ -53,16 +53,22 @@ export function saveTurnToolActivities(
  *  Both fields are optional and COALESCE against the stored row: pass
  *  `null` for either to leave it untouched. A run that ends without ever
  *  reporting agents still needs its status resolved, and must not blank
- *  the tree on the way. */
+ *  the tree on the way.
+ *
+ *  `chatSessionId` scopes a terminal write to one activity. Forking copies
+ *  `tool_use_id` verbatim into the fork's rows, so an unscoped write would
+ *  rewrite the copied history in every fork of the session. */
 export function updateTurnToolActivityProgress(
   toolUseId: string,
   workflowProgressJson: string | null,
   agentStatus: string | null,
+  chatSessionId: string,
 ): Promise<void> {
   return invoke("update_turn_tool_activity_progress", {
     toolUseId,
     workflowProgressJson,
     agentStatus,
+    chatSessionId,
   });
 }
 

@@ -1,3 +1,5 @@
+import { isTerminalBackgroundTaskStatus } from "./backgroundTaskStatus";
+
 /** The phase/agent tree Claude Code's `Workflow` tool reports on
  *  `subtype: "task_progress"` stream events.
  *
@@ -151,6 +153,44 @@ const TERMINAL_AGENT_STATES = new Set(["done", "error", "stopped"]);
 
 export function isAgentTerminal(agent: WorkflowAgentEntry): boolean {
   return TERMINAL_AGENT_STATES.has(agent.state);
+}
+
+/**
+ * Close out agents still in flight on a run that has reported a terminal
+ * status.
+ *
+ * The TypeScript mirror of `reconcile_tree_on_terminal` in
+ * `src/agent/workflow_progress.rs`, and the reason the duplication is worth
+ * it: the store's tree is usually *fresher* than the one Rust reconciled. Rust
+ * reads the checkpointed row, which is a snapshot from seconds after launch —
+ * often literally `[]`, since a workflow's `tool_result` lands within a second
+ * of the turn being saved. The webview meanwhile has every `task_progress`
+ * tick delivered since. Applying Rust's tree verbatim would replace a rich
+ * live tree with that older snapshot, and the `agent-stream` handler would
+ * then persist the downgraded copy back to the row.
+ *
+ * So the live tree wins, and this reconciles it locally instead. `null` /
+ * empty falls back to whatever Rust sent, which is the only tree available
+ * when the run's ticks never reached this window.
+ *
+ * Returns the input array unchanged when nothing needs stamping, so React can
+ * bail out of a re-render on identity.
+ */
+export function reconcileAgentStatesOnTerminal(
+  entries: WorkflowProgressEntry[],
+  status: string,
+): WorkflowProgressEntry[] {
+  if (!isTerminalBackgroundTaskStatus(status)) return entries;
+  // Only a completed run may claim its stragglers finished their work; any
+  // other terminal status means the run ended without them getting there.
+  const stamped = status.trim().toLowerCase() === "completed" ? "done" : "stopped";
+  let changed = false;
+  const next = entries.map((entry) => {
+    if (!isWorkflowAgent(entry) || isAgentTerminal(entry)) return entry;
+    changed = true;
+    return { ...entry, state: stamped };
+  });
+  return changed ? next : entries;
 }
 
 /**

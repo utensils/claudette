@@ -5,6 +5,7 @@ import {
   phaseTitleOf,
   readOptionalNumber,
   readOptionalString,
+  reconcileAgentStatesOnTerminal,
   summarizeWorkflowProgress,
   type WorkflowAgentEntry,
   type WorkflowProgressEntry,
@@ -327,5 +328,65 @@ describe("isAgentTerminal", () => {
     expect(isAgentTerminal(agent(1, "progress"))).toBe(false);
     expect(isAgentTerminal(agent(1, "some_future_state"))).toBe(false);
     expect(isAgentTerminal(agent(1, ""))).toBe(false);
+  });
+});
+
+describe("reconcileAgentStatesOnTerminal", () => {
+  // The TS mirror of `reconcile_tree_on_terminal`. It exists because the live
+  // store tree is fresher than the one Rust reconciled off the checkpointed
+  // row, so the hook reconciles locally rather than accepting the older copy.
+  it("stamps stragglers done on a completed run", () => {
+    const out = reconcileAgentStatesOnTerminal(
+      [phase(0, "Investigate"), agent(1, "progress"), agent(2, "queued")],
+      "completed",
+    );
+    expect(summarizeWorkflowProgress(out)).toMatchObject({
+      doneCount: 2,
+      totalCount: 2,
+      running: false,
+      errorCount: 0,
+    });
+    expect(out[0].type).toBe("workflow_phase");
+  });
+
+  it("stamps stopped, not done, when the run did not complete", () => {
+    for (const status of ["stopped", "failed", "killed", "cancelled"]) {
+      const out = reconcileAgentStatesOnTerminal([agent(1, "progress")], status);
+      expect((out[0] as { state: string }).state).toBe("stopped");
+    }
+  });
+
+  it("never rewrites an agent's own terminal outcome", () => {
+    const out = reconcileAgentStatesOnTerminal(
+      [agent(1, "error"), agent(2, "done"), agent(3, "progress")],
+      "completed",
+    );
+    expect(out.map((e) => (e as { state: string }).state)).toEqual([
+      "error",
+      "done",
+      "done",
+    ]);
+    expect(summarizeWorkflowProgress(out).errorCount).toBe(1);
+  });
+
+  it("is a no-op on a non-terminal status", () => {
+    const input = [agent(1, "progress")];
+    expect(reconcileAgentStatesOnTerminal(input, "running")).toBe(input);
+  });
+
+  // Identity is the render bail-out: returning a fresh array every tick would
+  // re-render every card behind a memo that compares by reference.
+  it("returns the same array when nothing needs stamping", () => {
+    const input = [agent(1, "done"), phase(0, "Investigate")];
+    expect(reconcileAgentStatesOnTerminal(input, "completed")).toBe(input);
+  });
+
+  it("matches the Rust straggler vocabulary for every terminal status", () => {
+    // Guards the mirror: a status Rust treats as terminal but this does not
+    // would leave the fraction frozen on exactly the path the fix targets.
+    for (const status of ["completed", "failed", "stopped", "killed", "error", "cancelled", "canceled"]) {
+      const out = reconcileAgentStatesOnTerminal([agent(1, "progress")], status);
+      expect(summarizeWorkflowProgress(out).running).toBe(false);
+    }
   });
 });

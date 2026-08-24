@@ -215,6 +215,73 @@ describe("useWorkflowActivityStatus", () => {
     expect(summary.errorCount).toBe(0);
   });
 
+  it("reconciles the live tree instead of taking the payload's older one", async () => {
+    // Rust reconciles the *checkpointed* row, which is a snapshot from seconds
+    // after launch — commonly `[]`, since a workflow's tool_result lands within
+    // a second of the turn being saved. Every tick since went only to this
+    // store. Taking the payload verbatim would blank a rich card, and
+    // `useAgentStream`'s handler for the same notification would then persist
+    // the downgraded copy back to the row.
+    useAppStore.setState({
+      completedTurns: { [SESSION_ID]: [turn("t1", [workflowActivity()])] },
+    });
+    await mountHook();
+
+    await fireStatus({ status: "completed", workflow_progress: [] });
+
+    const tree = activityNow()?.workflowProgress;
+    expect(tree).toHaveLength(STALE_TREE.length);
+    const summary = summarizeWorkflowProgress(tree);
+    expect(summary.totalCount).toBe(5);
+    expect(summary.doneCount).toBe(5);
+    expect(summary.running).toBe(false);
+  });
+
+  it("preserves per-agent detail the payload's snapshot would have dropped", async () => {
+    // The live tree carries tokens / tool counts / labels accumulated over the
+    // run. Rust's checkpoint snapshot has none of it.
+    const rich = STALE_TREE.map((entry) =>
+      entry.type === "workflow_agent"
+        ? { ...entry, tokens: 1234, toolCalls: 7 }
+        : entry,
+    );
+    useAppStore.setState({
+      completedTurns: {
+        [SESSION_ID]: [turn("t1", [workflowActivity({ workflowProgress: rich })])],
+      },
+    });
+    await mountHook();
+
+    await fireStatus({ status: "completed", workflow_progress: RECONCILED_TREE });
+
+    const summary = summarizeWorkflowProgress(activityNow()?.workflowProgress);
+    expect(summary.totalTokens).toBe(5 * 1234);
+    expect(summary.totalToolCalls).toBe(5 * 7);
+    expect(summary.doneCount).toBe(5);
+  });
+
+  it("falls back to the payload's tree when this window never saw the run", async () => {
+    // A session hydrated from disk after the launching turn was saved has the
+    // checkpoint's empty tree; the payload is the only tree available.
+    useAppStore.setState({
+      completedTurns: {
+        [SESSION_ID]: [turn("t1", [workflowActivity({ workflowProgress: [] })])],
+      },
+    });
+    await mountHook();
+
+    await fireStatus({
+      status: "completed",
+      workflow_progress: RECONCILED_TREE,
+    });
+
+    expect(summarizeWorkflowProgress(activityNow()?.workflowProgress)).toMatchObject({
+      doneCount: 5,
+      totalCount: 5,
+      running: false,
+    });
+  });
+
   it("resolves a run that is still in the live lane", async () => {
     // The other ordering: the notification arrives while the launching turn
     // is somehow still open.
@@ -229,10 +296,10 @@ describe("useWorkflowActivityStatus", () => {
     expect(pillWouldRender()).toBe(false);
   });
 
-  it("keeps the existing tree when the payload carries none", async () => {
-    // `null` means "the row had no readable tree", which must not be
-    // confused with "the tree is empty" — blanking it would turn a stale
-    // card into a permanently empty one.
+  it("reconciles the live tree when the payload carries none", async () => {
+    // `null` means "the row had no readable tree", which must not be confused
+    // with "the tree is empty" — blanking it would turn a stale card into a
+    // permanently empty one. The live tree still gets closed out.
     useAppStore.setState({
       completedTurns: { [SESSION_ID]: [turn("t1", [workflowActivity()])] },
     });
@@ -240,15 +307,32 @@ describe("useWorkflowActivityStatus", () => {
 
     await fireStatus({ status: "completed", workflow_progress: null });
 
-    expect(activityNow()?.workflowProgress).toEqual(STALE_TREE);
+    expect(activityNow()?.workflowProgress).toHaveLength(STALE_TREE.length);
+    expect(summarizeWorkflowProgress(activityNow()?.workflowProgress).doneCount).toBe(5);
     expect(activityNow()?.agentStatus).toBe("completed");
   });
 
-  it("drops a malformed tree but still applies the status", async () => {
-    // Degrade to "status applied, tree unchanged" rather than writing
+  it("leaves the tree untouched when there is nothing anywhere to reconcile", async () => {
+    useAppStore.setState({
+      completedTurns: {
+        [SESSION_ID]: [turn("t1", [workflowActivity({ workflowProgress: undefined })])],
+      },
+    });
+    await mountHook();
+
+    await fireStatus({ status: "completed", workflow_progress: null });
+
+    expect(activityNow()?.workflowProgress).toBeUndefined();
+    expect(activityNow()?.agentStatus).toBe("completed");
+  });
+
+  it("drops a malformed payload tree but still applies the status", async () => {
+    // Degrade to "status applied, live tree reconciled" rather than writing
     // garbage the summarizer would then have to defend against.
     useAppStore.setState({
-      completedTurns: { [SESSION_ID]: [turn("t1", [workflowActivity()])] },
+      completedTurns: {
+        [SESSION_ID]: [turn("t1", [workflowActivity({ workflowProgress: undefined })])],
+      },
     });
     await mountHook();
 
@@ -257,7 +341,7 @@ describe("useWorkflowActivityStatus", () => {
       workflow_progress: [{ type: "workflow_agent", index: 1 }],
     });
 
-    expect(activityNow()?.workflowProgress).toEqual(STALE_TREE);
+    expect(activityNow()?.workflowProgress).toBeUndefined();
     expect(activityNow()?.agentStatus).toBe("completed");
   });
 

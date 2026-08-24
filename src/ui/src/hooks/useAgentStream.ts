@@ -112,6 +112,7 @@ function reapInFlightWorkflows(
       activity.toolUseId,
       null,
       REAPED_BACKGROUND_TASK_STATUS,
+      sessionId,
     ).catch((err) => {
       debugChat("stream", "persist reaped workflow status failed", {
         toolUseId: activity.toolUseId,
@@ -459,6 +460,7 @@ export function useAgentStream() {
                       ? JSON.stringify(activity.workflowProgress)
                       : null,
                     activity.agentStatus ?? null,
+                    sessionId,
                   ).catch((err) => {
                     debugChat("stream", "persist workflow progress failed", {
                       toolUseId: streamEvent.tool_use_id,

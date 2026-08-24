@@ -308,18 +308,34 @@ pub async fn save_turn_tool_activities(
 /// writing it verbatim would put back the stale "48/49" the Rust-side
 /// notification handler had just resolved, since the two writers race.
 /// Reconciling on both paths makes the outcome order-independent.
+///
+/// `chat_session_id` scopes that terminal write to one activity. Forking
+/// copies `tool_use_id` verbatim into the fork's rows (`crate::fork`), so
+/// without it a completion would rewrite the copied history in every fork.
+/// Optional so the command's existing payload stays valid: callers that omit
+/// it fall back to the unscoped update this command has always performed,
+/// rather than silently writing nothing.
 #[tauri::command]
 pub async fn update_turn_tool_activity_progress(
     tool_use_id: String,
     workflow_progress_json: Option<String>,
     agent_status: Option<String>,
+    chat_session_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    match agent_status.as_deref() {
-        Some(status) if claudette::agent::workflow_progress::is_terminal_task_status(status) => {
-            db.finish_workflow_activity(&tool_use_id, status, workflow_progress_json.as_deref())
-                .map_err(|e| e.to_string())?;
+    match (agent_status.as_deref(), chat_session_id.as_deref()) {
+        (Some(status), Some(session_id))
+            if claudette::agent::workflow_progress::is_terminal_task_status(status) =>
+        {
+            db.finish_workflow_activity(
+                session_id,
+                Some(&tool_use_id),
+                None,
+                status,
+                workflow_progress_json.as_deref(),
+            )
+            .map_err(|e| e.to_string())?;
         }
         _ => {
             db.update_turn_tool_activity_progress(

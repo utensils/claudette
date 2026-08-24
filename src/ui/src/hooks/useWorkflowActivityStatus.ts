@@ -1,8 +1,10 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
+import { findToolActivity } from "../stores/findToolActivity";
 import {
   isWorkflowProgressEntry,
+  reconcileAgentStatesOnTerminal,
   type WorkflowProgressEntry,
 } from "../types/workflow";
 import { debugChat } from "../utils/chatDebug";
@@ -64,11 +66,32 @@ export function useWorkflowActivityStatus() {
         // Validate at the boundary and only on the happy path. A malformed
         // tree is dropped rather than written, so a bad payload degrades to
         // "status applied, tree unchanged" instead of blanking a good card.
-        if (
+        const incoming =
           Array.isArray(workflow_progress) &&
           workflow_progress.every(isWorkflowProgressEntry)
-        ) {
-          updates.workflowProgress = workflow_progress;
+            ? workflow_progress
+            : null;
+
+        // The live tree wins over the one in the payload. Rust reconciled the
+        // *checkpointed* row, which is a snapshot from seconds after launch and
+        // is frequently `[]` — a workflow's `tool_result` lands within a second
+        // of the turn being saved, while every `task_progress` tick since has
+        // gone only to this store. Taking the payload's tree verbatim would
+        // blank or rewind a rich card, and `useAgentStream`'s handler for the
+        // same notification would then persist the downgraded copy back to the
+        // row. Reconcile the live tree locally instead; fall back to the
+        // payload's when this window never saw the run's ticks.
+        const live = findToolActivity(
+          useAppStore.getState(),
+          chat_session_id,
+          tool_use_id,
+        )?.workflowProgress;
+        const base = live && live.length > 0 ? live : incoming;
+        if (base) {
+          updates.workflowProgress = reconcileAgentStatesOnTerminal(
+            base,
+            status,
+          );
         }
         debugChat("stream", "workflow activity resolved", {
           sessionId: chat_session_id,

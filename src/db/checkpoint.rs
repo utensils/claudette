@@ -26,6 +26,10 @@ pub struct WorkflowActivityResolution {
     /// `None` when no row matched. Callers forward this to the UI so a live
     /// card stops contradicting the status it just received.
     pub tree_json: Option<String>,
+    /// The resolved row's `tool_use_id`. `None` when no row matched. Callers
+    /// forward this rather than echoing the id they passed in: a notification
+    /// may identify its run only by `task_id`, and the UI keys on the tool use.
+    pub tool_use_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1008,8 +1012,12 @@ impl Database {
     /// pill that had otherwise cleared. See
     /// [`crate::agent::workflow_progress::reconcile_tree_on_terminal`].
     ///
-    /// Scoped to `tool_name = 'Workflow'` so a `task_id` collision with some
-    /// other tool's activity cannot rewrite it.
+    /// Identified by `tool_use_id` within `chat_session_id`, falling back to
+    /// `task_id`. Both ids are copied verbatim into a fork's own rows
+    /// (`crate::fork`), so neither identifies a single activity on its own —
+    /// without the session scope, completing a run in one session would
+    /// rewrite the copied history in every fork of it, and `rows_updated` and
+    /// the returned tree would stop describing one activity.
     ///
     /// Pass `incoming_tree_json` when the caller holds a fresher snapshot than
     /// the row does — the webview does, since only it sees the `task_progress`
@@ -1022,33 +1030,60 @@ impl Database {
     /// later from its own handler. Whichever lands last still leaves a
     /// reconciled tree, so the stale fraction cannot come back.
     ///
-    /// A row whose turn was never checkpointed matches nothing, which reports
-    /// [`WorkflowActivityResolution::rows_updated`] `== 0` rather than
+    /// A run whose turn was never checkpointed resolves to no row, which
+    /// reports [`WorkflowActivityResolution::rows_updated`] `== 0` rather than
     /// erroring — that is the normal outcome for a run stopped before its
     /// first checkpoint, and there is no row to resurrect a pill from either.
-    /// The `tool_use_id` of the `Workflow` activity a background task belongs
-    /// to, found by the task id the CLI assigned it.
+    /// The row id of the `Workflow` activity a background task belongs to,
+    /// within one chat session.
     ///
-    /// The fallback for a `task_notification` that identifies its task but not
-    /// the originating tool use — `tool_use_id` is optional on that event, and
-    /// nothing in this repo pins whether the CLI populates it for every
-    /// workflow. `agent_task_id` is recorded on the row from the
-    /// `task_started` / `task_progress` events, which do carry both, so the
-    /// join is always available by the time a run can end.
+    /// Session scope is load-bearing, not defensive. Forking copies both
+    /// `tool_use_id` and `agent_task_id` verbatim into the fork's own rows
+    /// (`crate::fork`), so neither id identifies a single activity across the
+    /// database — a global lookup can hand back a fork's copy for a completion
+    /// that belongs to the source session, and the tree read off that row then
+    /// gets written and broadcast as if it were the live run's.
     ///
-    /// Newest row wins. Task ids are effectively unique, but a resumed or
-    /// forked session can duplicate one, and the most recent row is the live
-    /// one in that case.
+    /// Returns the row's primary key rather than its `tool_use_id`, so the
+    /// caller's write can target exactly the activity that was resolved.
+    ///
+    /// `task_id` is the fallback identifier for a `task_notification` that
+    /// names its task but not the originating tool use — `tool_use_id` is
+    /// optional on that event, and nothing in this repo pins whether the CLI
+    /// populates it for every workflow. `agent_task_id` is recorded from the
+    /// `task_started` / `task_progress` events, which carry both, so the join
+    /// is always available by the time a run can end.
+    ///
+    /// Newest row wins within the session: a resumed session can re-emit an
+    /// id, and the most recent row is the live one.
     pub fn find_workflow_activity_by_task_id(
         &self,
+        chat_session_id: &str,
         task_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        self.find_workflow_activity_row(chat_session_id, "agent_task_id", task_id)
+    }
+
+    /// Session-scoped row lookup shared by the `tool_use_id` and
+    /// `agent_task_id` paths. `column` is a literal chosen by the two callers
+    /// below, never caller input.
+    fn find_workflow_activity_row(
+        &self,
+        chat_session_id: &str,
+        column: &str,
+        value: &str,
     ) -> Result<Option<String>, rusqlite::Error> {
         self.conn
             .query_row(
-                "SELECT tool_use_id FROM turn_tool_activities
-                  WHERE tool_name = 'Workflow' AND agent_task_id = ?1
-                  ORDER BY rowid DESC LIMIT 1",
-                params![task_id],
+                &format!(
+                    "SELECT ta.id FROM turn_tool_activities ta
+                       JOIN conversation_checkpoints cp ON cp.id = ta.checkpoint_id
+                      WHERE ta.tool_name = 'Workflow'
+                        AND ta.{column} = ?1
+                        AND cp.chat_session_id = ?2
+                      ORDER BY ta.rowid DESC LIMIT 1"
+                ),
+                params![value, chat_session_id],
                 |row| row.get(0),
             )
             .optional()
@@ -1056,23 +1091,61 @@ impl Database {
 
     pub fn finish_workflow_activity(
         &self,
-        tool_use_id: &str,
+        chat_session_id: &str,
+        tool_use_id: Option<&str>,
+        task_id: Option<&str>,
         status: &str,
         incoming_tree_json: Option<&str>,
     ) -> Result<WorkflowActivityResolution, rusqlite::Error> {
-        let stored_tree: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT workflow_progress_json FROM turn_tool_activities
-                  WHERE tool_use_id = ?1 AND tool_name = 'Workflow'",
-                params![tool_use_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(stored_tree) = stored_tree else {
+        let mut row_id = match tool_use_id {
+            Some(id) => self.find_workflow_activity_row(chat_session_id, "tool_use_id", id)?,
+            None => None,
+        };
+        if row_id.is_none()
+            && let Some(task_id) = task_id
+        {
+            row_id = self.find_workflow_activity_by_task_id(chat_session_id, task_id)?;
+        }
+        let Some(row_id) = row_id else {
             return Ok(WorkflowActivityResolution {
                 rows_updated: 0,
                 tree_json: None,
+                tool_use_id: None,
+            });
+        };
+        self.finish_workflow_activity_row(&row_id, status, incoming_tree_json)
+    }
+
+    /// [`Database::finish_workflow_activity`] against an already-resolved row.
+    ///
+    /// Targets the activity's primary key, which is the only identifier that
+    /// names exactly one row: `tool_use_id` and `agent_task_id` are both
+    /// duplicated across forks, and `tool_use_id` additionally has no unique
+    /// index, so a value shared with another tool's row would be caught by a
+    /// looser predicate.
+    ///
+    /// Used directly by the boot sweep, which already holds the ids of the
+    /// rows it selected and has no session to scope by.
+    pub fn finish_workflow_activity_row(
+        &self,
+        activity_id: &str,
+        status: &str,
+        incoming_tree_json: Option<&str>,
+    ) -> Result<WorkflowActivityResolution, rusqlite::Error> {
+        let row: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT workflow_progress_json, tool_use_id FROM turn_tool_activities
+                  WHERE id = ?1 AND tool_name = 'Workflow'",
+                params![activity_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((stored_tree, tool_use_id)) = row else {
+            return Ok(WorkflowActivityResolution {
+                rows_updated: 0,
+                tree_json: None,
+                tool_use_id: None,
             });
         };
         let effective_tree = incoming_tree_json.unwrap_or(&stored_tree);
@@ -1086,25 +1159,22 @@ impl Database {
         // right outcome for a run that never reported agents and for a tree we
         // could not parse.
         let to_write = reconciled.as_deref().or(incoming_tree_json);
-        // Carries the same `tool_name = 'Workflow'` predicate as the SELECT
-        // above rather than delegating to `update_turn_tool_activity_progress`,
-        // which matches on `tool_use_id` alone. There is no unique constraint
-        // on that column, so a duplicate id shared with a non-Workflow row
-        // would otherwise be rewritten too — and the caller may have arrived
-        // here from `find_workflow_activity_by_task_id`, where the id came out
-        // of a lookup rather than straight from the event. Same COALESCE
+        // Keyed on the primary key rather than delegating to
+        // `update_turn_tool_activity_progress`, which matches on `tool_use_id`
+        // alone and would fan the write out across forks. Same COALESCE
         // semantics: `None` leaves the stored column untouched.
         let rows_updated = self.conn.execute(
             "UPDATE turn_tool_activities
                 SET workflow_progress_json =
                         COALESCE(?1, workflow_progress_json),
                     agent_status = COALESCE(?2, agent_status)
-              WHERE tool_use_id = ?3 AND tool_name = 'Workflow'",
-            params![to_write, status, tool_use_id],
+              WHERE id = ?3 AND tool_name = 'Workflow'",
+            params![to_write, status, activity_id],
         )?;
         Ok(WorkflowActivityResolution {
             rows_updated,
             tree_json: Some(to_write.unwrap_or(&stored_tree).to_string()),
+            tool_use_id: Some(tool_use_id),
         })
     }
 
@@ -1148,7 +1218,7 @@ impl Database {
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT tool_use_id FROM turn_tool_activities
+            "SELECT id FROM turn_tool_activities
               WHERE tool_name = 'Workflow'
                 AND (agent_status IS NULL
                      OR LOWER(TRIM(agent_status)) NOT IN ({placeholders}))"
@@ -1165,9 +1235,9 @@ impl Database {
         // pill cleared but the replayed card still reading "0/5" — a run
         // relabelled as ended while its own tree insisted it was mid-flight.
         let mut resolved = 0;
-        for tool_use_id in orphaned {
+        for activity_id in orphaned {
             resolved += self
-                .finish_workflow_activity(&tool_use_id, REAPED_TASK_STATUS, None)?
+                .finish_workflow_activity_row(&activity_id, REAPED_TASK_STATUS, None)?
                 .rows_updated;
         }
         Ok(resolved)
@@ -1367,6 +1437,13 @@ mod tests {
 
     /// Build a `ConversationCheckpoint` anchored to the workspace's default
     /// active session.
+    /// The chat session every `make_checkpoint` in these tests hangs off.
+    fn session_of(db: &Database, ws_id: &str) -> String {
+        db.default_session_id_for_workspace(ws_id)
+            .unwrap()
+            .expect("workspace must have a default session for tests")
+    }
+
     fn make_checkpoint(
         db: &Database,
         id: &str,
@@ -1837,7 +1914,13 @@ mod tests {
         db.insert_turn_tool_activities(&[activity]).unwrap();
 
         let resolution = db
-            .finish_workflow_activity("tu_a1", "completed", None)
+            .finish_workflow_activity(
+                &session_of(&db, "w1"),
+                Some("tu_a1"),
+                None,
+                "completed",
+                None,
+            )
             .unwrap();
         assert_eq!(resolution.rows_updated, 1);
 
@@ -1875,16 +1958,30 @@ mod tests {
         bash.agent_task_id = Some("task_bash".into());
         db.insert_turn_tool_activities(&[wf, bash]).unwrap();
 
+        let session = session_of(&db, "w1");
         assert_eq!(
-            db.find_workflow_activity_by_task_id("w2lwlmfps").unwrap(),
-            Some("tu_a1".to_string())
+            db.find_workflow_activity_by_task_id(&session, "w2lwlmfps")
+                .unwrap(),
+            Some("a1".to_string()),
+            "resolves to the activity row id"
         );
         assert_eq!(
-            db.find_workflow_activity_by_task_id("task_bash").unwrap(),
+            db.find_workflow_activity_by_task_id(&session, "task_bash")
+                .unwrap(),
             None,
             "non-Workflow rows are out of scope"
         );
-        assert_eq!(db.find_workflow_activity_by_task_id("nope").unwrap(), None);
+        assert_eq!(
+            db.find_workflow_activity_by_task_id(&session, "nope")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            db.find_workflow_activity_by_task_id("some-other-session", "w2lwlmfps")
+                .unwrap(),
+            None,
+            "another session's completion must not resolve this row"
+        );
     }
 
     /// A run that ends without ever reporting agents still has to resolve its
@@ -1901,9 +1998,15 @@ mod tests {
         db.insert_turn_tool_activities(&[activity]).unwrap();
 
         assert_eq!(
-            db.finish_workflow_activity("tu_a1", "failed", None)
-                .unwrap()
-                .rows_updated,
+            db.finish_workflow_activity(
+                &session_of(&db, "w1"),
+                Some("tu_a1"),
+                None,
+                "failed",
+                None
+            )
+            .unwrap()
+            .rows_updated,
             1
         );
         let turns = db.list_completed_turns("w1").unwrap();
@@ -1929,7 +2032,13 @@ mod tests {
         db.insert_turn_tool_activities(&[bash]).unwrap();
 
         let resolution = db
-            .finish_workflow_activity("tu_a1", "completed", None)
+            .finish_workflow_activity(
+                &session_of(&db, "w1"),
+                Some("tu_a1"),
+                None,
+                "completed",
+                None,
+            )
             .unwrap();
         assert_eq!(resolution.rows_updated, 0, "Bash row is out of scope");
         assert_eq!(resolution.tree_json, None);
@@ -1940,9 +2049,15 @@ mod tests {
         );
 
         assert_eq!(
-            db.finish_workflow_activity("tu_missing", "completed", None)
-                .unwrap()
-                .rows_updated,
+            db.finish_workflow_activity(
+                &session_of(&db, "w1"),
+                Some("tu_missing"),
+                None,
+                "completed",
+                None
+            )
+            .unwrap()
+            .rows_updated,
             0
         );
     }
@@ -1971,7 +2086,13 @@ mod tests {
         db.insert_turn_tool_activities(&[wf, collided]).unwrap();
 
         let resolution = db
-            .finish_workflow_activity("tu_a1", "completed", None)
+            .finish_workflow_activity(
+                &session_of(&db, "w1"),
+                Some("tu_a1"),
+                None,
+                "completed",
+                None,
+            )
             .unwrap();
         assert_eq!(
             resolution.rows_updated, 1,
@@ -1993,6 +2114,102 @@ mod tests {
             by_tool("Bash").as_deref(),
             Some("running"),
             "the colliding non-Workflow row must be left alone"
+        );
+    }
+
+    /// Forking copies `tool_use_id` and `agent_task_id` verbatim into the
+    /// fork's own rows (`crate::fork`), so neither id names a single activity.
+    /// A completion in one session must resolve that session's row and leave
+    /// the fork's copied history alone — otherwise `rows_updated` and the
+    /// returned tree stop describing one activity, and the tree broadcast to
+    /// the UI can come off the wrong row entirely.
+    #[test]
+    fn test_finish_workflow_activity_is_scoped_to_the_owning_session() {
+        let db = setup_db_with_workspace();
+        let source_session = session_of(&db, "w1");
+        let fork_session = db.create_chat_session("w1").unwrap().id;
+
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        // The fork's checkpoint, hanging off its own session.
+        let mut fork_cp = make_checkpoint(&db, "cp2", "w1", "m1", 1);
+        fork_cp.chat_session_id = fork_session.clone();
+        db.insert_checkpoint(&fork_cp).unwrap();
+
+        let mut source = make_tool_activity("a1", "cp1", "Workflow", 0);
+        source.agent_task_id = Some("w2lwlmfps".into());
+        source.agent_status = Some("running".into());
+        // What `fork::copy_checkpoints` produces: a new row id, the same
+        // `tool_use_id` and `agent_task_id`.
+        let mut forked = make_tool_activity("a2", "cp2", "Workflow", 0);
+        forked.tool_use_id = "tu_a1".into();
+        forked.agent_task_id = Some("w2lwlmfps".into());
+        forked.agent_status = Some("running".into());
+        db.insert_turn_tool_activities(&[source, forked]).unwrap();
+
+        let resolution = db
+            .finish_workflow_activity(&source_session, Some("tu_a1"), None, "completed", None)
+            .unwrap();
+        assert_eq!(resolution.rows_updated, 1, "exactly one activity");
+        assert_eq!(resolution.tool_use_id.as_deref(), Some("tu_a1"));
+
+        let status_of = |id: &str| {
+            db.list_completed_turns("w1")
+                .unwrap()
+                .iter()
+                .flat_map(|t| t.activities.clone())
+                .find(|a| a.id == id)
+                .unwrap()
+                .agent_status
+                .clone()
+        };
+        assert_eq!(status_of("a1").as_deref(), Some("completed"));
+        assert_eq!(
+            status_of("a2").as_deref(),
+            Some("running"),
+            "the fork's copied history must be left alone"
+        );
+    }
+
+    /// The `task_id` fallback runs when a notification names its task but not
+    /// the originating tool use, and must be session-scoped for the same
+    /// reason.
+    #[test]
+    fn test_finish_workflow_activity_falls_back_to_task_id_within_the_session() {
+        let db = setup_db_with_workspace();
+        let session = session_of(&db, "w1");
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let mut wf = make_tool_activity("a1", "cp1", "Workflow", 0);
+        wf.agent_task_id = Some("w2lwlmfps".into());
+        wf.agent_status = Some("running".into());
+        db.insert_turn_tool_activities(&[wf]).unwrap();
+
+        let resolution = db
+            .finish_workflow_activity(&session, None, Some("w2lwlmfps"), "completed", None)
+            .unwrap();
+        assert_eq!(resolution.rows_updated, 1);
+        // The caller forwards this to the UI, which keys on the tool use — so
+        // it has to be the resolved id, not the one the notification carried.
+        assert_eq!(resolution.tool_use_id.as_deref(), Some("tu_a1"));
+
+        // A completion for a task belonging to some other session resolves
+        // nothing here.
+        assert_eq!(
+            db.finish_workflow_activity(
+                "other-session",
+                None,
+                Some("w2lwlmfps"),
+                "completed",
+                None
+            )
+            .unwrap()
+            .rows_updated,
+            0
         );
     }
 
