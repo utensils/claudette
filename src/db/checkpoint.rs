@@ -2395,9 +2395,17 @@ mod tests {
         assert_eq!(states, vec!["done", "done", "error"]);
     }
 
-    /// One unreadable row must not strand every pill behind it. The sweep
-    /// logs and continues rather than `?`-propagating, which would abort with
-    /// the earlier rows already committed.
+    /// One row that cannot be written must not strand every pill behind it.
+    /// The sweep logs and continues rather than `?`-propagating, which would
+    /// abort with the earlier rows already committed.
+    ///
+    /// The failure has to be a real write error, which is fiddlier than it
+    /// looks: `finish_workflow_activity_row` deliberately *tolerates* an
+    /// unparseable tree (it leaves the column alone and still records the
+    /// status), so seeding malformed JSON proves nothing — that row succeeds
+    /// and the test would pass against `?` propagation too. A trigger that
+    /// aborts the UPDATE for one specific row is the smallest thing that
+    /// actually makes `finish_workflow_activity_row` return `Err`.
     #[test]
     fn test_resolve_orphaned_workflow_activities_survives_a_bad_row() {
         let db = setup_db_with_workspace();
@@ -2405,40 +2413,84 @@ mod tests {
             .unwrap();
         db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
             .unwrap();
-        // A tree that cannot be parsed sits between two ordinary wedged rows.
-        // `finish_workflow_activity_row` tolerates it (the tree is left alone
-        // and the status still lands), so this also pins that it does not
-        // become an error in future.
+
         let mut first = make_tool_activity("a1", "cp1", "Workflow", 0);
         first.agent_status = Some("running".into());
         let mut middle = make_tool_activity("a2", "cp1", "Workflow", 1);
         middle.agent_status = Some("running".into());
-        middle.workflow_progress_json = "{ not a tree".into();
         let mut last = make_tool_activity("a3", "cp1", "Workflow", 2);
         last.agent_status = Some("running".into());
         db.insert_turn_tool_activities(&[first, middle, last])
             .unwrap();
 
-        assert_eq!(db.resolve_orphaned_workflow_activities().unwrap(), 3);
+        // Make every UPDATE of `a2` fail. The sweep does not order its rows,
+        // so this covers the poisoned row landing first, last, or in between.
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_a2 BEFORE UPDATE ON turn_tool_activities
+                   WHEN NEW.id = 'a2'
+                   BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END;",
+            )
+            .unwrap();
+
+        assert_eq!(
+            db.resolve_orphaned_workflow_activities().unwrap(),
+            2,
+            "the two writable rows are resolved even though one row errored"
+        );
+
+        let status_of = |id: &str| {
+            db.list_completed_turns("w1")
+                .unwrap()
+                .iter()
+                .flat_map(|t| t.activities.clone())
+                .find(|a| a.id == id)
+                .unwrap()
+                .agent_status
+                .clone()
+        };
+        assert_eq!(status_of("a1").as_deref(), Some("stopped"));
+        assert_eq!(status_of("a3").as_deref(), Some("stopped"));
+        assert_eq!(
+            status_of("a2").as_deref(),
+            Some("running"),
+            "the row that could not be written is left as it was"
+        );
+
+        // Idempotent and self-healing: with the fault cleared, the next boot
+        // picks up exactly the row that was missed.
+        db.conn.execute_batch("DROP TRIGGER reject_a2;").unwrap();
+        assert_eq!(db.resolve_orphaned_workflow_activities().unwrap(), 1);
+        assert_eq!(status_of("a2").as_deref(), Some("stopped"));
+    }
+
+    /// An unreadable tree is a *tolerated* condition, not an error: the status
+    /// still lands and the column is left exactly as it was rather than being
+    /// blanked. Split out from the sweep-recovery test above, which used to
+    /// conflate the two and proved neither.
+    #[test]
+    fn test_resolve_orphaned_workflow_activities_tolerates_an_unreadable_tree() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let mut wedged = make_tool_activity("a1", "cp1", "Workflow", 0);
+        wedged.agent_status = Some("running".into());
+        wedged.workflow_progress_json = "{ not a tree".into();
+        db.insert_turn_tool_activities(&[wedged]).unwrap();
+
+        assert_eq!(db.resolve_orphaned_workflow_activities().unwrap(), 1);
 
         let turns = db.list_completed_turns("w1").unwrap();
-        for activity in &turns[0].activities {
-            assert_eq!(
-                activity.agent_status.as_deref(),
-                Some("stopped"),
-                "row {} must be resolved",
-                activity.id
-            );
-        }
-        // The unreadable tree is preserved rather than blanked.
-        let middle_tree = turns[0]
-            .activities
-            .iter()
-            .find(|a| a.id == "a2")
-            .unwrap()
-            .workflow_progress_json
-            .clone();
-        assert_eq!(middle_tree, "{ not a tree");
+        assert_eq!(
+            turns[0].activities[0].agent_status.as_deref(),
+            Some("stopped")
+        );
+        assert_eq!(
+            turns[0].activities[0].workflow_progress_json, "{ not a tree",
+            "an unreadable tree is preserved, never replaced with []"
+        );
     }
 
     /// The hydrate-time sweep is the boot sweep narrowed to one session, so a

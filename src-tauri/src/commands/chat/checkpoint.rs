@@ -349,6 +349,32 @@ pub async fn update_turn_tool_activity_progress(
     Ok(())
 }
 
+/// Whether a chat session still owns a CLI process that could be running
+/// workflows for it.
+///
+/// **`persistent_session` is the signal that matters, not `active_pid`.**
+/// `active_pid` is cleared at the end of every turn while the persistent
+/// process stays alive for the next one, so a backgrounded workflow spends
+/// almost its entire life with `active_pid == None`. Reading only that would
+/// declare a live run dead and blank its pill — the exact hazard the boot
+/// sweep's process-lifetime gate exists to avoid. `persistent_session` is the
+/// process itself, and is what the background-task wake already trusts to
+/// decide whether a task can still report.
+///
+/// `active_pid` is still consulted, as a strictly-narrowing belt: it can only
+/// ever add "alive", never remove it. Desktop chat always runs through a
+/// persistent session today, so the two agree in practice — but if any path
+/// ever spawns a turn without one, a workflow launched inside it is live and
+/// must not be swept.
+///
+/// Generic over the session handle purely so this is testable. The real
+/// `AgentSession` wraps a live child process and cannot be constructed in a
+/// unit test, while the decision here is about *which fields are consulted* —
+/// nothing inside the handle is read.
+fn session_owns_live_process<S>(active_pid: Option<u32>, persistent_session: Option<&S>) -> bool {
+    active_pid.is_some() || persistent_session.is_some()
+}
+
 /// Resolve `Workflow` activities this session left mid-run, when the session
 /// has no CLI process that could still own them.
 ///
@@ -356,14 +382,8 @@ pub async fn update_turn_tool_activity_progress(
 /// survives a webview reload — the user has to fully quit and relaunch. This
 /// gives the frontend a way to re-run the sweep on session hydrate.
 ///
-/// **`persistent_session`, not `active_pid`, is the liveness signal.**
-/// `active_pid` is cleared at the end of every turn while the persistent
-/// process stays alive for the next one, so a backgrounded workflow spends
-/// almost its whole life with `active_pid == None`. Sweeping on that would
-/// blank the pill of a run that is genuinely in flight — the exact hazard the
-/// boot sweep's process-lifetime gate exists to avoid. `persistent_session` is
-/// the process itself, and is what the background-task wake already trusts to
-/// decide whether a task can still report.
+/// Liveness is [`session_owns_live_process`]; see there for why `active_pid`
+/// alone is not the signal.
 ///
 /// Returns the number of rows resolved, so the caller can skip a reload when
 /// there was nothing to fix.
@@ -374,9 +394,11 @@ pub async fn resolve_stale_workflow_activities(
 ) -> Result<usize, String> {
     {
         let agents = state.agents.read().await;
-        if let Some(session) = agents.get(&session_id)
-            && session.persistent_session.is_some()
-        {
+        let session = agents.get(&session_id);
+        if session_owns_live_process(
+            session.and_then(|s| s.active_pid),
+            session.and_then(|s| s.persistent_session.as_ref()),
+        ) {
             // A live process can still be running workflows for this session.
             return Ok(0);
         }
@@ -404,4 +426,56 @@ pub async fn load_completed_turns(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.list_completed_turns_for_session(&session_id)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_owns_live_process;
+
+    /// Stand-in for `AgentSession`, which wraps a live child process.
+    const HANDLE: &() = &();
+
+    /// The case the whole gate exists for. A backgrounded workflow spends
+    /// almost its entire life here: the launching turn ended (so `active_pid`
+    /// was cleared) while the persistent process — and the run inside it —
+    /// carries on. Sweeping this session would blank a live run's pill.
+    #[test]
+    fn a_persistent_session_between_turns_is_live() {
+        assert!(session_owns_live_process(None, Some(HANDLE)));
+    }
+
+    /// Guards the regression Copilot flagged: narrowing this back to
+    /// `active_pid` would pass every other test here while stopping genuinely
+    /// live background workflows.
+    #[test]
+    fn active_pid_alone_is_not_what_makes_a_session_live() {
+        // Reading only `active_pid` would answer `false` above and `true`
+        // here. Both answers are wrong for the case that matters.
+        assert!(session_owns_live_process(None, Some(HANDLE)));
+        // ...and a turn running without a persistent session is still live,
+        // so the check can only ever widen "alive", never narrow it.
+        assert!(session_owns_live_process(Some(4242), None::<&()>));
+    }
+
+    #[test]
+    fn a_session_with_neither_is_sweepable() {
+        assert!(!session_owns_live_process(None, None::<&()>));
+    }
+
+    /// No entry in `AppState.agents` at all — the common case after a restart,
+    /// and exactly the state a wedged row is left in. Modelled the way the
+    /// call site derives its arguments, so a session the map has never heard
+    /// of cannot accidentally read as live.
+    #[test]
+    fn an_unknown_session_is_sweepable() {
+        struct Session {
+            active_pid: Option<u32>,
+            persistent_session: Option<()>,
+        }
+        let session: Option<&Session> = None;
+        assert!(!session_owns_live_process(
+            session.and_then(|s| s.active_pid),
+            session.and_then(|s| s.persistent_session.as_ref()),
+        ));
+    }
 }
