@@ -138,6 +138,8 @@ If you'd rather isolate them, set `CLAUDETTE_LOG_DIR` to a per-instance path bef
 
 On startup, Claudette also scans `${TMPDIR}/claudette-dev/*.json` (the discovery files `scripts/dev.sh` writes) and emits a `WARN` if another live PID is already running against the same DB path. The warning fires once at boot and explains exactly why it can corrupt persisted state — useful when an old instance lingers and you didn't notice.
 
+Each discovery file records the effective `CLAUDETTE_DATA_DIR` for its launch, so an instance started with `--new` or `--clone` is recognised as isolated and neither warns nor blocks database maintenance the way a genuine co-tenant does. The launcher shell that wrote the file is excluded from the scan as well — it outlives the app it starts, and its PID is the one in the filename.
+
 ## Update boot-health rollback
 
 After an in-app update, Claudette starts the new build on a short probation window (20 s by default). During that window Claudette records boot-stage breadcrumbs in the probation sentinel: process start, webview creation, React mount, initial workspace-data loading, and any initial-data load error. The React app sends the final boot heartbeat after the first commit past the loader (`viewStateHydrated` is true and `loadInitialData` resolved). If that heartbeat never arrives, Claudette treats the update as failed to start and tries to restore the previous self-contained install.

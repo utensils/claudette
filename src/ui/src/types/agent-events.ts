@@ -171,5 +171,14 @@ export interface UserEventMessage {
 
 export type UserContentBlock =
   | { type: "text"; text: string }
-  | { type: "tool_result"; tool_use_id: string; content: unknown }
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: unknown;
+      /** Set by the API when the tool call itself failed. Absent on success —
+       *  `undefined` and `false` both mean "no error", and neither may be
+       *  read as one. Mirrors `UserContentBlock::ToolResult` in
+       *  `src/agent/types.rs`. */
+      is_error?: boolean | null;
+    }
   | { type: "Unknown" };

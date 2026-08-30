@@ -1295,6 +1295,7 @@ mod tests {
                 content: UserMessageContent::Blocks(vec![UserContentBlock::ToolResult {
                     tool_use_id: "file-1".to_string(),
                     content: json!({"status": "completed"}),
+                    is_error: None,
                 }]),
             },
             uuid: None,

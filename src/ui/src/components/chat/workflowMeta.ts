@@ -151,3 +151,34 @@ export function isWorkflowResume(inputJson: string): boolean {
   const input = parseInput(inputJson);
   return !!input && nonEmptyString(input.resumeFromRunId) !== null;
 }
+
+/** Prefix of the `Workflow` tool's background-launch announcement. Mirrors
+ *  `parse_workflow_task_binding` in `src/agent/background.rs`, which Rust
+ *  uses to arm the background-task wake off the same string. */
+const WORKFLOW_LAUNCH_PREFIX = "Workflow launched in background. Task ID:";
+
+/**
+ * The task id a `Workflow` tool result announces, or null when it announces
+ * none.
+ *
+ * Null is the load-bearing answer: a `Workflow` call that errored, was
+ * rejected, or returned without starting anything emits no
+ * `task_notification` either, so nothing downstream would ever resolve it and
+ * its status pill would read `· starting` until the app restarted. Absence of
+ * a task id is the positive signal that there is no run to wait for.
+ *
+ * Deliberately the same string contract Rust already depends on rather than a
+ * looser heuristic: `parse_workflow_task_binding` arms the wake off this exact
+ * announcement, so if the wording ever changes, the wake breaks in the same
+ * release this does — one failure to notice, not two.
+ */
+export function workflowLaunchTaskId(resultText: string): string | null {
+  const at = resultText.indexOf(WORKFLOW_LAUNCH_PREFIX);
+  if (at < 0) return null;
+  const rest = resultText.slice(at + WORKFLOW_LAUNCH_PREFIX.length).trimStart();
+  // First whitespace-delimited token, minus a trailing sentence period —
+  // the announcement appears both as `Task ID: w1\nSummary: …` and as
+  // `Task ID: w1.`
+  const id = (rest.split(/\s/)[0] ?? "").replace(/\.+$/, "");
+  return id || null;
+}

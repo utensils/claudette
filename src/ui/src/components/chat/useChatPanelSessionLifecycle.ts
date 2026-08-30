@@ -15,6 +15,7 @@ import {
   loadAgentConclusionsForSession,
   loadChatHistoryPage,
   loadCompletedTurns,
+  resolveStaleWorkflowActivities,
   sendRemoteCommand,
 } from "../../services/tauri";
 import type { ChatAttachment, ChatMessage, ChatPaginationState } from "../../types";
@@ -210,7 +211,22 @@ export function useChatPanelSessionLifecycle({
           ).map((turn) => turn.id),
         });
         if (!sessionRunning) {
-          loadCompletedTurns(sessionId)
+          // Sweep before reading, so the turns we hydrate already carry the
+          // resolved status. A `Workflow` row wedged by a previous app
+          // session otherwise renders its status pill again on every load —
+          // the boot sweep is the only other thing that clears it, so a
+          // webview reload would not. Rust re-checks liveness and no-ops when
+          // the session still has a CLI process; a failure here is not worth
+          // blocking the transcript over, so it degrades to "load anyway".
+          resolveStaleWorkflowActivities(sessionId)
+            .catch((e) => {
+              debugChat("ChatPanel", "resolve-stale-workflows:failed", {
+                sessionId,
+                error: String(e),
+              });
+              return 0;
+            })
+            .then(() => loadCompletedTurns(sessionId))
             .then((turnData) => {
               if (cancelled || !isCurrentHistoryLoad()) return;
               const turns = reconstructCompletedTurns(

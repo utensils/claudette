@@ -66,16 +66,38 @@ fn chrono_iso_now() -> String {
 /// *release* builds against one database produce an empty result here. An
 /// empty return means "no peer we can see", not "no peer".
 fn live_peer_instances(db_path: &Path) -> Vec<PeerInstance> {
-    peer_instances_in(&std::env::temp_dir().join("claudette-dev"), db_path)
+    peer_instances_in(
+        &std::env::temp_dir().join("claudette-dev"),
+        db_path,
+        dev_launcher_pid(),
+    )
 }
 
-/// The scan itself, with the discovery directory injected.
+/// PID of the `scripts/dev.sh` shell that launched us, when there is one.
+///
+/// That shell writes the discovery file, stays alive for the whole session,
+/// and its PID is what the file records — so without excluding it, a dev build
+/// counts its own launcher as a live peer sharing its database and skips its
+/// own orphaned-workflow sweep. The launcher exports this so we can tell "my
+/// launcher" from "somebody else's instance"; the two are indistinguishable
+/// from the file's contents alone, since they legitimately share a data dir.
+fn dev_launcher_pid() -> Option<u32> {
+    std::env::var("CLAUDETTE_DEV_LAUNCHER_PID")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// The scan itself, with the discovery directory and launcher PID injected.
 ///
 /// Split out from [`live_peer_instances`] so it can be tested against a
 /// fixture directory: this result now gates a database mutation (the
 /// orphaned-workflow sweep), not just a log line, so a false "no peers"
-/// has consequences beyond a missing warning.
-fn peer_instances_in(dir: &Path, db_path: &Path) -> Vec<PeerInstance> {
+/// has consequences beyond a missing warning. The launcher PID is a parameter
+/// rather than an environment read for the same reason — a test must be able
+/// to set it without mutating process-global state.
+fn peer_instances_in(dir: &Path, db_path: &Path, launcher_pid: Option<u32>) -> Vec<PeerInstance> {
     use std::fs;
 
     let Ok(entries) = fs::read_dir(dir) else {
@@ -100,7 +122,7 @@ fn peer_instances_in(dir: &Path, db_path: &Path) -> Vec<PeerInstance> {
             continue;
         };
         let pid = pid as u32;
-        if pid == our_pid {
+        if pid == our_pid || Some(pid) == launcher_pid {
             continue;
         }
         if !is_pid_alive(pid) {
@@ -139,10 +161,12 @@ struct PeerInstance {
 fn warn_if_concurrent_dev_instance(peers: &[PeerInstance], db_path: &Path) {
     let our_pid = std::process::id();
     for peer in peers {
-        // Modern `scripts/dev.sh` discovery files include the effective
-        // `CLAUDETTE_DATA_DIR`, so we skip peers that are clearly isolated.
-        // Older discovery files do not have it; keep warning for those because
-        // legacy dev launches shared the default DB by construction.
+        // `scripts/dev.sh` records the effective `CLAUDETTE_DATA_DIR` in its
+        // discovery file, so `peer_instances_in` has already dropped peers
+        // that are clearly isolated (a `--new` / `--clone` sandbox) and the
+        // launcher shell itself. Discovery files written before that key
+        // existed do not carry it; those still count, because legacy dev
+        // launches shared the default DB by construction.
         tracing::warn!(
             target: "claudette::startup",
             our_pid,
@@ -1204,6 +1228,7 @@ fn main() {
             commands::chat::checkpoint::clear_conversation,
             commands::chat::checkpoint::save_turn_tool_activities,
             commands::chat::checkpoint::update_turn_tool_activity_progress,
+            commands::chat::checkpoint::resolve_stale_workflow_activities,
             commands::chat::checkpoint::load_completed_turns,
             commands::chat::session::list_chat_sessions,
             commands::chat::session::get_chat_session,
@@ -1778,7 +1803,7 @@ mod tests {
                 &peer_json(ALIVE_NOT_US, data.path()),
             );
 
-            let peers = peer_instances_in(discovery.path(), &db_path);
+            let peers = peer_instances_in(discovery.path(), &db_path, None);
             assert_eq!(peers.len(), 1);
             assert_eq!(peers[0].pid, ALIVE_NOT_US);
         }
@@ -1798,7 +1823,7 @@ mod tests {
                 &peer_json(ALIVE_NOT_US, theirs.path()),
             );
 
-            assert!(peer_instances_in(discovery.path(), &db_path).is_empty());
+            assert!(peer_instances_in(discovery.path(), &db_path, None).is_empty());
         }
 
         /// Legacy discovery files predate `claudette_data_dir` and shared the
@@ -1815,7 +1840,7 @@ mod tests {
                 &format!(r#"{{"pid":{ALIVE_NOT_US},"cwd":"/tmp/peer"}}"#),
             );
 
-            assert_eq!(peer_instances_in(discovery.path(), &db_path).len(), 1);
+            assert_eq!(peer_instances_in(discovery.path(), &db_path, None).len(), 1);
         }
 
         /// Our own discovery file is always present once `dev.sh` launched
@@ -1831,7 +1856,70 @@ mod tests {
                 &peer_json(std::process::id(), data.path()),
             );
 
-            assert!(peer_instances_in(discovery.path(), &db_path).is_empty());
+            assert!(peer_instances_in(discovery.path(), &db_path, None).is_empty());
+        }
+
+        /// The launcher shell outlives the app it execs and its PID is what
+        /// the discovery file records, so it is always present and always
+        /// shares our data dir. Counting it made every `dev.sh` run skip its
+        /// own sweep — the bug the data-dir key alone could not fix, because
+        /// the launcher legitimately points at the same database we do.
+        #[test]
+        fn ignores_the_dev_launcher_that_started_us() {
+            let discovery = tempdir().unwrap();
+            let data = tempdir().unwrap();
+            let db_path = data.path().join("claudette.db");
+            write_peer(
+                discovery.path(),
+                "launcher.json",
+                &peer_json(ALIVE_NOT_US, data.path()),
+            );
+
+            assert!(
+                peer_instances_in(discovery.path(), &db_path, Some(ALIVE_NOT_US)).is_empty(),
+                "our own launcher is not a peer"
+            );
+            // Same file, no launcher PID exported: still a peer. Guards
+            // against the exclusion being unconditional.
+            assert_eq!(peer_instances_in(discovery.path(), &db_path, None).len(), 1);
+        }
+
+        /// The producer/consumer contract this whole gate rests on.
+        ///
+        /// `claudette_data_dir` was read here long before `scripts/dev.sh`
+        /// wrote it, so every peer read as "shares our database" and the
+        /// sweep never ran under a dev launch. The fixture below is the exact
+        /// JSON shape the launcher now emits, so the two cannot drift apart
+        /// again without this failing.
+        #[test]
+        fn parses_the_discovery_file_scripts_dev_sh_actually_writes() {
+            let discovery = tempdir().unwrap();
+            let ours = tempdir().unwrap();
+            let theirs = tempdir().unwrap();
+            let db_path = ours.path().join("claudette.db");
+            let launcher_shape = |data_dir: &Path| {
+                format!(
+                    r#"{{"pid":{ALIVE_NOT_US},"debug_port":19432,"vite_port":14253,"cwd":"/repo","branch":"main","started_at":1750000000,"claudette_data_dir":"{}"}}"#,
+                    data_dir.display()
+                )
+            };
+
+            write_peer(discovery.path(), "peer.json", &launcher_shape(ours.path()));
+            assert_eq!(
+                peer_instances_in(discovery.path(), &db_path, None).len(),
+                1,
+                "a peer on our database must be reported"
+            );
+
+            write_peer(
+                discovery.path(),
+                "peer.json",
+                &launcher_shape(theirs.path()),
+            );
+            assert!(
+                peer_instances_in(discovery.path(), &db_path, None).is_empty(),
+                "a `--new` sandbox peer shares no database and must not gate the sweep"
+            );
         }
 
         #[test]
@@ -1843,7 +1931,7 @@ mod tests {
             write_peer(discovery.path(), "broken.json", "{ this is not json");
             write_peer(discovery.path(), "no-pid.json", r#"{"cwd":"/tmp/peer"}"#);
 
-            assert!(peer_instances_in(discovery.path(), &db_path).is_empty());
+            assert!(peer_instances_in(discovery.path(), &db_path, None).is_empty());
         }
 
         /// The common case by far — no dev launcher has ever run, so the
@@ -1854,7 +1942,8 @@ mod tests {
             let db_path = data.path().join("claudette.db");
 
             assert!(
-                peer_instances_in(Path::new("/nonexistent/claudette-dev"), &db_path).is_empty()
+                peer_instances_in(Path::new("/nonexistent/claudette-dev"), &db_path, None)
+                    .is_empty()
             );
         }
     }

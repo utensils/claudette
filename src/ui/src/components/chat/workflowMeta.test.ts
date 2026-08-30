@@ -3,6 +3,7 @@ import {
   isWorkflowResume,
   workflowDescription,
   workflowDisplayName,
+  workflowLaunchTaskId,
 } from "./workflowMeta";
 
 /** Shape captured from a real Workflow tool_use. */
@@ -131,5 +132,58 @@ describe("isWorkflowResume", () => {
   it("is false for a fresh run", () => {
     expect(isWorkflowResume(input({ script: INLINE_SCRIPT }))).toBe(false);
     expect(isWorkflowResume("not json")).toBe(false);
+  });
+});
+
+describe("workflowLaunchTaskId", () => {
+  // Absence of a task id is what marks a run as never started, so the
+  // positive cases have to be exactly right: a false negative resolves a live
+  // run about a second after launch and kills its status pill.
+  it("reads the id out of the launch announcement", () => {
+    expect(
+      workflowLaunchTaskId(
+        "Workflow launched in background. Task ID: w998sx0z2\nSummary: investigate the thing\nTranscript dir: /tmp/x",
+      ),
+    ).toBe("w998sx0z2");
+  });
+
+  it("strips a trailing sentence period", () => {
+    expect(
+      workflowLaunchTaskId("Workflow launched in background. Task ID: wf_abc123."),
+    ).toBe("wf_abc123");
+  });
+
+  it("finds the announcement embedded in surrounding text", () => {
+    expect(
+      workflowLaunchTaskId(
+        "Started.\nWorkflow launched in background. Task ID: w1\nRun ID: wf_x",
+      ),
+    ).toBe("w1");
+  });
+
+  it("returns null when no task was launched", () => {
+    expect(workflowLaunchTaskId("")).toBeNull();
+    expect(workflowLaunchTaskId("Error: script failed to parse")).toBeNull();
+    expect(workflowLaunchTaskId("Workflow launched in background. Task ID:")).toBeNull();
+    // A background Bash binding must not be mistaken for a workflow launch.
+    expect(
+      workflowLaunchTaskId(
+        "Command running in background with ID: task_1. Output is being written to: /tmp/o",
+      ),
+    ).toBeNull();
+  });
+
+  // Mirrors `parses_workflow_task_binding` in src/agent/background.rs — the
+  // two read the same announcement, and Rust arms the background-task wake
+  // off it. Drifting apart would break the wake and this in one release.
+  it("agrees with the Rust parser's fixtures", () => {
+    expect(
+      workflowLaunchTaskId(
+        "Workflow launched in background. Task ID: w998sx0z2\nSummary: investigate the thing\nTranscript dir: /tmp/x",
+      ),
+    ).toBe("w998sx0z2");
+    expect(
+      workflowLaunchTaskId("Workflow launched in background. Task ID: wf_abc123."),
+    ).toBe("wf_abc123");
   });
 });

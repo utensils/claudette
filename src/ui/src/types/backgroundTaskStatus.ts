@@ -70,3 +70,14 @@ export function isTerminalBackgroundTaskStatus(
  * any read site and reads correctly in the card's status line.
  */
 export const REAPED_BACKGROUND_TASK_STATUS = "stopped";
+
+/**
+ * Status recorded for a background task whose tool call reported an error
+ * instead of launching anything.
+ *
+ * Distinct from [`REAPED_BACKGROUND_TASK_STATUS`] so the card can say the run
+ * failed rather than that it was stopped — both are terminal, but only one of
+ * them is the user's doing. Also from the CLI's own `task_notification` enum,
+ * so it needs no special-casing at any read site.
+ */
+export const FAILED_BACKGROUND_TASK_STATUS = "failed";

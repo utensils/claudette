@@ -467,6 +467,11 @@ pub enum UserContentBlock {
         tool_use_id: String,
         #[serde(default)]
         content: serde_json::Value,
+        /// Set by the API when the tool call itself failed. Optional because
+        /// a successful result omits it entirely — `None` and `Some(false)`
+        /// both mean "no error", and neither may be read as one.
+        #[serde(default)]
+        is_error: Option<bool>,
     },
 
     #[serde(other)]
@@ -886,6 +891,7 @@ mod tests {
                     UserContentBlock::ToolResult {
                         tool_use_id,
                         content,
+                        ..
                     } => {
                         assert_eq!(tool_use_id, "tu_01");
                         assert_eq!(content.as_str().unwrap(), "ok");

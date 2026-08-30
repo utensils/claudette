@@ -316,23 +316,10 @@ branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 cwd="$(pwd)"
 started="$(date +%s)"
 
-# Build JSON via python3's json module so paths or branch names containing
-# quotes, backslashes, or newlines don't break the discovery file. `python3`
-# is already an explicit prerequisite of the debug eval helper, so making
-# the devshell depend on it too is consistent.
-python3 -c '
-import json, sys
-out, pid, debug_port, vite_port, started, cwd, branch = sys.argv[1:8]
-with open(out, "w") as f:
-    json.dump({
-        "pid": int(pid),
-        "debug_port": int(debug_port),
-        "vite_port": int(vite_port),
-        "cwd": cwd,
-        "branch": branch,
-        "started_at": int(started),
-    }, f)
-' "$discovery_file" "$$" "$debug_port" "$vite_port" "$started" "$cwd" "$branch"
+# The discovery file itself is written further down, once the --new / --clone
+# sandbox blocks have finalized CLAUDETTE_DATA_DIR. It records that path, and
+# recording the pre-sandbox value would tell the app the exact opposite of the
+# truth about which database this instance is on.
 
 sandbox_root=""
 
@@ -556,6 +543,48 @@ if (( clone_session )); then
   echo "[dev.sh] Note: cloned workspace .git files still point at the real repo's worktree admin dir; dev-app git writes will land in the real repo." >&2
   echo "[dev.sh] Note: claudette.db was rsync'd raw — quit the release app first if you need a guaranteed-consistent DB snapshot." >&2
 fi
+
+# The effective data dir for this launch: the sandbox path under --new /
+# --clone, otherwise the OS default that `src/path.rs` resolves. Mirrors the
+# resolution in the --clone block above.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  discovery_default_data_dir="$HOME/Library/Application Support/claudette"
+else
+  discovery_default_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/claudette"
+fi
+effective_data_dir="${CLAUDETTE_DATA_DIR:-$discovery_default_data_dir}"
+
+# `claudette_data_dir` is what lets the app tell an isolated dev instance from
+# one actually sharing its database — `peer_instances_in` in
+# src-tauri/src/main.rs skips peers whose data dir differs from its own, and
+# that gate guards the orphaned-workflow sweep. The key was consumed there long
+# before anything wrote it, so every peer read as "shares our database" and the
+# sweep was skipped even under a fully isolated `--new`.
+#
+# Built via python3's json module so paths or branch names containing quotes,
+# backslashes, or newlines don't break the file. `python3` is already an
+# explicit prerequisite of the debug eval helper.
+python3 -c '
+import json, sys
+out, pid, debug_port, vite_port, started, cwd, branch, data_dir = sys.argv[1:9]
+with open(out, "w") as f:
+    json.dump({
+        "pid": int(pid),
+        "debug_port": int(debug_port),
+        "vite_port": int(vite_port),
+        "cwd": cwd,
+        "branch": branch,
+        "started_at": int(started),
+        "claudette_data_dir": data_dir,
+    }, f)
+' "$discovery_file" "$$" "$debug_port" "$vite_port" "$started" "$cwd" "$branch" \
+  "$effective_data_dir"
+
+# This shell outlives the app it is about to exec, and its PID is in the file
+# above. Without this the app counts its own launcher as a live peer sharing
+# its database — which, before the data-dir key existed, is why every dev run
+# skipped its own sweep. Read by `live_peer_instances`.
+export CLAUDETTE_DEV_LAUNCHER_PID="$$"
 
 cleanup() {
   rm -f "$discovery_file"

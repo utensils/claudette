@@ -349,6 +349,53 @@ pub async fn update_turn_tool_activity_progress(
     Ok(())
 }
 
+/// Resolve `Workflow` activities this session left mid-run, when the session
+/// has no CLI process that could still own them.
+///
+/// The boot sweep in `main()` only runs at process start, so a wedged pill
+/// survives a webview reload — the user has to fully quit and relaunch. This
+/// gives the frontend a way to re-run the sweep on session hydrate.
+///
+/// **`persistent_session`, not `active_pid`, is the liveness signal.**
+/// `active_pid` is cleared at the end of every turn while the persistent
+/// process stays alive for the next one, so a backgrounded workflow spends
+/// almost its whole life with `active_pid == None`. Sweeping on that would
+/// blank the pill of a run that is genuinely in flight — the exact hazard the
+/// boot sweep's process-lifetime gate exists to avoid. `persistent_session` is
+/// the process itself, and is what the background-task wake already trusts to
+/// decide whether a task can still report.
+///
+/// Returns the number of rows resolved, so the caller can skip a reload when
+/// there was nothing to fix.
+#[tauri::command]
+pub async fn resolve_stale_workflow_activities(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    {
+        let agents = state.agents.read().await;
+        if let Some(session) = agents.get(&session_id)
+            && session.persistent_session.is_some()
+        {
+            // A live process can still be running workflows for this session.
+            return Ok(0);
+        }
+    }
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let resolved = db
+        .resolve_orphaned_workflow_activities_for_session(&session_id)
+        .map_err(|e| e.to_string())?;
+    if resolved > 0 {
+        tracing::info!(
+            target: "claudette::chat",
+            session_id,
+            resolved,
+            "resolved stale workflow activities for a session with no live process"
+        );
+    }
+    Ok(resolved)
+}
+
 #[tauri::command]
 pub async fn load_completed_turns(
     session_id: String,

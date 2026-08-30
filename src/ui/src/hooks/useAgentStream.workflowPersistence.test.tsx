@@ -232,6 +232,23 @@ describe("useAgentStream — workflow progress persistence", () => {
     expect(persistSpy.mock.calls[0][2]).toBe("failed");
   });
 
+  it("sends null rather than an empty tree, which would blank a good one", async () => {
+    // `[]` is truthy in JS, so a truthiness check serialized an empty tree to
+    // `"[]"` — and the column write is `COALESCE(?1, ...)`, where `"[]"` is
+    // not NULL and overwrites whatever the row already held.
+    useAppStore.setState({
+      toolActivities: {
+        [SESSION_ID]: [workflowActivity({ workflowProgress: [] })],
+      },
+    });
+    await mountHook();
+
+    await fireStream(terminalNotification());
+
+    expect(persistSpy).toHaveBeenCalledTimes(1);
+    expect(persistSpy.mock.calls[0][1]).toBeNull();
+  });
+
   it("does not persist on progress ticks — one write per run", async () => {
     useAppStore.setState({
       toolActivities: { [SESSION_ID]: [workflowActivity()] },

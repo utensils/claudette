@@ -3,8 +3,13 @@ import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
 import { findToolActivity } from "../stores/findToolActivity";
 import { collectInFlightWorkflows } from "../stores/inFlightWorkflows";
-import { REAPED_BACKGROUND_TASK_STATUS } from "../types/backgroundTaskStatus";
+import {
+  FAILED_BACKGROUND_TASK_STATUS,
+  isTerminalBackgroundTaskStatus,
+  REAPED_BACKGROUND_TASK_STATUS,
+} from "../types/backgroundTaskStatus";
 import { reconcileAgentStatesOnTerminal } from "../types/workflow";
+import { workflowLaunchTaskId } from "../components/chat/workflowMeta";
 import {
   loadChatHistory,
   saveTurnToolActivities,
@@ -133,6 +138,75 @@ function reapInFlightWorkflows(
       });
     });
   }
+}
+
+/**
+ * Resolve a `Workflow` tool call that never launched a background task.
+ *
+ * The one wedge PR 1023 could not reach. Its machinery all hangs off the
+ * terminal `task_notification`, and a `Workflow` call that errors — or
+ * returns without starting anything — emits none. The row is checkpointed
+ * with no status and an empty tree, `isInFlightWorkflow` reads a missing
+ * status as in-flight (correctly, for a run that is genuinely still
+ * starting), and the pill sits at `· starting` with no fraction. Nothing
+ * clears it but `ProcessExited` — rare, since the CLI process is persistent
+ * across turns — or the next boot sweep. In practice: until the app restarts.
+ *
+ * The `tool_result` is the signal, because it is the *only* thing the run
+ * ever emits. `workflowLaunchTaskId` returning null is the positive evidence
+ * that there is no task to wait for; a live backgrounded run announces its id
+ * here within a second of launch and must be left alone.
+ *
+ * Deliberately webview-side, and not mirrored in Rust. Rust sees this same
+ * tool result, but the activity *row* does not exist yet — the webview writes
+ * it via `save_turn_tool_activities` when the turn checkpoints, minutes later
+ * — so a Rust-side `finish_workflow_activity` would match zero rows. Marking
+ * the live activity terminal instead means the row is *born* terminal, with
+ * no second write and no ordering hazard. The usual objection to webview-side
+ * resolution ("only works when a webview is listening") does not apply: the
+ * row's existence already depends on the webview, so there is no case where
+ * Rust could have persisted this and the webview could not.
+ */
+function resolveNeverStartedWorkflow(
+  sessionId: string,
+  toolUseId: string,
+  resultText: string,
+  isError: boolean,
+  updateToolActivity: (
+    sessionId: string,
+    toolUseId: string,
+    updates: Partial<ToolActivity>,
+  ) => void,
+): void {
+  const activity = findToolActivity(useAppStore.getState(), sessionId, toolUseId);
+  if (activity?.toolName !== "Workflow") return;
+  // A run that announced a task id is alive; resolving here would kill every
+  // live pill about one second after launch and undo the whole fix.
+  if (workflowLaunchTaskId(resultText)) return;
+  // Already resolved by some other path — don't overwrite a real outcome.
+  if (isTerminalBackgroundTaskStatus(activity.agentStatus)) return;
+
+  const status = isError
+    ? FAILED_BACKGROUND_TASK_STATUS
+    : REAPED_BACKGROUND_TASK_STATUS;
+  debugChat("stream", "resolve never-started workflow", {
+    sessionId,
+    toolUseId,
+    status,
+  });
+  updateToolActivity(sessionId, toolUseId, { agentStatus: status });
+  // Belt-and-braces only. The turn has not checkpointed yet, so this matches
+  // no row today — the status reaches disk through the checkpoint write,
+  // which copies `agentStatus` onto the row it inserts. The call still covers
+  // a replayed result arriving after its turn was already saved.
+  void updateTurnToolActivityProgress(toolUseId, null, status, sessionId).catch(
+    (err) => {
+      debugChat("stream", "persist never-started workflow status failed", {
+        toolUseId,
+        error: String(err),
+      });
+    },
+  );
 }
 
 function isCodexApprovalTool(toolName: string): boolean {
@@ -469,7 +543,11 @@ export function useAgentStream() {
                 if (activity?.toolName === "Workflow") {
                   void updateTurnToolActivityProgress(
                     streamEvent.tool_use_id,
-                    activity.workflowProgress
+                    // `?.length`, not truthiness: `[]` is truthy in JS, and
+                    // the column write is `COALESCE(?1, ...)` — so an empty
+                    // tree serializes to `"[]"`, which is not NULL, and
+                    // overwrites a good stored tree with an empty one.
+                    activity.workflowProgress?.length
                       ? JSON.stringify(activity.workflowProgress)
                       : null,
                     activity.agentStatus ?? null,
@@ -859,6 +937,13 @@ export function useAgentStream() {
                 updateToolActivity(sessionId, block.tool_use_id, {
                   resultText: text,
                 });
+                resolveNeverStartedWorkflow(
+                  sessionId,
+                  block.tool_use_id,
+                  text,
+                  block.is_error === true,
+                  updateToolActivity,
+                );
                 // Capture plan file path from tool results (e.g. EnterPlanMode).
                 const pm = text.match(planPathRe);
                 if (pm) planFilePathRef.current[sessionId] = pm[1];

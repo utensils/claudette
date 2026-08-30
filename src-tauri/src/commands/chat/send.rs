@@ -2809,6 +2809,7 @@ pub async fn send_chat_message(
                                 claudette::agent::UserContentBlock::ToolResult {
                                     tool_use_id,
                                     content,
+                                    ..
                                 } => {
                                     let text = tool_result_content_text(content);
                                     // Workflow tool launched in the background:
@@ -3018,6 +3019,7 @@ pub async fn send_chat_message(
                     if let claudette::agent::UserContentBlock::ToolResult {
                         tool_use_id,
                         content,
+                        ..
                     } = block
                         && let Some(tool_name) = mcp_tool_names.get(tool_use_id)
                     {

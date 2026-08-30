@@ -34,7 +34,9 @@ Because a workflow typically finishes long after its turn was saved, Claudette w
 
 A run's last progress update usually predates its final agent transitions, so a workflow that ends while agents are still shown mid-flight has them settled to match: finished for a completed run, stopped for one that ended early. Genuine failures keep their own state and still count toward the card's failure badge.
 
-A workflow runs inside the Claude Code process that started it, so it does not survive that process going away — quitting Claudette, stopping the agent, or resetting the session ends the run. Claudette marks those runs stopped rather than leaving them mid-flight: any still marked running when Claudette starts belongs to a process that is gone, and is resolved at launch. Their cards keep the tree as of the last progress update before the process ended.
+A workflow runs inside the Claude Code process that started it, so it does not survive that process going away — quitting Claudette, stopping the agent, or resetting the session ends the run. Claudette marks those runs stopped rather than leaving them mid-flight: any still marked running when Claudette starts belongs to a process that is gone, and is resolved at launch. Reopening a chat resolves them too, for sessions with no Claude Code process running, so a stale indicator clears without restarting the app. Their cards keep the tree as of the last progress update before the process ended.
+
+A workflow that never starts — the tool errors, or returns without scheduling anything — is resolved as soon as it reports back, since there is no run to wait for.
 
 ## Limits
 

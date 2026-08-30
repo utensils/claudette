@@ -2347,6 +2347,7 @@ async fn map_notification_to_agent_events_for_route(
                     super::UserContentBlock::ToolResult {
                         tool_use_id: item_id.clone(),
                         content: Value::String(output.clone()),
+                        is_error: None,
                     },
                 ]),
             },
@@ -2557,6 +2558,7 @@ fn map_notification_to_agent_events_with_context(
                         super::UserContentBlock::ToolResult {
                             tool_use_id: item_id,
                             content: Value::String(delta),
+                            is_error: None,
                         },
                     ]),
                 },
@@ -2681,6 +2683,7 @@ fn map_codex_plan_updated_to_agent_events(
                     super::UserContentBlock::ToolResult {
                         tool_use_id,
                         content: Value::String("Plan updated".to_string()),
+                        is_error: None,
                     },
                 ]),
             },
@@ -2792,6 +2795,7 @@ fn map_codex_item_completed_to_agent_events(
                     super::UserContentBlock::ToolResult {
                         tool_use_id: item_id,
                         content: codex_item_result_content(item),
+                        is_error: None,
                     },
                 ]),
             },
@@ -4674,6 +4678,7 @@ mod tests {
         let super::super::UserContentBlock::ToolResult {
             tool_use_id,
             content,
+            ..
         } = &blocks[0]
         else {
             panic!("expected tool result block");
@@ -4820,6 +4825,7 @@ mod tests {
         let crate::agent::UserContentBlock::ToolResult {
             tool_use_id,
             content,
+            ..
         } = &blocks[0]
         else {
             panic!("expected tool-result block");

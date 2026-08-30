@@ -72,6 +72,20 @@ export function updateTurnToolActivityProgress(
   });
 }
 
+/** Resolve `Workflow` activities this session left mid-run, when it has no
+ *  CLI process that could still own them.
+ *
+ *  The boot sweep only runs at process start, so a wedged status pill
+ *  survives a webview reload — without this the user has to fully quit and
+ *  relaunch to clear one. Rust decides whether the sweep is safe: it checks
+ *  the session's `persistent_session`, and returns 0 without touching
+ *  anything when a process is alive. Resolves to the number of rows fixed. */
+export function resolveStaleWorkflowActivities(
+  sessionId: string,
+): Promise<number> {
+  return invoke("resolve_stale_workflow_activities", { sessionId });
+}
+
 export function loadCompletedTurns(
   sessionId: string,
 ): Promise<CompletedTurnData[]> {

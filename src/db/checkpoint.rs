@@ -1243,11 +1243,92 @@ impl Database {
         // one's progress tree is reconciled too. A status-only sweep left the
         // pill cleared but the replayed card still reading "0/5" — a run
         // relabelled as ended while its own tree insisted it was mid-flight.
+        //
+        // Log-and-continue rather than `?`-propagating, and deliberately not
+        // wrapped in a transaction. Each row is independent and the write is
+        // idempotent, so the useful failure mode is "resolve the other 40",
+        // not "roll all 41 back" — and `?` would have been the worst of both,
+        // aborting the sweep with the earlier rows already committed. One
+        // unreadable row cannot strand every pill behind it, and the next
+        // boot retries whatever was missed.
         let mut resolved = 0;
         for activity_id in orphaned {
-            resolved += self
-                .finish_workflow_activity_row(&activity_id, REAPED_TASK_STATUS, None)?
-                .rows_updated;
+            match self.finish_workflow_activity_row(&activity_id, REAPED_TASK_STATUS, None) {
+                Ok(resolution) => resolved += resolution.rows_updated,
+                Err(err) => tracing::warn!(
+                    target: "claudette::chat",
+                    activity_id,
+                    error = %err,
+                    "failed to resolve orphaned workflow activity; continuing sweep"
+                ),
+            }
+        }
+        Ok(resolved)
+    }
+
+    /// The boot sweep, narrowed to one chat session.
+    ///
+    /// The boot sweep can be unconditional because at process start the
+    /// inference is free: no CLI process survived the app, so nothing can
+    /// still be running. That reasoning is unavailable at any other moment,
+    /// and a wedged row is only *cleared* by a restart — a webview reload
+    /// leaves the pill exactly where it was. This exists so the caller can
+    /// re-run the sweep for a session it has independently established has no
+    /// live CLI process, which restores the same inference on a narrower
+    /// scope.
+    ///
+    /// The liveness check is the caller's job and is not optional: sweeping a
+    /// session whose process is alive would blank the pill of a run that is
+    /// genuinely in flight, which is worse than the stale pill this fixes.
+    /// See `resolve_stale_workflow_activities` in the Tauri command layer for
+    /// the check itself.
+    ///
+    /// Returns the number of rows resolved.
+    pub fn resolve_orphaned_workflow_activities_for_session(
+        &self,
+        chat_session_id: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        use crate::agent::workflow_progress::{REAPED_TASK_STATUS, TERMINAL_TASK_STATUSES};
+
+        let placeholders = std::iter::repeat_n("?", TERMINAL_TASK_STATUSES.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT ta.id FROM turn_tool_activities ta
+               JOIN conversation_checkpoints cp ON cp.id = ta.checkpoint_id
+              WHERE ta.tool_name = 'Workflow'
+                AND cp.chat_session_id = ?1
+                AND (ta.agent_status IS NULL
+                     OR LOWER(TRIM(ta.agent_status)) NOT IN ({placeholders}))"
+        );
+        let orphaned: Vec<String> = {
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params: Vec<&dyn rusqlite::ToSql> =
+                std::iter::once(&chat_session_id as &dyn rusqlite::ToSql)
+                    .chain(
+                        TERMINAL_TASK_STATUSES
+                            .iter()
+                            .map(|s| s as &dyn rusqlite::ToSql),
+                    )
+                    .collect();
+            let rows = stmt.query_map(params.as_slice(), |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+
+        // Same log-and-continue policy as the boot sweep: one unreadable row
+        // must not strand every pill behind it.
+        let mut resolved = 0;
+        for activity_id in orphaned {
+            match self.finish_workflow_activity_row(&activity_id, REAPED_TASK_STATUS, None) {
+                Ok(resolution) => resolved += resolution.rows_updated,
+                Err(err) => tracing::warn!(
+                    target: "claudette::chat",
+                    activity_id,
+                    chat_session_id,
+                    error = %err,
+                    "failed to resolve stale workflow activity; continuing sweep"
+                ),
+            }
         }
         Ok(resolved)
     }
@@ -2262,6 +2343,197 @@ mod tests {
                 .expect("stored tree must still parse");
         match &tree[0] {
             crate::agent::WorkflowProgressEntry::Agent(a) => assert_eq!(a.state, "done"),
+            other => panic!("expected an agent entry, got {other:?}"),
+        }
+    }
+
+    /// The `.or(incoming_tree_json)` arm is load-bearing and easy to lose:
+    /// it is how the webview's fresher tree lands when reconciliation itself
+    /// found nothing to change. Without it a caller could hand over a
+    /// complete, already-reconciled tree and have it silently dropped in
+    /// favour of the older snapshot already on the row.
+    #[test]
+    fn test_finish_workflow_activity_stores_an_already_reconciled_incoming_tree() {
+        let db = setup_db_with_workspace();
+        let session = session_of(&db, "w1");
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        // The row holds the checkpoint-era snapshot: one agent, mid-flight.
+        let mut activity = make_tool_activity("a1", "cp1", "Workflow", 0);
+        activity.agent_status = Some("running".into());
+        activity.workflow_progress_json =
+            r#"[{"type":"workflow_agent","index":1,"label":"probe-1","state":"progress"}]"#.into();
+        db.insert_turn_tool_activities(&[activity]).unwrap();
+
+        // The webview's tree: three agents, all already terminal, so
+        // reconciliation has nothing to stamp and returns `None`.
+        let incoming = r#"[{"type":"workflow_agent","index":1,"label":"probe-1","state":"done"},
+                           {"type":"workflow_agent","index":2,"label":"probe-2","state":"done"},
+                           {"type":"workflow_agent","index":3,"label":"probe-3","state":"error"}]"#;
+        let resolution = db
+            .finish_workflow_activity(&session, Some("tu_a1"), None, "completed", Some(incoming))
+            .unwrap();
+        assert_eq!(resolution.rows_updated, 1);
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        let tree: Vec<crate::agent::WorkflowProgressEntry> =
+            serde_json::from_str(&turns[0].activities[0].workflow_progress_json).unwrap();
+        assert_eq!(
+            tree.len(),
+            3,
+            "the caller's richer tree must win over the row's older snapshot"
+        );
+        let states: Vec<&str> = tree
+            .iter()
+            .filter_map(|e| match e {
+                crate::agent::WorkflowProgressEntry::Agent(a) => Some(a.state.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states, vec!["done", "done", "error"]);
+    }
+
+    /// One unreadable row must not strand every pill behind it. The sweep
+    /// logs and continues rather than `?`-propagating, which would abort with
+    /// the earlier rows already committed.
+    #[test]
+    fn test_resolve_orphaned_workflow_activities_survives_a_bad_row() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        // A tree that cannot be parsed sits between two ordinary wedged rows.
+        // `finish_workflow_activity_row` tolerates it (the tree is left alone
+        // and the status still lands), so this also pins that it does not
+        // become an error in future.
+        let mut first = make_tool_activity("a1", "cp1", "Workflow", 0);
+        first.agent_status = Some("running".into());
+        let mut middle = make_tool_activity("a2", "cp1", "Workflow", 1);
+        middle.agent_status = Some("running".into());
+        middle.workflow_progress_json = "{ not a tree".into();
+        let mut last = make_tool_activity("a3", "cp1", "Workflow", 2);
+        last.agent_status = Some("running".into());
+        db.insert_turn_tool_activities(&[first, middle, last])
+            .unwrap();
+
+        assert_eq!(db.resolve_orphaned_workflow_activities().unwrap(), 3);
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        for activity in &turns[0].activities {
+            assert_eq!(
+                activity.agent_status.as_deref(),
+                Some("stopped"),
+                "row {} must be resolved",
+                activity.id
+            );
+        }
+        // The unreadable tree is preserved rather than blanked.
+        let middle_tree = turns[0]
+            .activities
+            .iter()
+            .find(|a| a.id == "a2")
+            .unwrap()
+            .workflow_progress_json
+            .clone();
+        assert_eq!(middle_tree, "{ not a tree");
+    }
+
+    /// The hydrate-time sweep is the boot sweep narrowed to one session, so a
+    /// wedged pill clears on a webview reload instead of requiring a full app
+    /// restart. Scope is the whole point: a sibling session's rows must be
+    /// left alone, because this runs while that session may have a live CLI
+    /// process with a workflow genuinely in flight.
+    #[test]
+    fn test_resolve_orphaned_workflow_activities_for_session_is_scoped() {
+        let db = setup_db_with_workspace();
+        let ours = session_of(&db, "w1");
+        let sibling = db.create_chat_session("w1").unwrap().id;
+
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let mut sibling_cp = make_checkpoint(&db, "cp2", "w1", "m1", 1);
+        sibling_cp.chat_session_id = sibling.clone();
+        db.insert_checkpoint(&sibling_cp).unwrap();
+
+        let mut wedged = make_tool_activity("a1", "cp1", "Workflow", 0);
+        wedged.agent_status = Some("running".into());
+        wedged.workflow_progress_json =
+            r#"[{"type":"workflow_agent","index":1,"label":"probe","state":"progress"}]"#.into();
+        // Already resolved — must not be relabelled.
+        let mut settled = make_tool_activity("a2", "cp1", "Workflow", 1);
+        settled.agent_status = Some("completed".into());
+        // A sibling session's live run.
+        let mut sibling_run = make_tool_activity("a3", "cp2", "Workflow", 0);
+        sibling_run.agent_status = Some("running".into());
+        db.insert_turn_tool_activities(&[wedged, settled, sibling_run])
+            .unwrap();
+
+        assert_eq!(
+            db.resolve_orphaned_workflow_activities_for_session(&ours)
+                .unwrap(),
+            1,
+            "only this session's wedged row"
+        );
+
+        let status_of = |id: &str| {
+            db.list_completed_turns("w1")
+                .unwrap()
+                .iter()
+                .flat_map(|t| t.activities.clone())
+                .find(|a| a.id == id)
+                .unwrap()
+                .agent_status
+                .clone()
+        };
+        assert_eq!(status_of("a1").as_deref(), Some("stopped"));
+        assert_eq!(status_of("a2").as_deref(), Some("completed"));
+        assert_eq!(
+            status_of("a3").as_deref(),
+            Some("running"),
+            "a sibling session may have a live process; its rows are off limits"
+        );
+
+        // Idempotent: hydrating the same session again has nothing to do.
+        assert_eq!(
+            db.resolve_orphaned_workflow_activities_for_session(&ours)
+                .unwrap(),
+            0
+        );
+    }
+
+    /// The tree is reconciled here too, so a swept row's card does not keep
+    /// insisting the run is mid-flight beside a status that says it ended.
+    #[test]
+    fn test_resolve_orphaned_workflow_activities_for_session_reconciles_trees() {
+        let db = setup_db_with_workspace();
+        let session = session_of(&db, "w1");
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let mut wedged = make_tool_activity("a1", "cp1", "Workflow", 0);
+        wedged.agent_status = None;
+        wedged.workflow_progress_json =
+            r#"[{"type":"workflow_agent","index":1,"label":"probe","state":"progress"}]"#.into();
+        db.insert_turn_tool_activities(&[wedged]).unwrap();
+
+        assert_eq!(
+            db.resolve_orphaned_workflow_activities_for_session(&session)
+                .unwrap(),
+            1,
+            "a row that never reported a status is wedged too"
+        );
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        let tree: Vec<crate::agent::WorkflowProgressEntry> =
+            serde_json::from_str(&turns[0].activities[0].workflow_progress_json).unwrap();
+        match &tree[0] {
+            crate::agent::WorkflowProgressEntry::Agent(a) => assert_eq!(a.state, "stopped"),
             other => panic!("expected an agent entry, got {other:?}"),
         }
     }
