@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.28.0](https://github.com/utensils/claudette/compare/v0.27.1...v0.28.0) (2026-08-30)
+
+
+### Features
+
+* **chat:** let pinned prompts open a new tab and pick a model ([#1021](https://github.com/utensils/claudette/issues/1021)) ([f6f6978](https://github.com/utensils/claudette/commit/f6f6978750f86efdaa74b6b73db5c1fcccc35159))
+
+
+### Bug Fixes
+
+* **chat:** resolve backgrounded Workflow runs from the Rust notification path ([#1023](https://github.com/utensils/claudette/issues/1023)) ([2c730bd](https://github.com/utensils/claudette/commit/2c730bd9a4ae1d9c3522d60381ca7594e7ebf726))
+* **ci:** stop nightly version rewinds that strand updater clients ([#1022](https://github.com/utensils/claudette/issues/1022)) ([a7fc591](https://github.com/utensils/claudette/commit/a7fc591599f3a44d853122df99d7c658cfc31a6c))
+* **db:** stop "database is locked" errors during archive and bulk cleanup ([#1020](https://github.com/utensils/claudette/issues/1020)) ([422abc2](https://github.com/utensils/claudette/commit/422abc28be1a0f46a3604e7ab850ef767695f3be))
+* **scm:** don't auto-archive a workspace that inherited a merged PR ([#1017](https://github.com/utensils/claudette/issues/1017)) ([2fe88ea](https://github.com/utensils/claudette/commit/2fe88ea6e17cf0cd604839c595f7580a1bce62fc))
+
 ## [0.27.1](https://github.com/utensils/claudette/compare/v0.27.0...v0.27.1) (2026-08-05)
 
 
