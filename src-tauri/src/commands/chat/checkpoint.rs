@@ -375,6 +375,34 @@ fn session_owns_live_process<S>(active_pid: Option<u32>, persistent_session: Opt
     active_pid.is_some() || persistent_session.is_some()
 }
 
+/// Whether it is safe to sweep this session's `Workflow` rows.
+///
+/// Two independent ways a run can still be live, and both have to be ruled
+/// out. [`session_owns_live_process`] covers processes *this* app instance
+/// owns. `live_peers` covers the ones it does not: another Claudette against
+/// the same database owns its own `AppState.agents`, so a session it is
+/// actively running looks absent here — `agents.get()` returns `None`, which
+/// is indistinguishable from "no process anywhere". Sweeping on that would
+/// rewrite a peer's genuinely running rows to `stopped`, and blank a live
+/// pill the next time that instance hydrates.
+///
+/// The boot sweep gates on exactly the same signal (`main.rs`), for exactly
+/// this reason. The asymmetry that makes skipping the right default is the
+/// same too: not sweeping leaves a stale pill, recoverable on the next clean
+/// start, while sweeping wrongly blanks a run that is in flight.
+///
+/// Inherits that gate's known limit rather than pretending otherwise — peers
+/// are discovered through `scripts/dev.sh` discovery files, so two *release*
+/// builds sharing a database remain undetectable. That configuration is
+/// already documented as unsupported for worse reasons.
+fn hydrate_sweep_allowed<S>(
+    active_pid: Option<u32>,
+    persistent_session: Option<&S>,
+    live_peers: usize,
+) -> bool {
+    !session_owns_live_process(active_pid, persistent_session) && live_peers == 0
+}
+
 /// Resolve `Workflow` activities this session left mid-run, when the session
 /// has no CLI process that could still own them.
 ///
@@ -382,8 +410,9 @@ fn session_owns_live_process<S>(active_pid: Option<u32>, persistent_session: Opt
 /// survives a webview reload — the user has to fully quit and relaunch. This
 /// gives the frontend a way to re-run the sweep on session hydrate.
 ///
-/// Liveness is [`session_owns_live_process`]; see there for why `active_pid`
-/// alone is not the signal.
+/// Liveness is [`hydrate_sweep_allowed`] — this instance's own processes plus
+/// any live peer instance sharing the database. See those helpers for why
+/// `active_pid` alone is not the signal, and why a peer has to count.
 ///
 /// Returns the number of rows resolved, so the caller can skip a reload when
 /// there was nothing to fix.
@@ -395,13 +424,26 @@ pub async fn resolve_stale_workflow_activities(
     {
         let agents = state.agents.read().await;
         let session = agents.get(&session_id);
+        // The in-memory check first: it is free, and it is the one that fires
+        // on every hydrate of a session with a live run. The peer scan reads
+        // a directory, so it only runs once the cheap answer says "sweepable".
         if session_owns_live_process(
             session.and_then(|s| s.active_pid),
             session.and_then(|s| s.persistent_session.as_ref()),
         ) {
-            // A live process can still be running workflows for this session.
             return Ok(0);
         }
+    }
+    let peers = crate::live_peer_instances(&state.db_path);
+    if !hydrate_sweep_allowed(None, None::<&()>, peers.len()) {
+        tracing::info!(
+            target: "claudette::chat",
+            session_id,
+            peer_count = peers.len(),
+            "skipped resolving stale workflow activities — a peer instance is \
+             alive and may own runs that are still in flight"
+        );
+        return Ok(0);
     }
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let resolved = db
@@ -430,7 +472,7 @@ pub async fn load_completed_turns(
 
 #[cfg(test)]
 mod tests {
-    use super::session_owns_live_process;
+    use super::{hydrate_sweep_allowed, session_owns_live_process};
 
     /// Stand-in for `AgentSession`, which wraps a live child process.
     const HANDLE: &() = &();
@@ -460,6 +502,34 @@ mod tests {
     #[test]
     fn a_session_with_neither_is_sweepable() {
         assert!(!session_owns_live_process(None, None::<&()>));
+    }
+
+    /// The other way a run can be live, and the one `AppState.agents` cannot
+    /// see: a peer Claudette against the same database owns its own agent map,
+    /// so a session it is actively running looks *absent* here — identical to
+    /// "no process anywhere". Sweeping on that rewrites the peer's running
+    /// rows to `stopped`.
+    #[test]
+    fn a_live_peer_instance_blocks_the_sweep() {
+        assert!(
+            !hydrate_sweep_allowed(None, None::<&()>, 1),
+            "a peer may own a run this instance cannot see"
+        );
+    }
+
+    /// Both conditions have to clear. Pinning the composition, because the
+    /// bug was that only one of them was checked.
+    #[test]
+    fn the_sweep_needs_no_local_process_and_no_peer() {
+        // Nothing anywhere — the only case that may sweep.
+        assert!(hydrate_sweep_allowed(None, None::<&()>, 0));
+        // Local process, no peer.
+        assert!(!hydrate_sweep_allowed(None, Some(HANDLE), 0));
+        assert!(!hydrate_sweep_allowed(Some(4242), None::<&()>, 0));
+        // Peer, no local process — the case this gate was missing.
+        assert!(!hydrate_sweep_allowed(None, None::<&()>, 1));
+        // Both.
+        assert!(!hydrate_sweep_allowed(Some(4242), Some(HANDLE), 2));
     }
 
     /// No entry in `AppState.agents` at all — the common case after a restart,

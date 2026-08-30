@@ -65,7 +65,7 @@ fn chrono_iso_now() -> String {
 /// discovery file, which means `dev.sh` launches and nothing else — two
 /// *release* builds against one database produce an empty result here. An
 /// empty return means "no peer we can see", not "no peer".
-fn live_peer_instances(db_path: &Path) -> Vec<PeerInstance> {
+pub(crate) fn live_peer_instances(db_path: &Path) -> Vec<PeerInstance> {
     peer_instances_in(
         &std::env::temp_dir().join("claudette-dev"),
         db_path,
@@ -152,7 +152,7 @@ fn peer_instances_in(dir: &Path, db_path: &Path, launcher_pid: Option<u32>) -> V
 }
 
 /// A live Claudette process that may be sharing our database.
-struct PeerInstance {
+pub(crate) struct PeerInstance {
     pid: u32,
     cwd: String,
     data_dir: Option<PathBuf>,
