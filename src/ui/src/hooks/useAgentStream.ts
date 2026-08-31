@@ -940,7 +940,7 @@ export function useAgentStream() {
                 resolveNeverStartedWorkflow(
                   sessionId,
                   block.tool_use_id,
-                  text,
+                  text ?? "",
                   block.is_error === true,
                   updateToolActivity,
                 );
