@@ -945,11 +945,12 @@ fn main() {
             // (tokio runtime may not be available during setup).
             std::thread::spawn(usage::warm_user_agent_cache_sync);
 
-            // Pre-warm the shell-env cache. On Unix, this spawns
+            // Pre-warm the shell-env cache. On Unix, this schedules
             // `$SHELL -l -i -c '<emit>'` — a NUL-delimited env dump via
-            // `env -0` (or the fish equivalent) — with a 5-second timeout.
-            // Fine to pay once at startup on a std thread, but lethal if it
-            // ever runs inline on a Tokio worker. On Windows this is a no-op.
+            // `env -0` (or the fish equivalent) — on its own worker thread.
+            // Calling the scheduler directly marks the probe as running before
+            // setup continues, so immediate agent/terminal launches can await
+            // it without racing the worker. On Windows this is a no-op.
             // Read user-supplied shell-env deny patterns from app_settings
             // so the very first probe already filters per the user's policy.
             let user_deny: Vec<String> = match claudette::db::Database::open(&db_path) {
@@ -966,7 +967,7 @@ fn main() {
                     .unwrap_or_default(),
                 Err(_) => Vec::new(),
             };
-            std::thread::spawn(move || claudette::env::prewarm_shell_env(user_deny));
+            claudette::env::prewarm_shell_env(user_deny);
 
             // Set up the system tray icon (respects tray_enabled setting).
             if let Err(e) = tray::setup_tray(app.handle()) {
