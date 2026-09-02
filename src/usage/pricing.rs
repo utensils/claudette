@@ -93,6 +93,16 @@ const PRICING_TABLE: &[(&str, ModelPricing)] = &[
         },
     ),
     // -- Anthropic (only used when local-aggregating, e.g. via Pi) -----
+    // Fable 5.1 is the current Fable, priced identically to Fable 5 (2x Opus).
+    // It MUST stay above `claude-fable-5`: `starts_with` would otherwise collapse
+    // `claude-fable-5-1` onto the Fable 5 entry.
+    (
+        "claude-fable-5-1",
+        ModelPricing {
+            prompt_per_mtok_usd: 10.00,
+            completion_per_mtok_usd: 50.00,
+        },
+    ),
     // Fable 5 is priced at 2x Opus. The `[1m]` variant matches this same
     // prefix via `starts_with`, so a single entry covers both ids.
     (
@@ -185,6 +195,33 @@ mod tests {
         // The 1M variant shares the bare prefix via `starts_with`.
         let one_m = lookup("claude-fable-5[1m]").expect("1M variant resolves to same pricing");
         assert!((one_m.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn lookup_fable_5_1() {
+        let p = lookup("claude-fable-5-1").expect("claude-fable-5-1 has pricing");
+        assert!((p.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
+        assert!((p.completion_per_mtok_usd - 50.00).abs() < f64::EPSILON);
+        // The `[1m]` gateway form shares the bare prefix via `starts_with`.
+        let one_m = lookup("claude-fable-5-1[1m]").expect("1M variant resolves to same pricing");
+        assert!((one_m.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
+    }
+
+    /// The table's ordering contract, enforced table-wide: a shorter prefix
+    /// placed above a longer one that extends it would shadow the longer
+    /// entry, so every id would silently resolve to the wrong price. Fable
+    /// 5.1 and Fable 5 currently share a price, which would hide such a
+    /// regression here — this pins the structure instead of the number.
+    #[test]
+    fn no_entry_is_shadowed_by_an_earlier_prefix() {
+        for (i, (earlier, _)) in PRICING_TABLE.iter().enumerate() {
+            for (later, _) in &PRICING_TABLE[i + 1..] {
+                assert!(
+                    !later.starts_with(earlier),
+                    "`{later}` is unreachable: the earlier `{earlier}` entry matches it first",
+                );
+            }
+        }
     }
 
     #[test]

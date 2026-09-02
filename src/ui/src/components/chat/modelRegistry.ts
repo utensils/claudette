@@ -43,6 +43,8 @@ const NON_1M_FALLBACKS: Record<string, string> = {
   // to, so `get1mFallback("opus")` correctly returns "opus" unchanged.
   // No `sonnet` entry: Sonnet 5 is natively 1M with no 200K variant to fall
   // back to, so `get1mFallback("sonnet")` correctly returns "sonnet" unchanged.
+  // No `claude-fable-5-1` entry either, for the same reason — Fable 5.1's 1M
+  // window is its default, not an opt-in `[1m]` selection.
   "claude-fable-5[1m]": "claude-fable-5",
   "claude-opus-4-8[1m]": "claude-opus-4-8",
   "claude-opus-4-7[1m]": "claude-opus-4-7",
@@ -58,9 +60,9 @@ export const MODELS: readonly Model[] = [
   // 1M context billing per Anthropic's Claude Code docs (Model configuration → Extended context):
   //   Max/Team/Enterprise → legacy Opus 4.8 1M is included with subscription; legacy Sonnet 4.6 1M is extra usage.
   //   Pro                → both legacy Opus 4.8 1M and legacy Sonnet 4.6 1M are extra usage.
-  // Opus 5 and Sonnet 5 are both exceptions: their 1M windows are native and included at
-  // standard pricing on every plan, so neither carries an `extraUsage` indicator (see the
-  // `opus` and `sonnet` rows below).
+  // Opus 5, Sonnet 5 and Fable 5.1 are exceptions: their 1M windows are native and included
+  // at standard pricing on every plan, so none of them carries an `extraUsage` indicator
+  // (see the `opus`, `sonnet` and `claude-fable-5-1` rows below).
   // The `extraUsage` flag tracks subscription-quota inclusion, not per-token API price.
   // We optimize for Max/Team/Enterprise (Claudette's primary audience), so only legacy
   // Sonnet 4.6 1M carries the indicator; Pro users selecting legacy Opus 4.8 1M see no
@@ -77,12 +79,17 @@ export const MODELS: readonly Model[] = [
   // Sonnet 4.6, there is no separate 1M row: the alias itself is the 1M model.
   { id: "sonnet", label: "Sonnet 5", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
   { id: "haiku", label: "Haiku 4.5", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
-  // Fable 5 is an Opus-class Anthropic model (effort incl. xhigh/max, 1M variant).
-  // It has no bare alias — the concrete id carries through to the Claude CLI `--model`
-  // arg and passes the `claude-` prefix gate in `gateway_translate.rs`. The 1M variant
-  // uses the `[1m]` suffix convention so `is1mContextModel` detects it without a special case.
-  { id: "claude-fable-5", label: "Fable 5", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
-  { id: "claude-fable-5[1m]", label: "Fable 5 1M", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
+  // Fable 5.1 is the current Fable — Anthropic's most capable widely released model,
+  // Opus-class effort support incl. xhigh/max. Like Opus 5 and Sonnet 5, its 1M window
+  // is the default *and* the maximum, so there is no 200K row and no `[1m]` variant to
+  // select. The Fable family has no bare alias: the concrete id carries through to the
+  // Claude CLI `--model` arg and passes the `claude-` prefix gate in `gateway_translate.rs`.
+  { id: "claude-fable-5-1", label: "Fable 5.1", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
+  // Fable 5 demoted to the "More" disclosure when Fable 5.1 became the current Fable.
+  // Both context sizes stay pinned (Fable 5 defaults to 200K and needs the `[1m]`
+  // suffix for its 1M window) so the ids survive the promotion.
+  { id: "claude-fable-5", label: "Fable 5", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
+  { id: "claude-fable-5[1m]", label: "Fable 5 1M", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 1_000_000 },
   // Opus 4.8 demoted to the "More" disclosure when `opus` moved to Opus 5. Both the
   // 200K default and 1M variant are pinned here (the paths the `opus` alias used to
   // resolve to for each context size) so they survive the alias move.
