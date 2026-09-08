@@ -30,6 +30,10 @@ describe("isFastSupported", () => {
     expect(isFastSupported("claude-fable-5")).toBe(false);
   });
 
+  it("returns false for claude-fable-5-1 (Opus-class but fast is Opus 5 / Opus 4.8 only)", () => {
+    expect(isFastSupported("claude-fable-5-1")).toBe(false);
+  });
+
   it("returns false for sonnet", () => {
     expect(isFastSupported("sonnet")).toBe(false);
   });
@@ -54,6 +58,10 @@ describe("isEffortSupported", () => {
 
   it("returns true for claude-fable-5", () => {
     expect(isEffortSupported("claude-fable-5")).toBe(true);
+  });
+
+  it("returns true for claude-fable-5-1", () => {
+    expect(isEffortSupported("claude-fable-5-1")).toBe(true);
   });
 
   it("returns true for claude-fable-5[1m]", () => {
@@ -110,6 +118,10 @@ describe("isXhighEffortAllowed", () => {
     expect(isXhighEffortAllowed("claude-fable-5")).toBe(true);
   });
 
+  it("returns true for claude-fable-5-1", () => {
+    expect(isXhighEffortAllowed("claude-fable-5-1")).toBe(true);
+  });
+
   it("returns true for claude-opus-4-7", () => {
     expect(isXhighEffortAllowed("claude-opus-4-7")).toBe(true);
   });
@@ -151,6 +163,10 @@ describe("isMaxEffortAllowed", () => {
 
   it("returns true for claude-fable-5", () => {
     expect(isMaxEffortAllowed("claude-fable-5")).toBe(true);
+  });
+
+  it("returns true for claude-fable-5-1", () => {
+    expect(isMaxEffortAllowed("claude-fable-5-1")).toBe(true);
   });
 
   it("returns true for claude-opus-4-7", () => {

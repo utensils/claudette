@@ -9,6 +9,10 @@ import {
   get1mFallback,
 } from "./modelRegistry";
 
+/** Ids whose 1M window is native, so they carry no `[1m]` suffix to key off. */
+const NATIVELY_1M_IDS = ["opus", "sonnet", "claude-fable-5-1"];
+const isNatively1m = (id: string) => NATIVELY_1M_IDS.includes(id);
+
 describe("modelRegistry", () => {
   it("every model has a positive integer contextWindowTokens", () => {
     for (const m of MODELS) {
@@ -18,20 +22,26 @@ describe("modelRegistry", () => {
     }
   });
 
-  // `"opus"` and `"sonnet"` are bare 1M aliases whose ids lack the `[1m]`
-  // suffix other 1M variants use (opus auto-upgrades to 1M; Sonnet 5 is
-  // natively 1M). Keep the explicit id checks — removing either would
-  // silently misclassify the alias as a 200k model.
+  // `NATIVELY_1M_IDS` covers the entries whose ids lack the `[1m]` suffix other
+  // 1M variants use (the `opus` / `sonnet` aliases and Fable 5.1, all natively
+  // 1M). Keep the explicit id checks — dropping one would silently misclassify
+  // that model as 200k.
   it("1M-context variants report 1_000_000", () => {
-    const oneM = MODELS.filter((m) => m.id === "opus" || m.id === "sonnet" || m.id.endsWith("[1m]"));
+    const oneM = MODELS.filter((m) => isNatively1m(m.id) || m.id.endsWith("[1m]"));
     expect(oneM.length).toBeGreaterThan(0);
     for (const m of oneM) {
       expect(m.contextWindowTokens, m.id).toBe(1_000_000);
     }
   });
 
+  it("every natively-1M id is present in the registry", () => {
+    for (const id of NATIVELY_1M_IDS) {
+      expect(MODELS.find((m) => m.id === id), `${id} missing from MODELS`).toBeDefined();
+    }
+  });
+
   it("standard variants report 200_000", () => {
-    const standard = MODELS.filter((m) => m.id !== "opus" && m.id !== "sonnet" && !m.id.endsWith("[1m]"));
+    const standard = MODELS.filter((m) => !isNatively1m(m.id) && !m.id.endsWith("[1m]"));
     expect(standard.length).toBeGreaterThan(0);
     for (const m of standard) {
       expect(m.contextWindowTokens, m.id).toBe(200_000);
@@ -79,6 +89,11 @@ describe("modelRegistry", () => {
 
     it("returns the `sonnet` alias unchanged (Sonnet 5 is natively 1M, no 200K variant)", () => {
       expect(get1mFallback("sonnet")).toBe("sonnet");
+    });
+
+    it("returns Fable 5.1 unchanged (natively 1M, no 200K variant) but still maps Fable 5 1M", () => {
+      expect(get1mFallback("claude-fable-5-1")).toBe("claude-fable-5-1");
+      expect(get1mFallback("claude-fable-5[1m]")).toBe("claude-fable-5");
     });
 
     it("returns non-1M models unchanged", () => {
