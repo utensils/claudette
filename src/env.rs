@@ -533,24 +533,36 @@ fn capture_shell_env(
 /// is the user-configured deny patterns from Settings; pass an empty
 /// `Vec` to use only the built-in denylist.
 pub fn prewarm_shell_env(user_deny: Vec<String>) {
-    if shell_env_is_cached() {
-        return;
+    // Windows has no login-shell probe: `enriched_path()` reads the
+    // registry PATH on every call and `shell_path_is_cached()` is always
+    // true there. A `SHELL` inherited from an MSYS / Git Bash parent must
+    // not schedule a probe, or `wait_for_shell_env_probe` would delay the
+    // first agent / terminal spawn for nothing. Keep the phase `Idle`.
+    #[cfg(not(unix))]
+    {
+        let _ = user_deny;
     }
-    let Some(generation) = begin_shell_env_probe() else {
-        return;
-    };
-    let shell = match std::env::var("SHELL") {
-        Ok(s) => s,
-        Err(_) => {
-            finish_shell_env_probe(generation, None);
+    #[cfg(unix)]
+    {
+        if shell_env_is_cached() {
             return;
         }
-    };
-    let baseline = LAUNCH_ENV.get().cloned().unwrap_or_default();
-    std::thread::spawn(move || {
-        let env = capture_shell_env(std::path::Path::new(&shell), &baseline, &user_deny);
-        finish_shell_env_probe(generation, env);
-    });
+        let Some(generation) = begin_shell_env_probe() else {
+            return;
+        };
+        let shell = match std::env::var("SHELL") {
+            Ok(s) => s,
+            Err(_) => {
+                finish_shell_env_probe(generation, None);
+                return;
+            }
+        };
+        let baseline = LAUNCH_ENV.get().cloned().unwrap_or_default();
+        std::thread::spawn(move || {
+            let env = capture_shell_env(std::path::Path::new(&shell), &baseline, &user_deny);
+            finish_shell_env_probe(generation, env);
+        });
+    }
 }
 
 /// Get the user's PATH as captured from the shell probe. Backwards-
