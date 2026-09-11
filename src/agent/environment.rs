@@ -41,12 +41,21 @@ pub(crate) struct AgentCommand {
 /// terminal's process model. That keeps Nix devshell agents independent
 /// from `env-direnv` and avoids importing the user's shell/profile
 /// environment into the agent process.
-pub(crate) fn build_agent_command(
+pub(crate) async fn build_agent_command(
     program: &OsStr,
     args: &[String],
     working_dir: &Path,
     resolved_env: Option<&ResolvedEnv>,
 ) -> AgentCommand {
+    // Some control-plane sessions do not resolve workspace providers first.
+    // Keep the command builder as the final readiness gate so every harness
+    // receives the enriched PATH even when launched immediately at startup.
+    // Workspace resolution records an explicit disabled source, allowing
+    // users who opted out of shell-env forwarding to skip the probe entirely.
+    if !resolved_env.is_some_and(shell_env_is_disabled) {
+        crate::env::wait_for_shell_env_probe().await;
+    }
+
     let wrapped_argv = resolved_env.and_then(|env| {
         crate::env_provider::nix_develop_command_wrap(working_dir, env, program, args)
     });
@@ -85,6 +94,12 @@ pub(crate) fn build_agent_command(
     }
 }
 
+fn shell_env_is_disabled(env: &ResolvedEnv) -> bool {
+    env.sources.iter().any(|source| {
+        source.plugin_name == "shell-env" && source.error.as_deref() == Some("disabled")
+    })
+}
+
 fn agent_path(provider_path: Option<&Option<String>>) -> OsString {
     // A provider that unsets PATH (`Some(None)`) or emits none at all
     // (`None`) leaves the agent on the app's enriched PATH; an emitted
@@ -98,7 +113,7 @@ fn agent_path(provider_path: Option<&Option<String>>) -> OsString {
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_path, build_agent_command};
+    use super::{agent_path, build_agent_command, shell_env_is_disabled};
     use crate::env_provider::{ResolvedEnv, ResolvedSource};
     use std::ffi::OsStr;
     use std::time::SystemTime;
@@ -127,6 +142,23 @@ mod tests {
     }
 
     #[test]
+    fn disabled_shell_env_source_skips_readiness_gate() {
+        let resolved = ResolvedEnv {
+            vars: Default::default(),
+            sources: vec![ResolvedSource {
+                plugin_name: "shell-env".to_string(),
+                detected: false,
+                vars_contributed: 0,
+                cached: false,
+                evaluated_at: SystemTime::now(),
+                error: Some("disabled".to_string()),
+            }],
+        };
+
+        assert!(shell_env_is_disabled(&resolved));
+    }
+
+    #[test]
     fn teammate_command_env_var_name_matches_claude_code() {
         assert_eq!(
             super::CLAUDE_CODE_TEAMMATE_COMMAND,
@@ -134,8 +166,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn agent_command_does_not_wrap_for_direnv_only() {
+    #[tokio::test]
+    async fn agent_command_does_not_wrap_for_direnv_only() {
         let resolved = ResolvedEnv {
             vars: Default::default(),
             sources: vec![ResolvedSource {
@@ -153,7 +185,8 @@ mod tests {
             &["--print".to_string()],
             std::path::Path::new("/tmp"),
             Some(&resolved),
-        );
+        )
+        .await;
 
         assert_eq!(built.invocation_program, OsStr::new("claude"));
         assert_eq!(built.invocation_args, ["--print"]);
