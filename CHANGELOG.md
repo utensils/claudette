@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.29.0](https://github.com/utensils/claudette/compare/v0.28.0...v0.29.0) (2026-09-11)
+
+
+### Features
+
+* **models:** add Claude Fable 5.1 and make it the default Fable ([#1027](https://github.com/utensils/claudette/issues/1027)) ([68947f2](https://github.com/utensils/claudette/commit/68947f215e108ed3ca5c6d486a77e6d690afcf89))
+
+
+### Bug Fixes
+
+* **env:** wait for shell probe before agent spawn ([#1006](https://github.com/utensils/claudette/issues/1006)) ([b663d47](https://github.com/utensils/claudette/commit/b663d47363d427f84c45a8257ea8892524da840b))
+
 ## [0.28.0](https://github.com/utensils/claudette/compare/v0.27.1...v0.28.0) (2026-08-30)
 
 
