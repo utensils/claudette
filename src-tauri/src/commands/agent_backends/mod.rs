@@ -909,10 +909,10 @@ mod tests {
                 .iter()
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["gpt-5.4", "gpt-5.3-codex"]
+            vec!["gpt-6-sol", "gpt-6-luna"]
         );
         assert!(models.iter().all(|model| model.discovered));
-        assert_eq!(models[0].label, "gpt-5.4");
+        assert_eq!(models[0].label, "gpt-6-sol");
         assert_eq!(
             models[0].context_window_tokens,
             backend.context_window_default
@@ -1483,7 +1483,7 @@ mod tests {
                 .expect("legacy codex request should resolve");
 
         assert_eq!(backend_id.as_deref(), Some("codex"));
-        assert_eq!(resolved_model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(resolved_model.as_deref(), Some("gpt-6-sol"));
     }
 
     #[test]

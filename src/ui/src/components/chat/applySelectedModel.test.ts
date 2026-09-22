@@ -257,7 +257,7 @@ describe("applySelectedModel", () => {
       expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
     });
 
-    it("does NOT substitute the `opus` alias (Opus 5 is natively 1M, no 200K variant)", async () => {
+    it("does NOT substitute the `opus` alias (Opus 5.5 is natively 1M, no 200K variant)", async () => {
       appStore.disable1mContext = true;
       appStore.selectedModel["sess-1"] = "claude-opus-4-7";
       appStore.selectedModelProvider["sess-1"] = "anthropic";
@@ -267,6 +267,21 @@ describe("applySelectedModel", () => {
       expect(appStore.setSelectedModel).toHaveBeenCalledWith(
         "sess-1",
         "opus",
+        "anthropic",
+      );
+      expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
+    });
+
+    it("does NOT substitute the demoted Opus 5 id (natively 1M, no 200K variant)", async () => {
+      appStore.disable1mContext = true;
+      appStore.selectedModel["sess-1"] = "claude-opus-4-7";
+      appStore.selectedModelProvider["sess-1"] = "anthropic";
+
+      await applySelectedModel("sess-1", "claude-opus-5", "anthropic");
+
+      expect(appStore.setSelectedModel).toHaveBeenCalledWith(
+        "sess-1",
+        "claude-opus-5",
         "anthropic",
       );
       expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();

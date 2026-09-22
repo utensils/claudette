@@ -50,6 +50,23 @@ pub fn lookup(model_id: &str) -> Option<ModelPricing> {
 /// fall back to "no cost displayed" rather than a wrong number.
 const PRICING_TABLE: &[(&str, ModelPricing)] = &[
     // -- OpenAI ---------------------------------------------------------
+    // GPT-6 Sol is Codex's default starting model; Luna is the high-volume
+    // tier. Neither id is a prefix of the other, so order between them is
+    // free — but both must stay above any future bare `gpt-6` entry.
+    (
+        "gpt-6-sol",
+        ModelPricing {
+            prompt_per_mtok_usd: 2.00,
+            completion_per_mtok_usd: 10.00,
+        },
+    ),
+    (
+        "gpt-6-luna",
+        ModelPricing {
+            prompt_per_mtok_usd: 0.10,
+            completion_per_mtok_usd: 0.50,
+        },
+    ),
     (
         "gpt-5.4-mini",
         ModelPricing {
@@ -112,7 +129,18 @@ const PRICING_TABLE: &[(&str, ModelPricing)] = &[
             completion_per_mtok_usd: 50.00,
         },
     ),
-    // Opus 5 is the current flagship; the `opus` alias resolves here.
+    // Opus 5.5 is the current Opus; the `opus` alias resolves here. It MUST
+    // stay above `claude-opus-5`: `starts_with` would otherwise collapse
+    // `claude-opus-5-5` onto the Opus 5 entry (the shadowing test enforces
+    // this). The `[1m]` gateway form matches via `starts_with`.
+    (
+        "claude-opus-5-5",
+        ModelPricing {
+            prompt_per_mtok_usd: 4.00,
+            completion_per_mtok_usd: 20.00,
+        },
+    ),
+    // Opus 5, demoted to a legacy entry when `opus` moved to Opus 5.5.
     // The `[1m]` gateway form matches via `starts_with`.
     (
         "claude-opus-5",
@@ -188,6 +216,20 @@ mod tests {
     }
 
     #[test]
+    fn lookup_gpt_6_sol_and_luna() {
+        let sol = lookup("gpt-6-sol").expect("gpt-6-sol has pricing");
+        assert!((sol.prompt_per_mtok_usd - 2.00).abs() < f64::EPSILON);
+        assert!((sol.completion_per_mtok_usd - 10.00).abs() < f64::EPSILON);
+        let luna = lookup("gpt-6-luna").expect("gpt-6-luna has pricing");
+        assert!((luna.prompt_per_mtok_usd - 0.10).abs() < f64::EPSILON);
+        assert!((luna.completion_per_mtok_usd - 0.50).abs() < f64::EPSILON);
+        // Dated snapshots and provider-qualified ids share the bare prefix.
+        let dated =
+            lookup("openai/gpt-6-sol-2026-09-22").expect("snapshot resolves to same pricing");
+        assert!((dated.prompt_per_mtok_usd - 2.00).abs() < f64::EPSILON);
+    }
+
+    #[test]
     fn lookup_fable_5_priced_at_2x_opus() {
         let p = lookup("claude-fable-5").expect("claude-fable-5 has pricing");
         assert!((p.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
@@ -222,6 +264,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn lookup_opus_5_5() {
+        let p = lookup("claude-opus-5-5").expect("claude-opus-5-5 has pricing");
+        assert!((p.prompt_per_mtok_usd - 4.00).abs() < f64::EPSILON);
+        assert!((p.completion_per_mtok_usd - 20.00).abs() < f64::EPSILON);
+        // The 1M gateway form shares the bare prefix via `starts_with`.
+        let one_m = lookup("claude-opus-5-5[1m]").expect("1M variant resolves to same pricing");
+        assert!((one_m.prompt_per_mtok_usd - 4.00).abs() < f64::EPSILON);
     }
 
     #[test]

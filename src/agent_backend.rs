@@ -251,17 +251,23 @@ impl AgentBackendConfig {
             kind: AgentBackendKind::CodexNative,
             base_url: None,
             enabled: true,
-            default_model: Some("gpt-5.4".to_string()),
+            // Seeded fallbacks for before the app-server's `model/list` has
+            // been queried (or when it can't be). GPT-6 Sol is Codex's default
+            // starting model; Luna is the high-volume tier. Both advertise a
+            // 1.05M API window, but Codex caps sessions at 272K input tokens,
+            // so that's the window the meter should reflect — same as every
+            // earlier Codex model.
+            default_model: Some("gpt-6-sol".to_string()),
             manual_models: vec![
                 AgentBackendModel {
-                    id: "gpt-5.4".to_string(),
-                    label: "GPT-5.4".to_string(),
+                    id: "gpt-6-sol".to_string(),
+                    label: "GPT-6 Sol".to_string(),
                     context_window_tokens: 272_000,
                     discovered: false,
                 },
                 AgentBackendModel {
-                    id: "gpt-5.3-codex".to_string(),
-                    label: "GPT-5.3 Codex".to_string(),
+                    id: "gpt-6-luna".to_string(),
+                    label: "GPT-6 Luna".to_string(),
                     context_window_tokens: 272_000,
                     discovered: false,
                 },
@@ -336,6 +342,28 @@ mod tests {
                 .manual_models
                 .iter()
                 .all(|model| model.context_window_tokens == 272_000)
+        );
+        // The seeded default must be one of the seeded fallbacks, so a fresh
+        // install resolves a model before discovery has run.
+        let default_model = backend
+            .default_model
+            .as_deref()
+            .expect("codex seeds a default");
+        assert_eq!(default_model, "gpt-6-sol");
+        assert!(
+            backend
+                .manual_models
+                .iter()
+                .any(|model| model.id == default_model),
+            "default `{default_model}` must appear in manual_models",
+        );
+        assert_eq!(
+            backend
+                .manual_models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-6-sol", "gpt-6-luna"],
         );
     }
 
