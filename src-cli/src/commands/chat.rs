@@ -143,7 +143,7 @@ pub enum Action {
         #[arg(long = "no-thinking", overrides_with = "thinking", hide = true)]
         no_thinking: bool,
         /// Enable fast mode (lower-latency variant; built-in support:
-        /// Opus 4.6). Pair: `--no-fast` forces off.
+        /// Opus 5.5, Opus 5, Opus 4.8). Pair: `--no-fast` forces off.
         #[arg(long, overrides_with = "no_fast")]
         fast: bool,
         #[arg(long = "no-fast", overrides_with = "fast", hide = true)]

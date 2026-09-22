@@ -2,8 +2,12 @@ import { describe, it, expect } from "vitest";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "./modelCapabilities";
 
 describe("isFastSupported", () => {
-  it("returns true for opus alias (now Opus 5)", () => {
+  it("returns true for opus alias (now Opus 5.5)", () => {
     expect(isFastSupported("opus")).toBe(true);
+  });
+
+  it("returns true for claude-opus-5 (demoted but still fast-capable)", () => {
+    expect(isFastSupported("claude-opus-5")).toBe(true);
   });
 
   it("returns true for claude-opus-4-8 (demoted but still fast-capable)", () => {
@@ -14,7 +18,7 @@ describe("isFastSupported", () => {
     expect(isFastSupported("claude-opus-4-8[1m]")).toBe(true);
   });
 
-  it("returns false for claude-opus-4-6 (fast mode is Opus 5 / Opus 4.8 only)", () => {
+  it("returns false for claude-opus-4-6 (fast mode is Opus 5.5 / Opus 5 / Opus 4.8 only)", () => {
     expect(isFastSupported("claude-opus-4-6")).toBe(false);
   });
 
@@ -26,11 +30,11 @@ describe("isFastSupported", () => {
     expect(isFastSupported("claude-opus-4-7")).toBe(false);
   });
 
-  it("returns false for claude-fable-5 (Opus-class but fast is Opus 5 / Opus 4.8 only)", () => {
+  it("returns false for claude-fable-5 (Opus-class but fast is Opus 5.5 / Opus 5 / Opus 4.8 only)", () => {
     expect(isFastSupported("claude-fable-5")).toBe(false);
   });
 
-  it("returns false for claude-fable-5-1 (Opus-class but fast is Opus 5 / Opus 4.8 only)", () => {
+  it("returns false for claude-fable-5-1 (Opus-class but fast is Opus 5.5 / Opus 5 / Opus 4.8 only)", () => {
     expect(isFastSupported("claude-fable-5-1")).toBe(false);
   });
 
@@ -46,6 +50,10 @@ describe("isFastSupported", () => {
 describe("isEffortSupported", () => {
   it("returns true for opus", () => {
     expect(isEffortSupported("opus")).toBe(true);
+  });
+
+  it("returns true for claude-opus-5 (demoted but still effort-capable)", () => {
+    expect(isEffortSupported("claude-opus-5")).toBe(true);
   });
 
   it("returns true for claude-opus-4-8", () => {
@@ -106,6 +114,10 @@ describe("isXhighEffortAllowed", () => {
     expect(isXhighEffortAllowed("opus")).toBe(true);
   });
 
+  it("returns true for claude-opus-5", () => {
+    expect(isXhighEffortAllowed("claude-opus-5")).toBe(true);
+  });
+
   it("returns true for claude-opus-4-8", () => {
     expect(isXhighEffortAllowed("claude-opus-4-8")).toBe(true);
   });
@@ -151,6 +163,10 @@ describe("isXhighEffortAllowed", () => {
 describe("isMaxEffortAllowed", () => {
   it("returns true for opus", () => {
     expect(isMaxEffortAllowed("opus")).toBe(true);
+  });
+
+  it("returns true for claude-opus-5", () => {
+    expect(isMaxEffortAllowed("claude-opus-5")).toBe(true);
   });
 
   it("returns true for claude-opus-4-8", () => {
