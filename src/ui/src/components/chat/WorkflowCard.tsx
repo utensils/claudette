@@ -1,3 +1,4 @@
+import { parseToolInput } from "../../utils/toolInput";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { isTerminalBackgroundTaskStatus } from "../../types/backgroundTaskStatus";
@@ -29,14 +30,8 @@ const UNPHASED = "__claudette_unphased__";
  *  the script. Returns null for workflows launched by `name` or
  *  `scriptPath`, where there is no inline source to show. */
 function workflowScript(inputJson: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(inputJson || "{}");
-    if (!parsed || typeof parsed !== "object") return null;
-    const script = (parsed as { script?: unknown }).script;
-    return typeof script === "string" && script.trim() ? script : null;
-  } catch {
-    return null;
-  }
+  const script = parseToolInput(inputJson)?.script;
+  return typeof script === "string" && script.trim() ? script : null;
 }
 
 function stateIcon(state: string): string {

@@ -51,6 +51,7 @@ import {
   searchFileIndex,
   type FileSearchResult,
 } from "./fileFuzzySearch";
+import { makeChatMessage } from "../../utils/chatMessage";
 import styles from "./CommandPalette.module.css";
 
 const FILE_RESULT_ROW_HEIGHT = 52;
@@ -255,18 +256,15 @@ export function CommandPalette() {
       selectWorkspace(result.workspace.id);
       const sessionId = result.default_session_id;
       if (generated.message) {
-        addChatMessage(sessionId, {
-          id: crypto.randomUUID(),
-          workspace_id: result.workspace.id,
-          chat_session_id: sessionId,
-          role: "System",
-          content: generated.message,
-          cost_usd: null,
-          duration_ms: null,
-          created_at: new Date().toISOString(),
-          thinking: null,
-          input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
-        });
+        addChatMessage(
+          sessionId,
+          makeChatMessage({
+            workspaceId: result.workspace.id,
+            sessionId,
+            role: "System",
+            content: generated.message,
+          }),
+        );
       }
       // Check for setup script and prompt for confirmation.
       try {

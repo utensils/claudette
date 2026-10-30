@@ -1,3 +1,4 @@
+import { parseToolInput } from "../../utils/toolInput";
 /**
  * Per-tool display metadata: which input field carries the "primary
  * content" worth surfacing in the chat tool-call row, and what
@@ -218,16 +219,8 @@ export function resolveToolSummary(
   toolName: string,
   inputJson: string,
 ): ResolvedToolDisplay {
-  let input: unknown;
-  try {
-    input = JSON.parse(inputJson);
-  } catch {
-    return EMPTY_DISPLAY;
-  }
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    return EMPTY_DISPLAY;
-  }
-  const record = input as Record<string, unknown>;
+  const record = parseToolInput(inputJson);
+  if (!record) return EMPTY_DISPLAY;
 
   // Layer 1: exact-name registry.
   const exact = TOOL_METADATA[toolName];

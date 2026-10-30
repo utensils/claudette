@@ -7,6 +7,7 @@ import {
   runWorkspaceSetup,
 } from "../services/tauri";
 import { runAndRecordSetupScript } from "../utils/setupScriptMessage";
+import { makeChatMessage } from "../utils/chatMessage";
 import type { Workspace } from "../types/workspace";
 import { promptRequiredInputsIfDeclared } from "./promptRequiredInputs";
 
@@ -255,21 +256,15 @@ async function runCreateWorkspaceOrchestrated(
 
     const sessionId = result.default_session_id;
     if (generated.message) {
-      post.addChatMessage(sessionId, {
-        id: crypto.randomUUID(),
-        workspace_id: result.workspace.id,
-        chat_session_id: sessionId,
-        role: "System",
-        content: generated.message,
-        cost_usd: null,
-        duration_ms: null,
-        created_at: new Date().toISOString(),
-        thinking: null,
-        input_tokens: null,
-        output_tokens: null,
-        cache_read_tokens: null,
-        cache_creation_tokens: null,
-      });
+      post.addChatMessage(
+        sessionId,
+        makeChatMessage({
+          workspaceId: result.workspace.id,
+          sessionId,
+          role: "System",
+          content: generated.message,
+        }),
+      );
     }
 
     // Setup script — auto-run if the repo opted in, otherwise prompt.

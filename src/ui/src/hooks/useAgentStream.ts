@@ -36,6 +36,7 @@ import {
   clearBlockToolsForSession,
 } from "./blockToolMap";
 import { debugChat } from "../utils/chatDebug";
+import { makeChatMessage } from "../utils/chatMessage";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
@@ -621,21 +622,13 @@ export function useAgentStream() {
                 postTokens: m.post_tokens,
                 durationMs: m.duration_ms,
               });
-              const liveSentinel: ChatMessage = {
-                id: crypto.randomUUID(),
-                workspace_id: wsId,
-                chat_session_id: sessionId,
+              const liveSentinel = makeChatMessage({
+                workspaceId: wsId,
+                sessionId,
                 role: "System",
                 content: sentinel,
-                cost_usd: null,
-                duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking: null,
-                input_tokens: null,
-                output_tokens: null,
-                cache_read_tokens: m.post_tokens,
-                cache_creation_tokens: null,
-              };
+                cacheReadTokens: m.post_tokens,
+              });
               store.addChatMessage(sessionId, liveSentinel);
 
               // Drop the ContextMeter to the post-compaction baseline
@@ -860,24 +853,20 @@ export function useAgentStream() {
               // messageId tells MessagesWithTurns to hide the just-added
               // completed message until drain finishes.
               setPendingTypewriter(sessionId, messageId, text);
-              addChatMessage(sessionId, {
-                id: messageId,
-                workspace_id: wsId,
-                chat_session_id: sessionId,
-                role: "Assistant",
-                content: text,
-                cost_usd: null,
-                duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking:
-                  useAppStore.getState().streamingThinking[sessionId] ||
-                  thinking ||
-                  null,
-                input_tokens: null,
-                output_tokens: null,
-                cache_read_tokens: null,
-                cache_creation_tokens: null,
-              });
+              addChatMessage(
+                sessionId,
+                makeChatMessage({
+                  id: messageId,
+                  workspaceId: wsId,
+                  sessionId,
+                  role: "Assistant",
+                  content: text,
+                  thinking:
+                    useAppStore.getState().streamingThinking[sessionId] ||
+                    thinking ||
+                    null,
+                }),
+              );
               // streamingThinking is NOT cleared here — StreamingThinkingBlock
               // needs to keep rendering through the typewriter drain so the
               // block doesn't vanish between streamingContent clearing and the

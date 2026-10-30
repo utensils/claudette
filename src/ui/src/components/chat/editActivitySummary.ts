@@ -1,3 +1,4 @@
+import { parseToolInput } from "../../utils/toolInput";
 import type { AgentToolCall, ToolActivity } from "../../stores/useAppStore";
 import type { DiffFile, FileDiff } from "../../types/diff";
 
@@ -410,11 +411,7 @@ function capPreviewLines(lines: readonly EditPreviewLine[]): EditPreviewLine[] {
 }
 
 function parseJsonRecord(inputJson: string): JsonRecord | null {
-  try {
-    return recordFromUnknown(JSON.parse(inputJson));
-  } catch {
-    return null;
-  }
+  return parseToolInput(inputJson);
 }
 
 function recordFromUnknown(value: unknown): JsonRecord | null {

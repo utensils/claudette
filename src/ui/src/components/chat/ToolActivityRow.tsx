@@ -1,8 +1,9 @@
+import { parseToolInput } from "../../utils/toolInput";
 import { useCallback, useEffect, useMemo, useReducer, type MouseEvent } from "react";
 import { ChevronRight, WandSparkles } from "lucide-react";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { useAppStore } from "../../stores/useAppStore";
-import { extractToolSummary, relativizePath } from "../../hooks/toolSummary";
+import { relativizePath } from "../../hooks/toolSummary";
 import { getCachedHighlight, highlightCode } from "../../utils/highlight";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ChatPanel.module.css";
@@ -14,6 +15,7 @@ import {
   summarizeToolActivityEdit,
 } from "./editActivitySummary";
 import { resolveToolSummary } from "./toolMetadata";
+import { activitySummaryText } from "./agentToolCallRendering";
 import { isSkillActivity, skillActivationName } from "./toolActivityGroups";
 import { parseMcpToolName } from "./mcpToolName";
 import { tryOpenAgentFileTab } from "../../utils/agentFiles";
@@ -234,15 +236,6 @@ function GenericToolActivityRow({
   );
 }
 
-function activitySummaryText(activity: ToolActivity): string {
-  return (
-    activity.summary ||
-    activity.agentDescription ||
-    extractToolSummary(activity.toolName, activity.inputJson) ||
-    ""
-  );
-}
-
 function findDiffTarget(
   path: string,
   diffFiles: ReturnType<typeof useAppStore.getState>["diffFiles"],
@@ -265,7 +258,7 @@ function findDiffTarget(
 }
 
 function toolDetails(activity: ToolActivity): ToolDetails {
-  const input = parseObject(activity.inputJson);
+  const input = parseToolInput(activity.inputJson);
   const display = resolveToolSummary(activity.toolName, activity.inputJson);
   const readableInput = input ? readableToolInput(activity.toolName, input) : null;
 
@@ -286,15 +279,7 @@ function toolDetails(activity: ToolActivity): ToolDetails {
   return { content: activity.inputJson || "{}", lang: null };
 }
 
-function parseObject(inputJson: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(inputJson);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
+
 
 function shouldShowStructuredInput(
   input: Record<string, unknown>,

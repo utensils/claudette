@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../types/chat";
+import { makeChatMessage } from "./chatMessage";
 import type { SetupResult } from "../types/repository";
 
 /** State of a setup-script run. `running` is the in-flight indicator (rendered
@@ -68,21 +69,7 @@ function blankSystemMessage(
   workspaceId: string,
   content: string,
 ): ChatMessage {
-  return {
-    id: crypto.randomUUID(),
-    workspace_id: workspaceId,
-    chat_session_id: sessionId,
-    role: "System",
-    content,
-    cost_usd: null,
-    duration_ms: null,
-    created_at: new Date().toISOString(),
-    thinking: null,
-    input_tokens: null,
-    output_tokens: null,
-    cache_read_tokens: null,
-    cache_creation_tokens: null,
-  };
+  return makeChatMessage({ workspaceId, sessionId, role: "System", content });
 }
 
 /** Store hooks the recorder needs. Passed in rather than importing the store

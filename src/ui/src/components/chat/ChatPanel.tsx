@@ -24,6 +24,8 @@ import { resolveSessionHarness } from "./resolveSessionHarness";
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
 import { setPlanModeAndPersist } from "./planModePersistence";
+import { addPersistedUserMessageToStore } from "./chatTurnLifecycle";
+import { makeChatMessage } from "../../utils/chatMessage";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { dispatchChatMessage } from "./chatMessageDispatch";
 import { shouldRecordSendFailureInChat } from "./chatSendFailure";
@@ -262,43 +264,6 @@ export function ChatPanel() {
 
   if (!ws) return null;
 
-  const addPersistedUserMessageToStore = (
-    sessionId: string,
-    messageId: string,
-    content: string,
-    attachments?: AttachmentInput[],
-  ) => {
-    addChatMessage(sessionId, {
-      id: messageId,
-      workspace_id: ws.id,
-      chat_session_id: sessionId,
-      role: "User",
-      content,
-      cost_usd: null,
-      duration_ms: null,
-      created_at: new Date().toISOString(),
-      thinking: null,
-      input_tokens: null,
-      output_tokens: null,
-      cache_read_tokens: null,
-      cache_creation_tokens: null,
-    });
-    if (attachments?.length) {
-      const optimisticAtts = attachments.map((a) => ({
-        id: crypto.randomUUID(),
-        message_id: messageId,
-        filename: a.filename,
-        media_type: a.media_type,
-        data_base64: a.data_base64,
-        text_content: a.text_content ?? null,
-        width: null,
-        height: null,
-        size_bytes: Math.ceil(a.data_base64.length * 0.75),
-      }));
-      useAppStore.getState().addChatAttachments(sessionId, optimisticAtts);
-    }
-  };
-
   // Skip-queue / steer entry from the chat composer (default Cmd+Enter).
   // Mirrors handleSteerQueuedMessage but takes content from the input area
   // directly instead of the queued-message slot — the user is asking to
@@ -351,7 +316,13 @@ export function ChatPanel() {
       history.push(content);
       historyIndexRef.current = -1;
       draftRef.current = "";
-      addPersistedUserMessageToStore(sessionId, messageId, content, attachments);
+      addPersistedUserMessageToStore(
+        sessionId,
+        ws.id,
+        messageId,
+        content,
+        attachments,
+      );
     } catch (e) {
       const errMsg = String(e);
       console.error("steerQueuedChatMessage (skip-queue) failed:", errMsg);
@@ -402,7 +373,13 @@ export function ChatPanel() {
       history.push(content);
       historyIndexRef.current = -1;
       draftRef.current = "";
-      addPersistedUserMessageToStore(sessionId, messageId, content, attachments);
+      addPersistedUserMessageToStore(
+        sessionId,
+        ws.id,
+        messageId,
+        content,
+        attachments,
+      );
     } catch (e) {
       const errMsg = String(e);
       console.error("steerQueuedChatMessage failed:", errMsg);
@@ -528,21 +505,12 @@ export function ChatPanel() {
         const addLocalMessage = (text: string) => {
           addChatMessage(
             sessionId,
-            {
-              id: crypto.randomUUID(),
-              workspace_id: workspaceId,
-              chat_session_id: sessionId,
+            makeChatMessage({
+              workspaceId,
+              sessionId,
               role: "System",
               content: text,
-              cost_usd: null,
-              duration_ms: null,
-              created_at: new Date().toISOString(),
-              thinking: null,
-              input_tokens: null,
-              output_tokens: null,
-              cache_read_tokens: null,
-              cache_creation_tokens: null,
-            },
+            }),
             { persisted: false },
           );
         };

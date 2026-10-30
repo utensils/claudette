@@ -1,5 +1,6 @@
 import { useAppStore, type AppState } from "../../stores/useAppStore";
-import type { AttachmentInput, ChatMessage } from "../../types/chat";
+import { makeChatMessage } from "../../utils/chatMessage";
+import type { AttachmentInput } from "../../types/chat";
 
 interface MarkChatTurnStartingArgs {
   sessionId: string;
@@ -10,7 +11,7 @@ interface MarkChatTurnStartingArgs {
   startedAt?: number;
 }
 
-function addPersistedUserMessageToStore(
+export function addPersistedUserMessageToStore(
   sessionId: string,
   workspaceId: string,
   messageId: string,
@@ -18,22 +19,16 @@ function addPersistedUserMessageToStore(
   attachments?: AttachmentInput[],
 ) {
   const store = useAppStore.getState();
-  const message: ChatMessage = {
-    id: messageId,
-    workspace_id: workspaceId,
-    chat_session_id: sessionId,
-    role: "User",
-    content,
-    cost_usd: null,
-    duration_ms: null,
-    created_at: new Date().toISOString(),
-    thinking: null,
-    input_tokens: null,
-    output_tokens: null,
-    cache_read_tokens: null,
-    cache_creation_tokens: null,
-  };
-  store.addChatMessage(sessionId, message);
+  store.addChatMessage(
+    sessionId,
+    makeChatMessage({
+      id: messageId,
+      workspaceId,
+      sessionId,
+      role: "User",
+      content,
+    }),
+  );
 
   if (!attachments?.length) return;
   const optimisticAttachments = attachments.map((attachment) => ({

@@ -1,3 +1,4 @@
+import { nonEmptyStringField, parseToolInput } from "../../utils/toolInput";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { parseMcpToolName } from "./mcpToolName";
@@ -102,20 +103,8 @@ export function isWorkflowActivity(activity: ToolActivity): boolean {
  *  back to the first token of the activity summary, then "Skill". Shared by
  *  the group label and the rendered "<skill> activated" marker. */
 export function skillActivationName(activity: ToolActivity): string {
-  try {
-    const parsed = JSON.parse(activity.inputJson || "{}") as unknown;
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      typeof (parsed as { skill?: unknown }).skill === "string"
-    ) {
-      const skill = (parsed as { skill: string }).skill.trim();
-      if (skill) return skill;
-    }
-  } catch {
-    // Fall through to the summary-derived fallback below.
-  }
+  const skill = nonEmptyStringField(parseToolInput(activity.inputJson)?.skill);
+  if (skill) return skill;
   const fromSummary = activity.summary?.trim().split(/\s+/)[0] ?? "";
   return fromSummary || "Skill";
 }
