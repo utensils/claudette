@@ -91,6 +91,9 @@ pub struct AgentSessionState {
     /// `steer_queued_chat_message` appends here; the head is dispatched as
     /// the next turn when the current one ends (`Result` / `ProcessExited`).
     pub pending_message_queue: VecDeque<QueuedMessage>,
+    /// Spawn-time agent flags of `persistent_session` (see
+    /// `handler::spawn_signature`); a change restarts the CLI.
+    pub spawn_signature: String,
 }
 
 /// Snapshot of a `can_use_tool` request waiting for a client response.
@@ -183,6 +186,7 @@ pub async fn handle_tls_connection(
     config_path: std::sync::Arc<PathBuf>,
     tls_stream: TlsStream<TcpStream>,
     addr: SocketAddr,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let ws_stream = match tokio_tungstenite::accept_async(tls_stream).await {
         Ok(ws) => ws,
@@ -318,6 +322,14 @@ pub async fn handle_tls_connection(
     let mut events = host.subscribe();
     loop {
         let msg_result = tokio::select! {
+            // Map to bool so the non-`Send` watch guard isn't held across
+            // the select's await points.
+            _ = async { shutdown.wait_for(|stop| *stop).await.is_ok() } => {
+                let mut w = writer.lock().await;
+                let _ = w.send(Message::Close(None)).await;
+                let _ = w.close().await;
+                break;
+            }
             msg = read.next() => match msg {
                 Some(msg) => msg,
                 None => break,

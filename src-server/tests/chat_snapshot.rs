@@ -122,6 +122,7 @@ fn empty_session(workspace_id: &str) -> AgentSessionState {
         persistent_session: None,
         pending_permissions: HashMap::new(),
         pending_message_queue: VecDeque::new(),
+        spawn_signature: String::new(),
     }
 }
 

@@ -24,6 +24,8 @@ pub struct ServerOptions {
     pub name: Option<String>,
     pub no_mdns: bool,
     pub config_path: Option<PathBuf>,
+    /// Where `cert.pem` / `key.pem` live. Defaults to [`config_dir`].
+    pub tls_dir: Option<PathBuf>,
 }
 
 impl Default for ServerOptions {
@@ -34,6 +36,7 @@ impl Default for ServerOptions {
             name: None,
             no_mdns: false,
             config_path: None,
+            tls_dir: None,
         }
     }
 }
@@ -61,17 +64,15 @@ pub struct ServerHandle {
     pub server_name: String,
     pub bind: String,
     pub port: u16,
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    shutdown: tokio::sync::watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl ServerHandle {
-    /// Stop accepting connections and drop the mDNS advertisement.
-    /// Established connections end when their sockets close. Idempotent.
+    /// Stop accepting connections, close every established one, and drop
+    /// the mDNS advertisement. Idempotent.
     pub fn stop(&mut self) {
-        if let Some(tx) = self.shutdown.take() {
-            let _ = tx.send(());
-        }
+        let _ = self.shutdown.send(true);
     }
 
     /// Wait for the accept loop to end (it only ends on [`Self::stop`] or a
@@ -102,8 +103,9 @@ pub async fn start(options: ServerOptions, host: Arc<dyn RpcHost>) -> Result<Ser
     config.save(&config_path).map_err(|e| e.to_string())?;
 
     // Load or generate TLS certificate.
-    let tls_config = tls::load_or_generate_tls(&config_dir()).map_err(|e| e.to_string())?;
-    let fingerprint = tls::cert_fingerprint(&config_dir()).map_err(|e| e.to_string())?;
+    let tls_dir = options.tls_dir.clone().unwrap_or_else(config_dir);
+    let tls_config = tls::load_or_generate_tls(&tls_dir).map_err(|e| e.to_string())?;
+    let fingerprint = tls::cert_fingerprint(&tls_dir).map_err(|e| e.to_string())?;
 
     // Wrap config in shared state so all connections see session mutations.
     let pairing_token = config.auth.pairing_token.clone();
@@ -117,13 +119,19 @@ pub async fn start(options: ServerOptions, host: Arc<dyn RpcHost>) -> Result<Ser
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|e| format!("failed to bind {addr}: {e}"))?;
+    // Report the bound port, which differs from the requested one when the
+    // caller asked for port 0.
+    let port = listener
+        .local_addr()
+        .map(|a| a.port())
+        .unwrap_or(options.port);
     let acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
 
     let mdns = if options.no_mdns {
         None
     } else {
         let short_fp = &fingerprint[..fingerprint.len().min(16)];
-        match mdns::advertise(&server_name, options.port, short_fp) {
+        match mdns::advertise(&server_name, port, short_fp) {
             Ok(daemon) => Some(daemon),
             Err(e) => {
                 // Pairing by connection string still works without mDNS.
@@ -139,12 +147,13 @@ pub async fn start(options: ServerOptions, host: Arc<dyn RpcHost>) -> Result<Ser
         hostname, options.port, pairing_token
     );
 
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut accept_shutdown = shutdown_rx.clone();
     let task = tokio::spawn(async move {
         loop {
             let accepted = tokio::select! {
                 accepted = listener.accept() => accepted,
-                _ = &mut shutdown_rx => break,
+                _ = async { accept_shutdown.wait_for(|stop| *stop).await.is_ok() } => break,
             };
             let (stream, peer_addr) = match accepted {
                 Ok(pair) => pair,
@@ -157,12 +166,20 @@ pub async fn start(options: ServerOptions, host: Arc<dyn RpcHost>) -> Result<Ser
             let host = Arc::clone(&host);
             let config = Arc::clone(&config);
             let config_path = Arc::clone(&config_path);
+            let shutdown = shutdown_rx.clone();
 
             tokio::spawn(async move {
                 match acceptor.accept(stream).await {
                     Ok(tls_stream) => {
-                        ws::handle_tls_connection(host, config, config_path, tls_stream, peer_addr)
-                            .await;
+                        ws::handle_tls_connection(
+                            host,
+                            config,
+                            config_path,
+                            tls_stream,
+                            peer_addr,
+                            shutdown,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -186,8 +203,8 @@ pub async fn start(options: ServerOptions, host: Arc<dyn RpcHost>) -> Result<Ser
         cert_fingerprint: fingerprint,
         server_name,
         bind: options.bind,
-        port: options.port,
-        shutdown: Some(shutdown_tx),
+        port,
+        shutdown: shutdown_tx,
         task,
     })
 }

@@ -289,40 +289,7 @@ fn enabled_key(repo_id: &str, plugin_name: &str) -> String {
 /// disabled for a repo. Absent settings = enabled (default), so the
 /// returned set contains only names with the setting set to `"false"`.
 pub(crate) fn load_disabled_providers(db: &Database, repo_id: &str) -> HashSet<String> {
-    // We list all app settings with the repo+env_provider prefix.
-    // Pattern is precise; rusqlite does this cheaply via LIKE.
-    let prefix = format!("repo:{repo_id}:env_provider:");
-    let mut set: HashSet<String> = db
-        .list_app_settings_with_prefix(&prefix)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|(key, value)| {
-            if value == "false" {
-                // key = "repo:{repo_id}:env_provider:{plugin_name}:enabled"
-                let rest = key.strip_prefix(&prefix)?;
-                let plugin_name = rest.strip_suffix(":enabled")?;
-                Some(plugin_name.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // The global shell-env tier is toggled via a flat app_settings key
-    // (not the per-repo env_provider:{plugin}:enabled convention), so
-    // fold it into the disabled set here. The dispatcher treats
-    // "shell-env" in `disabled` as "skip the synthetic source".
-    if db
-        .get_app_setting("shell_env:disabled")
-        .ok()
-        .flatten()
-        .map(|v| v == "true")
-        .unwrap_or(false)
-    {
-        set.insert("shell-env".to_string());
-    }
-
-    set
+    claudette::env_provider::load_disabled_providers(db, repo_id)
 }
 
 /// Layer a workspace's stored input values onto an already-resolved env.

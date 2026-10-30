@@ -617,6 +617,51 @@ fn merge_into(merged: &mut EnvMap, incoming: &EnvMap) {
     }
 }
 
+/// Load the set of env-provider plugin names that have been explicitly
+/// disabled for a repo (`repo:{repo_id}:env_provider:{plugin}:enabled =
+/// "false"`), plus `"shell-env"` when the global shell-env tier is off.
+/// Absent settings = enabled. Shared by the desktop app and the standalone
+/// server so both honor the same toggles.
+pub fn load_disabled_providers(
+    db: &crate::db::Database,
+    repo_id: &str,
+) -> std::collections::HashSet<String> {
+    // We list all app settings with the repo+env_provider prefix.
+    // Pattern is precise; rusqlite does this cheaply via LIKE.
+    let prefix = format!("repo:{repo_id}:env_provider:");
+    let mut set: std::collections::HashSet<String> = db
+        .list_app_settings_with_prefix(&prefix)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(key, value)| {
+            if value == "false" {
+                // key = "repo:{repo_id}:env_provider:{plugin_name}:enabled"
+                let rest = key.strip_prefix(&prefix)?;
+                let plugin_name = rest.strip_suffix(":enabled")?;
+                Some(plugin_name.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // The global shell-env tier is toggled via a flat app_settings key
+    // (not the per-repo env_provider:{plugin}:enabled convention), so
+    // fold it into the disabled set here. The dispatcher treats
+    // "shell-env" in `disabled` as "skip the synthetic source".
+    if db
+        .get_app_setting("shell_env:disabled")
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        set.insert("shell-env".to_string());
+    }
+
+    set
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

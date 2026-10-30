@@ -56,6 +56,7 @@ fn session_with_pending(
         persistent_session: None,
         pending_permissions: pending,
         pending_message_queue: VecDeque::new(),
+        spawn_signature: String::new(),
     }
 }
 
@@ -70,6 +71,7 @@ fn session_empty(workspace_id: &str) -> AgentSessionState {
         persistent_session: None,
         pending_permissions: HashMap::new(),
         pending_message_queue: VecDeque::new(),
+        spawn_signature: String::new(),
     }
 }
 
@@ -156,6 +158,7 @@ async fn steer_queued_chat_message_appends_to_queue() {
                 persistent_session: None,
                 pending_permissions: HashMap::new(),
                 pending_message_queue: VecDeque::new(),
+                spawn_signature: String::new(),
             },
         );
     }

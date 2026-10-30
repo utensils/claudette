@@ -101,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name: cli.name,
                 no_mdns: cli.no_mdns,
                 config_path: cli.config,
+                tls_dir: None,
             })
             .await?;
         }
