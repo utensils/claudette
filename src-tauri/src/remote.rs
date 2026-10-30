@@ -112,21 +112,42 @@ impl RemoteConnectionManager {
     /// own IDs (see [`crate::remote_pty`]).
     pub async fn call(
         &self,
+        app: &AppHandle,
         connection_id: &str,
         method: &str,
         mut params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         let alias_in_request = params.get("pty_id").and_then(|v| v.as_u64());
         self.with_pty_aliases(|a| a.translate_request(connection_id, method, &mut params))?;
-        let response = self
+        let spawning = method == "spawn_pty";
+        if spawning {
+            self.with_pty_aliases(|a| a.begin_spawn(connection_id));
+        }
+        let outcome = self
             .send(
                 connection_id,
                 serde_json::json!({ "method": method, "params": params }),
             )
-            .await?;
-        let result = rpc_result(response)?;
+            .await
+            .and_then(rpc_result);
+        let result = match outcome {
+            Ok(result) => result,
+            Err(e) => {
+                if spawning {
+                    self.with_pty_aliases(|a| a.end_spawn(connection_id));
+                }
+                return Err(e);
+            }
+        };
         Ok(self.with_pty_aliases(|a| {
-            a.translate_response(connection_id, method, alias_in_request, result)
+            let (result, early) =
+                a.translate_response(connection_id, method, alias_in_request, result);
+            // Emitted under the alias lock so the forwarder can't emit this
+            // terminal's later output ahead of it.
+            for (event, payload) in early {
+                let _ = app.emit(&event, tag_remote_payload(payload, connection_id));
+            }
+            result
         }))
     }
 

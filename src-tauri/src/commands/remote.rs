@@ -370,9 +370,10 @@ pub async fn send_remote_command(
     connection_id: String,
     method: String,
     params: serde_json::Value,
+    app: AppHandle,
     manager: State<'_, RemoteConnectionManager>,
 ) -> Result<serde_json::Value, String> {
-    manager.call(&connection_id, &method, params).await
+    manager.call(&app, &connection_id, &method, params).await
 }
 
 // -- Local server (Share this machine) --
