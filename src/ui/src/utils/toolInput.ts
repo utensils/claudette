@@ -6,6 +6,9 @@ export type ToolInputRecord = Record<string, unknown>;
 // those repeat parses into a map lookup. Bounded FIFO: tool inputs can be
 // large (whole-file Writes), so don't keep an unbounded history alive.
 const CACHE_LIMIT = 512;
+// Inputs larger than this (whole-file Writes) are parsed but not cached, so
+// the cache can't pin tens of MB of keys and parsed objects.
+const CACHE_MAX_KEY_LENGTH = 64_000;
 const cache = new Map<string, ToolInputRecord | null>();
 
 /**
@@ -36,6 +39,7 @@ export function parseToolInput(
       ? (parsed as ToolInputRecord)
       : null;
 
+  if (inputJson.length > CACHE_MAX_KEY_LENGTH) return result;
   if (cache.size >= CACHE_LIMIT) {
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) cache.delete(oldest);
