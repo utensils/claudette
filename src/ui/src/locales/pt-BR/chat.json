@@ -228,5 +228,6 @@
   "agents_failed": "{{count}} com falha",
   "agents_stopped": "{{count}} parados",
   "agents_queued": "{{count}} na fila",
-  "task_progress_count": "{{completed}}/{{total}} tarefas"
+  "task_progress_count": "{{completed}}/{{total}} tarefas",
+  "tab_rename_failed": "Falha ao renomear: {{error}}"
 }

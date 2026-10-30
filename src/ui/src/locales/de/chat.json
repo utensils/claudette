@@ -300,5 +300,6 @@
   "agents_failed": "{{count}} fehlgeschlagen",
   "agents_stopped": "{{count}} gestoppt",
   "agents_queued": "{{count}} wartend",
-  "task_progress_count": "{{completed}}/{{total}} Aufgaben"
+  "task_progress_count": "{{completed}}/{{total}} Aufgaben",
+  "tab_rename_failed": "Umbenennen fehlgeschlagen: {{error}}"
 }

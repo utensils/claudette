@@ -226,5 +226,6 @@
   "agents_failed": "{{count}} 件失敗",
   "agents_stopped": "{{count}} 件停止",
   "agents_queued": "{{count}} 件待機中",
-  "task_progress_count": "{{completed}}/{{total}} タスク"
+  "task_progress_count": "{{completed}}/{{total}} タスク",
+  "tab_rename_failed": "名前の変更に失敗しました: {{error}}"
 }

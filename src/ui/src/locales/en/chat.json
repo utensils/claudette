@@ -302,5 +302,6 @@
   "agents_failed": "{{count}} failed",
   "agents_stopped": "{{count}} stopped",
   "agents_queued": "{{count}} queued",
-  "task_progress_count": "{{completed}}/{{total}} tasks"
+  "task_progress_count": "{{completed}}/{{total}} tasks",
+  "tab_rename_failed": "Rename failed: {{error}}"
 }

@@ -226,5 +226,6 @@
   "agents_failed": "{{count}} 个失败",
   "agents_stopped": "{{count}} 个已停止",
   "agents_queued": "{{count}} 个排队中",
-  "task_progress_count": "{{completed}}/{{total}} 个任务"
+  "task_progress_count": "{{completed}}/{{total}} 个任务",
+  "tab_rename_failed": "重命名失败：{{error}}"
 }
