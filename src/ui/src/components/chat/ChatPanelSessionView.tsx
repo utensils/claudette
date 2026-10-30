@@ -12,14 +12,7 @@ import { LoaderCircle, SendHorizontal } from "lucide-react";
 
 import type { AttachmentInput } from "../../types/chat";
 import type { DownloadableAttachment } from "../../utils/attachmentDownload";
-import {
-  submitAgentAnswer,
-  submitAgentApproval,
-  submitPlanApproval,
-} from "../../services/tauri";
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
-import { AgentApprovalCard } from "./AgentApprovalCard";
-import { AgentQuestionCard } from "./AgentQuestionCard";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { ChatErrorBanner } from "./ChatErrorBanner";
 import { ChatInputArea } from "./ChatInputArea";
@@ -28,8 +21,6 @@ import { CliInvocationBanner } from "./CliInvocationBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 import { OverlayScrollbar } from "./OverlayScrollbar";
-import { PlanApprovalCard } from "./PlanApprovalCard";
-import { setPlanModeAndPersist } from "./planModePersistence";
 import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
 import { ScrollContext } from "./ScrollContext";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
@@ -37,6 +28,7 @@ import { WorkflowStatusPill } from "./WorkflowStatusPill";
 import { SetupScriptBanner } from "./SetupScriptBanner";
 import { StreamingMessage } from "./StreamingMessage";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
+import { PendingControlCards } from "./PendingControlCards";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 import { extractMentionPaths } from "./queuedMessageEditing";
 import { usePendingChatPrompt } from "./usePendingChatPrompt";
@@ -338,75 +330,19 @@ export function ChatPanelSessionView({
                   />
                 )}
 
-                {pendingQuestion && (
-                  <AgentQuestionCard
-                    question={pendingQuestion}
-                    onRespond={async (answers) => {
-                      if (!activeSessionId) return;
-                      const sid = activeSessionId;
-                      const toolUseId = pendingQuestion.toolUseId;
-                      try {
-                        await submitAgentAnswer(sid, toolUseId, answers);
-                        clearAgentQuestion(sid);
-                      } catch (e) {
-                        console.error("Failed to submit agent answer:", e);
-                        setError(String(e));
-                      }
-                    }}
-                  />
-                )}
-
-                {pendingPlan && selectedWorkspaceId && (
-                  <PlanApprovalCard
-                    approval={pendingPlan}
-                    workspaceId={selectedWorkspaceId}
-                    remoteConnectionId={ws?.remote_connection_id ?? undefined}
-                    onRespond={async (approved, reason) => {
-                      if (!activeSessionId) return;
-                      const sid = activeSessionId;
-                      const toolUseId = pendingPlan.toolUseId;
-                      const codexPlanApproval = pendingPlan.source === "codex";
-                      try {
-                        await submitPlanApproval(sid, toolUseId, approved, reason);
-                        clearPlanApproval(sid);
-                        if (codexPlanApproval) {
-                          if (approved) {
-                            await setPlanModeAndPersist(sid, false);
-                            await onSend("Implement the plan.");
-                          } else if (reason?.trim()) {
-                            await setPlanModeAndPersist(sid, true);
-                            await onSend(
-                              `${reason.trim()}\n\nRevise the plan to address this feedback. Do not begin implementation.`,
-                            );
-                          }
-                        } else {
-                          await setPlanModeAndPersist(sid, false);
-                        }
-                      } catch (e) {
-                        console.error("Failed to submit plan approval:", e);
-                        setError(String(e));
-                      }
-                    }}
-                  />
-                )}
-
-                {pendingApproval && (
-                  <AgentApprovalCard
-                    approval={pendingApproval}
-                    onRespond={async (approved, reason) => {
-                      if (!activeSessionId) return;
-                      const sid = activeSessionId;
-                      const toolUseId = pendingApproval.toolUseId;
-                      try {
-                        await submitAgentApproval(sid, toolUseId, approved, reason);
-                        clearAgentApproval(sid);
-                      } catch (e) {
-                        console.error("Failed to submit agent approval:", e);
-                        setError(String(e));
-                      }
-                    }}
-                  />
-                )}
+                <PendingControlCards
+                  activeSessionId={activeSessionId}
+                  selectedWorkspaceId={selectedWorkspaceId}
+                  ws={ws}
+                  pendingQuestion={pendingQuestion}
+                  pendingPlan={pendingPlan}
+                  pendingApproval={pendingApproval}
+                  clearAgentQuestion={clearAgentQuestion}
+                  clearPlanApproval={clearPlanApproval}
+                  clearAgentApproval={clearAgentApproval}
+                  setError={setError}
+                  onSend={onSend}
+                />
 
                 {isSteeringQueued && (
                   <div
