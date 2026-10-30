@@ -37,7 +37,6 @@ import {
 } from "./nativeSlashCommands";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { SessionTabs } from "./SessionTabs";
-import { useWorkspaceElapsedSeconds } from "../../hooks/useWorkspaceElapsedSeconds";
 import styles from "./ChatPanel.module.css";
 import { useChatPanelStore } from "./useChatPanelStore";
 import { useChatPanelAttachments } from "./useChatPanelAttachments";
@@ -223,8 +222,12 @@ export function ChatPanel() {
       cancelPendingFork,
     ],
   );
-
-  const elapsed = useWorkspaceElapsedSeconds(selectedWorkspaceId, isRunning);
+  // Stable identity for the memoized transcript (`MessagesWithTurns`); an
+  // inline arrow here re-rendered every message on every ChatPanel render.
+  const forkTurn = useCallback(
+    (checkpointId: string) => void handleFork(checkpointId),
+    [handleFork],
+  );
 
   const {
     isAtBottom,
@@ -832,7 +835,6 @@ export function ChatPanel() {
           clearPlanApproval={clearPlanApproval}
           clearQueuedMessagesAndCancelEdit={clearQueuedMessagesAndCancelEdit}
           draftRef={draftRef}
-          elapsed={elapsed}
           error={error}
           globalOffset={globalOffset}
           hasPendingTypewriter={hasPendingTypewriter}
@@ -850,7 +852,7 @@ export function ChatPanel() {
           messagesContainerRef={messagesContainerRef}
           onAttachmentClick={openLightbox}
           onAttachmentContextMenu={openAttachmentMenu}
-          onForkTurn={(checkpointId) => void handleFork(checkpointId)}
+          onForkTurn={forkTurn}
           onRetryWorkspaceEnvironment={handleRetryWorkspaceEnvironment}
           onRunShellCommand={handleRunShellCommand}
           onSend={handleSend}

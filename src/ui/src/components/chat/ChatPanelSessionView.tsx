@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type {
   ContextType,
   Dispatch,
@@ -36,7 +37,7 @@ import { WorkflowStatusPill } from "./WorkflowStatusPill";
 import { SetupScriptBanner } from "./SetupScriptBanner";
 import { StreamingMessage } from "./StreamingMessage";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
-import { formatElapsedSeconds } from "./chatHelpers";
+import { ProcessingIndicator } from "./ProcessingIndicator";
 import { extractMentionPaths } from "./queuedMessageEditing";
 import { usePendingChatPrompt } from "./usePendingChatPrompt";
 import styles from "./ChatPanel.module.css";
@@ -85,7 +86,6 @@ type ChatPanelSessionViewProps = Pick<
 > & {
   clearQueuedMessagesAndCancelEdit: (sessionId: string) => void;
   draftRef: MutableRefObject<string>;
-  elapsed: number;
   error: string | null;
   historyIndexRef: MutableRefObject<number>;
   historyRef: MutableRefObject<Record<string, string[]>>;
@@ -133,7 +133,6 @@ export function ChatPanelSessionView({
   clearPlanApproval,
   clearQueuedMessagesAndCancelEdit,
   draftRef,
-  elapsed,
   error,
   globalOffset,
   hasPendingTypewriter,
@@ -187,7 +186,57 @@ export function ChatPanelSessionView({
 }: ChatPanelSessionViewProps) {
   const { t } = useTranslation("chat");
   const cliInvocation = activeChatSessionRecord?.cli_invocation ?? null;
-  const formatElapsed = formatElapsedSeconds;
+
+  // Built once per relevant input change rather than inline in JSX:
+  // `MessagesWithTurns` is memoized, and fresh element props on every
+  // render of this view defeated that memo — the whole transcript
+  // re-rendered on any parent update.
+  const hasLiveActivities = activitiesCount > 0;
+  const liveTaskProgressNode = useMemo(
+    () =>
+      activeSessionId && hasLiveActivities ? (
+        <CurrentTurnTaskProgress sessionId={activeSessionId} />
+      ) : null,
+    [activeSessionId, hasLiveActivities],
+  );
+  const streamingThinkingNode = useMemo(
+    () =>
+      activeSessionId && hasThinking && showThinkingBlocks ? (
+        <StreamingThinkingBlock
+          sessionId={activeSessionId}
+          isStreaming={isRunning ?? false}
+          inline={toolDisplayMode === "inline"}
+          searchQuery={searchQuery}
+        />
+      ) : null,
+    [
+      activeSessionId,
+      hasThinking,
+      isRunning,
+      searchQuery,
+      showThinkingBlocks,
+      toolDisplayMode,
+    ],
+  );
+  const streamingMessageNode = useMemo(
+    () =>
+      activeSessionId && selectedWorkspaceId && (hasStreaming || hasPendingTypewriter) ? (
+        <StreamingMessage
+          sessionId={activeSessionId}
+          workspaceId={selectedWorkspaceId}
+          isStreaming={isRunning ?? false}
+          searchQuery={searchQuery}
+        />
+      ) : null,
+    [
+      activeSessionId,
+      hasPendingTypewriter,
+      hasStreaming,
+      isRunning,
+      searchQuery,
+      selectedWorkspaceId,
+    ],
+  );
 
   // Prompts handed off by a pinned prompt that opened its own tab. The
   // launcher can't call `onSend` directly — that closure is bound to
@@ -264,31 +313,9 @@ export function ChatPanelSessionView({
                     searchQuery={searchQuery}
                     globalOffset={globalOffset}
                     toolDisplayMode={toolDisplayMode}
-                    liveTaskProgressNode={
-                      activitiesCount > 0 ? (
-                        <CurrentTurnTaskProgress sessionId={activeSessionId} />
-                      ) : null
-                    }
-                    streamingThinkingNode={
-                      hasThinking && showThinkingBlocks ? (
-                        <StreamingThinkingBlock
-                          sessionId={activeSessionId}
-                          isStreaming={isRunning ?? false}
-                          inline={toolDisplayMode === "inline"}
-                          searchQuery={searchQuery}
-                        />
-                      ) : null
-                    }
-                    streamingMessageNode={
-                      hasStreaming || hasPendingTypewriter ? (
-                        <StreamingMessage
-                          sessionId={activeSessionId}
-                          workspaceId={selectedWorkspaceId}
-                          isStreaming={isRunning ?? false}
-                          searchQuery={searchQuery}
-                        />
-                      ) : null
-                    }
+                    liveTaskProgressNode={liveTaskProgressNode}
+                    streamingThinkingNode={streamingThinkingNode}
+                    streamingMessageNode={streamingMessageNode}
                   />
                 )}
 
@@ -400,30 +427,12 @@ export function ChatPanelSessionView({
                 )}
 
                 {isRunning && !pendingQuestion && !pendingPlan && !pendingApproval && (
-                  <div
-                    ref={processingRef}
-                    className={styles.processing}
-                    role="status"
-                    aria-label={
-                      ws?.agent_status === "Compacting"
-                        ? t("compacting_aria", {
-                            elapsed: formatElapsed(elapsed),
-                          })
-                        : t("processing_aria", {
-                            elapsed: formatElapsed(elapsed),
-                          })
-                    }
-                  >
-                    <span className={styles.spinnerWrap} aria-hidden="true">
-                      <span className={styles.spinner} />
-                    </span>
-                    {ws?.agent_status === "Compacting" && (
-                      <span className={styles.compactingLabel}>
-                        {t("compacting_label")}
-                      </span>
-                    )}
-                    <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
-                  </div>
+                  <ProcessingIndicator
+                    workspaceId={selectedWorkspaceId}
+                    isRunning={isRunning}
+                    isCompacting={ws?.agent_status === "Compacting"}
+                    processingRef={processingRef}
+                  />
                 )}
 
                 {error && (

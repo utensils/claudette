@@ -3,11 +3,15 @@ import { useTranslation } from "react-i18next";
 import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import type { QueuedMessage } from "../../stores/useAppStore";
+import type { ChatMessage } from "../../types/chat";
 import { useAppStore } from "../../stores/useAppStore";
 import { isWorkspaceEnvironmentPreparing } from "../../utils/workspaceEnvironment";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
+// Stable empty transcript so a session with no messages doesn't hand the
+// memoized transcript a fresh `[]` on every render.
+const EMPTY_MESSAGES: ChatMessage[] = [];
 
 export function useChatPanelStore() {
   const { t } = useTranslation("chat");
@@ -36,9 +40,19 @@ export function useChatPanelStore() {
           .join("\0")
       : "",
   );
-  const workspaces = useAppStore((s) => s.workspaces);
-  const repositories = useAppStore((s) => s.repositories);
-  const chatMessages = useAppStore((s) => s.chatMessages);
+  // Narrow selectors: subscribing to the whole `workspaces` /
+  // `repositories` / `chatMessages` records re-rendered ChatPanel (and the
+  // transcript under it) whenever *any* workspace or *any* session's
+  // messages changed — including background sessions.
+  const ws = useAppStore((s) =>
+    s.workspaces.find((w) => w.id === selectedWorkspaceId),
+  );
+  const repo = useAppStore((s) =>
+    ws ? s.repositories.find((r) => r.id === ws.repository_id) : undefined,
+  );
+  const sessionMessages = useAppStore((s) =>
+    activeSessionId ? s.chatMessages[activeSessionId] : undefined,
+  );
   const setChatMessages = useAppStore((s) => s.setChatMessages);
   // Treat `null` (probe-in-flight) as available so we don't briefly hide the
   // Download menu item on a working host.
@@ -77,8 +91,6 @@ export function useChatPanelStore() {
   );
   const defaultBranchesMap = useAppStore((s) => s.defaultBranches);
 
-  const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
-  const repo = repositories.find((r) => r.id === ws?.repository_id);
   const defaultBranch = repo ? defaultBranchesMap[repo.id] : undefined;
 
   const pendingForkSourceName = useAppStore((s) => {
@@ -125,7 +137,7 @@ export function useChatPanelStore() {
     activeSessionCount === 0 &&
     diffTabCount === 0 &&
     fileTabCount === 0;
-  const messages = activeSessionId ? chatMessages[activeSessionId] || [] : [];
+  const messages = sessionMessages ?? EMPTY_MESSAGES;
   const hasMore = chatPaginationState?.hasMore ?? false;
   const isLoadingMore = chatPaginationState?.isLoadingMore ?? false;
   const paginationTotalCount = chatPaginationState?.totalCount ?? messages.length;
