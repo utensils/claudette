@@ -15,9 +15,12 @@ use super::{ServerEvent, Transport};
 pub struct Timeouts {
     /// Limit on the TCP + TLS + WebSocket handshake.
     pub connect: Duration,
-    /// Limit on waiting for a response. On expiry the request's outcome is
-    /// unknown (the server may still complete it), so callers get an error
-    /// saying so and nothing is retried automatically.
+    /// Backstop on waiting for a response from a server that is alive (it
+    /// answers pings) but never replies. Generous because some requests
+    /// legitimately run long (`create_workspace` runs the setup script); a
+    /// dead link is caught by `liveness` instead. On expiry the request's
+    /// outcome is unknown, so callers get an error saying so and nothing is
+    /// retried automatically.
     pub request: Duration,
     /// How often the connection pings the server.
     pub heartbeat: Duration,
@@ -31,7 +34,7 @@ impl Default for Timeouts {
     fn default() -> Self {
         Self {
             connect: Duration::from_secs(15),
-            request: Duration::from_secs(60),
+            request: Duration::from_secs(10 * 60),
             heartbeat: Duration::from_secs(15),
             liveness: Duration::from_secs(45),
         }
@@ -189,7 +192,11 @@ impl WebSocketTransport {
             let mut pending = pending_clone.lock().await;
             for (_, tx) in pending.drain() {
                 let _ = tx.send(serde_json::json!({
-                    "error": {"code": -3, "message": "Connection closed"}
+                    "error": {
+                        "code": -3,
+                        "message": "Connection closed before the server responded; \
+                                    the request may still have completed"
+                    }
                 }));
             }
             drop(pending);
