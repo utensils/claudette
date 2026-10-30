@@ -13,17 +13,13 @@ use claudette::model::{ChatMessage, ChatRole};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 
-use crate::ws::{
-    AgentSessionState, PendingPermission, PtyHandle, QueuedMessage, ServerState, Writer,
-    send_message,
-};
+use crate::ws::{AgentSessionState, PendingPermission, PtyHandle, QueuedMessage, ServerState};
 
 use claudette::permissions::tools_for_level;
 
 /// Dispatch a JSON-RPC request and return a JSON-RPC response.
 pub async fn handle_request(
     state: &Arc<ServerState>,
-    writer: &Arc<Writer>,
     request: &serde_json::Value,
 ) -> serde_json::Value {
     let id = request
@@ -32,8 +28,27 @@ pub async fn handle_request(
         .unwrap_or(serde_json::Value::Null);
     let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
     let params = request.get("params").cloned().unwrap_or_default();
+    rpc_envelope(id, dispatch(state, method, params).await)
+}
 
-    let result = match method {
+/// Wrap a handler result in a JSON-RPC response envelope.
+pub fn rpc_envelope(
+    id: serde_json::Value,
+    result: Result<serde_json::Value, String>,
+) -> serde_json::Value {
+    match result {
+        Ok(value) => json!({"id": id, "result": value}),
+        Err(msg) => json!({"id": id, "error": {"code": -1, "message": msg}}),
+    }
+}
+
+/// Route one method call to its handler.
+pub async fn dispatch(
+    state: &Arc<ServerState>,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    match method {
         "load_initial_data" => handle_load_initial_data(state).await,
         "load_chat_history" => {
             let chat_session_id = param_chat_session_id(&params);
@@ -85,7 +100,6 @@ pub async fn handle_request(
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
             handle_send_chat_message(
                 state,
-                writer,
                 &chat_session_id,
                 &content,
                 permission_level.as_deref(),
@@ -231,7 +245,7 @@ pub async fn handle_request(
             let cwd = param_str(&params, "cwd");
             let rows = params.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
             let cols = params.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-            handle_spawn_pty(state, writer, &workspace_id, &cwd, rows, cols).await
+            handle_spawn_pty(state, &workspace_id, &cwd, rows, cols).await
         }
         "write_pty" => {
             let pty_id = params.get("pty_id").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -301,11 +315,6 @@ pub async fn handle_request(
             Ok(json!(null))
         }
         _ => Err(format!("Unknown method: {method}")),
-    };
-
-    match result {
-        Ok(value) => json!({"id": id, "result": value}),
-        Err(msg) => json!({"id": id, "error": {"code": -1, "message": msg}}),
     }
 }
 
@@ -542,7 +551,6 @@ async fn handle_load_chat_history(
 #[allow(clippy::too_many_arguments)]
 async fn handle_send_chat_message(
     state: &Arc<ServerState>,
-    writer: &Arc<Writer>,
     chat_session_id: &str,
     content: &str,
     permission_level: Option<&str>,
@@ -809,7 +817,6 @@ async fn handle_send_chat_message(
 
     spawn_turn_event_bridge(
         Arc::clone(state),
-        Arc::clone(writer),
         TurnBridgeContext {
             workspace_id: workspace_id.clone(),
             chat_session_id: chat_session_id.clone(),
@@ -855,7 +862,6 @@ pub struct TurnBridgeContext {
 /// steered turns silently lost their AskUserQuestion routing.
 pub fn spawn_turn_event_bridge(
     state: Arc<ServerState>,
-    writer: Arc<Writer>,
     ctx: TurnBridgeContext,
     turn_handle: claudette::agent::TurnHandle,
 ) {
@@ -949,7 +955,7 @@ pub fn spawn_turn_event_bridge(
                         "input": input,
                     }
                 });
-                send_message(&writer, &prompt_msg).await;
+                state.emit(prompt_msg);
             }
 
             if let AgentEvent::ProcessExited(code) = &event {
@@ -1045,7 +1051,6 @@ pub fn spawn_turn_event_bridge(
                 if let Some(queued) = next_queued
                     && let Err(e) = dispatch_queued_message(
                         Arc::clone(&state),
-                        Arc::clone(&writer),
                         chat_session_id_for_stream.clone(),
                         queued,
                     )
@@ -1084,7 +1089,7 @@ pub fn spawn_turn_event_bridge(
                             "checkpoint": &cp,
                         }
                     });
-                    send_message(&writer, &event_msg).await;
+                    state.emit(event_msg);
                 }
             }
 
@@ -1093,7 +1098,7 @@ pub fn spawn_turn_event_bridge(
                 "event": "agent-stream",
                 "payload": agent_stream_payload(&ws_id, &chat_session_id_for_stream, &event),
             });
-            send_message(&writer, &event_msg).await;
+            state.emit(event_msg);
         }
     });
 }
@@ -1354,7 +1359,6 @@ pub async fn handle_steer_queued_chat_message(
 /// turns silently dropped those prompts.
 async fn dispatch_queued_message(
     state: Arc<ServerState>,
-    writer: Arc<Writer>,
     chat_session_id: String,
     queued: QueuedMessage,
 ) -> Result<(), String> {
@@ -1415,7 +1419,6 @@ async fn dispatch_queued_message(
 
     spawn_turn_event_bridge(
         Arc::clone(&state),
-        writer,
         TurnBridgeContext {
             workspace_id,
             chat_session_id,
@@ -1626,7 +1629,6 @@ async fn handle_load_file_diff(
 
 async fn handle_spawn_pty(
     state: &Arc<ServerState>,
-    writer: &Arc<Writer>,
     workspace_id: &str,
     cwd: &str,
     rows: u16,
@@ -1687,7 +1689,6 @@ async fn handle_spawn_pty(
     }
 
     // Spawn a reader task that forwards PTY output over WebSocket.
-    let writer = Arc::clone(writer);
     let state_clone = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         use std::io::Read;
@@ -1698,18 +1699,13 @@ async fn handle_spawn_pty(
                 Ok(0) => break,
                 Ok(n) => {
                     let data: Vec<u8> = buf[..n].to_vec();
-                    let writer = writer.clone();
-                    let rt = tokio::runtime::Handle::current();
-                    rt.block_on(async {
-                        let msg = json!({
-                            "event": "pty-output",
-                            "payload": {
-                                "pty_id": pty_id,
-                                "data": data,
-                            }
-                        });
-                        send_message(&writer, &msg).await;
-                    });
+                    state_clone.emit(json!({
+                        "event": "pty-output",
+                        "payload": {
+                            "pty_id": pty_id,
+                            "data": data,
+                        }
+                    }));
                 }
                 Err(_) => break,
             }
@@ -1720,6 +1716,10 @@ async fn handle_spawn_pty(
             let mut ptys = state_clone.ptys.write().await;
             ptys.remove(&pty_id);
         });
+        state_clone.emit(json!({
+            "event": "pty-exit",
+            "payload": { "pty_id": pty_id },
+        }));
     });
 
     Ok(json!({"pty_id": pty_id}))

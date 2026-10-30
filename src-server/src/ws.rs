@@ -13,13 +13,14 @@ use claudette::env_provider::types::EnvMap;
 use claudette::plugin_runtime::PluginRegistry;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 use tokio_rustls::server::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::auth::ServerConfig;
 use crate::handler;
+use crate::host::RpcHost;
 
 /// Server-side application state — mirrors src-tauri's AppState but without Tauri dependencies.
 pub struct ServerState {
@@ -46,7 +47,16 @@ pub struct ServerState {
     /// attempted"; `Some(Ok(_))` / `Some(Err(_))` cache the result so
     /// repeated turns don't re-spawn `claude --help`.
     pub claude_flag_defs: RwLock<Option<Result<Vec<ClaudeFlagDef>, String>>>,
+    /// Server-pushed events (`{"event", "payload"}` envelopes). Every
+    /// authenticated connection subscribes, so activity started from one
+    /// client (desktop, phone) is visible on all of them.
+    pub events: broadcast::Sender<serde_json::Value>,
 }
+
+/// Capacity of [`ServerState::events`]. Agent streams are bursty; a
+/// connection that falls further behind than this skips events (logged)
+/// rather than stalling every other client.
+const EVENT_CHANNEL_CAPACITY: usize = 4096;
 
 pub struct AgentSessionState {
     /// The workspace this session belongs to.
@@ -78,9 +88,8 @@ pub struct AgentSessionState {
     /// `AgentSessionState::pending_permissions`.
     pub pending_permissions: HashMap<String, PendingPermission>,
     /// Queue of additional user messages submitted while a turn is in flight.
-    /// `steer_queued_chat_message` either appends here (turn active) or
-    /// writes directly to stdin (turn idle). Drained on `Result` /
-    /// `ProcessExited` events.
+    /// `steer_queued_chat_message` appends here; the head is dispatched as
+    /// the next turn when the current one ends (`Result` / `ProcessExited`).
     pub pending_message_queue: VecDeque<QueuedMessage>,
 }
 
@@ -119,6 +128,7 @@ impl ServerState {
             plugins: None,
             env_cache: Arc::new(EnvCache::new()),
             claude_flag_defs: RwLock::new(None),
+            events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
         }
     }
 
@@ -140,7 +150,14 @@ impl ServerState {
             plugins: Some(RwLock::new(plugins)),
             env_cache: Arc::new(EnvCache::new()),
             claude_flag_defs: RwLock::new(None),
+            events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
         }
+    }
+
+    /// Broadcast an `{"event", "payload"}` envelope to every connected
+    /// client. A send with no subscribers is not an error.
+    pub fn emit(&self, envelope: serde_json::Value) {
+        let _ = self.events.send(envelope);
     }
 
     pub fn next_pty_id(&self) -> u64 {
@@ -161,7 +178,7 @@ pub async fn send_message(writer: &Writer, value: &serde_json::Value) {
 
 /// Accept a TLS connection and upgrade it to WebSocket.
 pub async fn handle_tls_connection(
-    state: std::sync::Arc<ServerState>,
+    host: std::sync::Arc<dyn RpcHost>,
     config: std::sync::Arc<tokio::sync::Mutex<ServerConfig>>,
     config_path: std::sync::Arc<PathBuf>,
     tls_stream: TlsStream<TcpStream>,
@@ -296,8 +313,31 @@ pub async fn handle_tls_connection(
 
     tracing::info!(target: "claudette::ws", peer = %addr, "authenticated connection");
 
-    // Phase 2: Command loop.
-    while let Some(msg_result) = read.next().await {
+    // Phase 2: Command loop. Subscribe before reading the first request so
+    // no event emitted by that request can slip past this connection.
+    let mut events = host.subscribe();
+    loop {
+        let msg_result = tokio::select! {
+            msg = read.next() => match msg {
+                Some(msg) => msg,
+                None => break,
+            },
+            event = events.recv() => {
+                match event {
+                    Ok(envelope) => send_message(&writer, &envelope).await,
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            target: "claudette::ws",
+                            peer = %addr,
+                            skipped,
+                            "client fell behind; events dropped"
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+                continue;
+            }
+        };
         let text = match msg_result {
             Ok(Message::Text(text)) => text,
             Ok(Message::Close(_)) => {
@@ -328,13 +368,19 @@ pub async fn handle_tls_connection(
             }
         };
 
-        let state = std::sync::Arc::clone(&state);
+        let host = std::sync::Arc::clone(&host);
         let writer = std::sync::Arc::clone(&writer);
         tokio::spawn(async move {
-            let response = handler::handle_request(&state, &writer, &request).await;
-            send_message(&writer, &response).await;
+            let id = request
+                .get("id")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            let params = request.get("params").cloned().unwrap_or_default();
+            let result = host.dispatch(method, params).await;
+            send_message(&writer, &handler::rpc_envelope(id, result)).await;
         });
     }
 
-    println!("[ws] Disconnected: {addr}");
+    tracing::info!(target: "claudette::ws", peer = %addr, "disconnected");
 }

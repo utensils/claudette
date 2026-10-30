@@ -56,6 +56,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // writes on exit.
     let _log_handle = claudette::logging::init();
 
+    // Snapshot the launch env before anything mutates it — the shell-env
+    // capture diffs against this to forward only what the user's shell
+    // init adds (mirrors the desktop app's `main`).
+    claudette::env::set_launch_env_snapshot(
+        std::env::vars_os()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.to_string_lossy().into_owned(),
+                )
+            })
+            .collect(),
+    );
+
     let cli = Cli::parse();
     let config_path = cli.config.clone().unwrap_or_else(default_config_path);
 

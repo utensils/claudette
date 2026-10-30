@@ -5,11 +5,8 @@
 //! tool-name dispatch, queue depth) is covered here so a regression that
 //! e.g. drains the pending entry on the wrong tool gets caught.
 //!
-//! Tests call the handler helper functions directly rather than going
-//! through `handle_request` — that public entrypoint takes a
-//! `&Arc<Writer>` (a `Mutex<SplitSink<WebSocketStream<TlsStream<TcpStream>>>>`)
-//! which can't be constructed without a real TLS handshake. None of the
-//! error paths we cover here ever write to that Writer.
+//! Tests call the handler helper functions directly so each case can
+//! seed the in-memory session map before the call.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
