@@ -377,7 +377,21 @@ struct TokenedRequest {
 /// unknown method returns an error that the client surfaces as-is.
 async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
     let id = req.id.clone();
-    let result = match req.method.as_str() {
+    match dispatch_method(app, &req.method, &req.params).await {
+        Ok(value) => RpcResponse::ok(id, value),
+        Err(msg) => RpcResponse::err(id, msg),
+    }
+}
+
+/// Route one method call to its handler. Shared with the in-process
+/// remote host (`remote_host.rs`) so paired devices drive the same command
+/// core as the CLI.
+pub(crate) async fn dispatch_method(
+    app: &AppHandle,
+    method: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    match method {
         "capabilities" => Ok(serde_json::to_value(&Capabilities {
             protocol: PROTOCOL_NAME.to_string(),
             version: PROTOCOL_VERSION,
@@ -404,39 +418,35 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
                 .map(|v| serde_json::to_value(v).unwrap_or_default())
                 .map_err(|e| e.to_string())
         }),
-        "list_chat_sessions" => handle_list_chat_sessions(app, &req.params).await,
-        "get_chat_session" => handle_get_chat_session(app, &req.params).await,
-        "get_chat_snapshot" => handle_get_chat_snapshot(app, &req.params).await,
-        "load_completed_turns" => handle_load_completed_turns(app, &req.params),
-        "load_attachments_for_session" => handle_load_attachments_for_session(app, &req.params),
-        "load_attachment_data" => handle_load_attachment_data(app, &req.params),
-        "create_chat_session" => handle_create_chat_session(app, &req.params).await,
-        "rename_chat_session" => handle_rename_chat_session(app, &req.params).await,
-        "archive_chat_session" => handle_archive_chat_session(app, &req.params).await,
-        "create_workspace" => handle_create_workspace(app, &req.params).await,
-        "archive_workspace" => handle_archive_workspace(app, &req.params).await,
-        "delete_workspaces_bulk" => handle_delete_workspaces_bulk(app, &req.params).await,
-        "send_chat_message" => handle_send_chat_message(app, &req.params).await,
-        "steer_queued_chat_message" => handle_steer_queued_chat_message(app, &req.params).await,
-        "stop_agent" => handle_stop_agent(app, &req.params).await,
-        "reset_agent_session" => handle_reset_agent_session(app, &req.params).await,
-        "clear_attention" => handle_clear_attention(app, &req.params).await,
-        "submit_agent_answer" => handle_submit_agent_answer(app, &req.params).await,
-        "submit_agent_approval" => handle_submit_agent_approval(app, &req.params).await,
-        "submit_plan_approval" => handle_submit_plan_approval(app, &req.params).await,
-        "schedule_wakeup" => handle_schedule_wakeup(app, &req.params).await,
-        "routine.create" => handle_routine_create(app, &req.params).await,
+        "list_chat_sessions" => handle_list_chat_sessions(app, params).await,
+        "get_chat_session" => handle_get_chat_session(app, params).await,
+        "get_chat_snapshot" => handle_get_chat_snapshot(app, params).await,
+        "load_completed_turns" => handle_load_completed_turns(app, params),
+        "load_attachments_for_session" => handle_load_attachments_for_session(app, params),
+        "load_attachment_data" => handle_load_attachment_data(app, params),
+        "create_chat_session" => handle_create_chat_session(app, params).await,
+        "rename_chat_session" => handle_rename_chat_session(app, params).await,
+        "archive_chat_session" => handle_archive_chat_session(app, params).await,
+        "create_workspace" => handle_create_workspace(app, params).await,
+        "archive_workspace" => handle_archive_workspace(app, params).await,
+        "delete_workspaces_bulk" => handle_delete_workspaces_bulk(app, params).await,
+        "send_chat_message" => handle_send_chat_message(app, params).await,
+        "steer_queued_chat_message" => handle_steer_queued_chat_message(app, params).await,
+        "stop_agent" => handle_stop_agent(app, params).await,
+        "reset_agent_session" => handle_reset_agent_session(app, params).await,
+        "clear_attention" => handle_clear_attention(app, params).await,
+        "submit_agent_answer" => handle_submit_agent_answer(app, params).await,
+        "submit_agent_approval" => handle_submit_agent_approval(app, params).await,
+        "submit_plan_approval" => handle_submit_plan_approval(app, params).await,
+        "schedule_wakeup" => handle_schedule_wakeup(app, params).await,
+        "routine.create" => handle_routine_create(app, params).await,
         "routine.list" => handle_routine_list(app).await,
-        "routine.delete" => handle_routine_delete(app, &req.params).await,
-        "routine.run" => handle_routine_run(app, &req.params).await,
+        "routine.delete" => handle_routine_delete(app, params).await,
+        "routine.run" => handle_routine_run(app, params).await,
         "plugin.list" => handle_plugin_list(app).await,
-        "plugin.invoke" => handle_plugin_invoke(app, &req.params).await,
-        "scm.detect_provider" => handle_scm_detect_provider(app, &req.params).await,
+        "plugin.invoke" => handle_plugin_invoke(app, params).await,
+        "scm.detect_provider" => handle_scm_detect_provider(app, params).await,
         other => Err(format!("Unknown method: {other}")),
-    };
-    match result {
-        Ok(value) => RpcResponse::ok(id, value),
-        Err(msg) => RpcResponse::err(id, msg),
     }
 }
 

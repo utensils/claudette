@@ -17,6 +17,8 @@ mod platform_speech;
 mod pty;
 mod pty_tracker;
 mod remote;
+#[cfg(feature = "server")]
+mod remote_host;
 mod state;
 mod subprocess_cleanup;
 mod tail_backoff;
@@ -1591,9 +1593,8 @@ fn shutdown_runtime_handler(_app: &tauri::AppHandle, _event: tauri::RunEvent) {
 
             // try_write avoids blocking if another thread holds the lock
             // during shutdown — in that case Drop will still fire.
-            // Dropping `srv` triggers LocalServerState::drop which
-            // calls kill_process_sync(pid). Taking it out of the
-            // Option ensures cleanup runs exactly once.
+            // Dropping `srv` triggers LocalServerState::drop, which stops
+            // the in-process share server and its mDNS advertisement.
             if let Ok(mut guard) = app_state.local_server.try_write()
                 && let Some(srv) = guard.take()
             {

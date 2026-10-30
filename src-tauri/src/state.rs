@@ -320,140 +320,24 @@ pub struct AgentTaskTailHandle {
     pub cancel: Arc<tokio::sync::Notify>,
 }
 
-/// State of the embedded claudette-server subprocess.
+/// The in-process share server ("Share this machine").
 pub struct LocalServerState {
-    /// Handle to the running server process.
-    pub child: tokio::process::Child,
-    /// The PID captured at spawn time for reliable synchronous cleanup.
-    /// `tokio::process::Child::id()` returns `None` after the child is reaped,
-    /// so we store the PID eagerly. Only read on Unix, where `Drop` passes
-    /// it to `kill_process_sync` to send SIGTERM/SIGKILL + reap; on Windows
-    /// `child.start_kill()` alone suffices and this field is held only to
-    /// keep the struct layout consistent across platforms.
-    #[cfg_attr(windows, allow(dead_code))]
-    pub pid: u32,
-    /// The connection string printed by the server on startup.
+    /// `claudette://host:port/token` shown in the Share modal.
     pub connection_string: String,
+    #[cfg(feature = "server")]
+    pub handle: claudette_server::ServerHandle,
+    #[cfg(feature = "server")]
+    pub host: std::sync::Arc<crate::remote_host::TauriRpcHost>,
 }
 
 impl Drop for LocalServerState {
     fn drop(&mut self) {
-        // If tokio can still reach the child, check whether it already exited
-        // (e.g. crash, external kill). If so, skip the PID-based cleanup to
-        // avoid signaling a recycled PID that now belongs to another process.
-        if let Ok(Some(_status)) = self.child.try_wait() {
-            tracing::info!(target: "claudette::cleanup", "server process already exited");
-            return;
+        #[cfg(feature = "server")]
+        {
+            self.handle.stop();
+            self.host.detach();
         }
-        // Best-effort tokio-level kill (may fail if runtime is gone). On
-        // Windows this invokes `TerminateProcess`, which is immediate and
-        // leaves no zombie state — so the extra synchronous cleanup below
-        // is only meaningful on Unix where SIGTERM → grace → SIGKILL →
-        // `waitpid` is needed to reap the child.
-        let _ = self.child.start_kill();
-        #[cfg(unix)]
-        kill_process_sync(self.pid);
     }
-}
-
-/// Synchronously try to terminate a process and wait for it to exit.
-///
-/// On Unix, this first sends `SIGTERM` and allows a short grace period for
-/// graceful shutdown. If the process does not exit in time, it escalates to
-/// `SIGKILL` and reaps the process. This is safe to call from `Drop` impls
-/// and the `RunEvent::Exit` handler where async code cannot run. Uses raw
-/// libc calls so it does not depend on the tokio runtime.
-#[cfg(unix)]
-pub fn kill_process_sync(pid: u32) {
-    use std::time::{Duration, Instant};
-    let pid = pid as i32;
-    // A pid of 0 would signal our own process group — guard against it.
-    if pid <= 0 {
-        return;
-    }
-
-    // First try SIGTERM for a graceful shutdown.
-    // SAFETY: pid is a valid positive i32.
-    let ret = unsafe { libc::kill(pid, libc::SIGTERM) };
-    if ret != 0 {
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::ESRCH) {
-            tracing::info!(target: "claudette::cleanup", pid, "server process already exited");
-        } else {
-            tracing::warn!(
-                target: "claudette::cleanup",
-                pid,
-                error = %err,
-                "failed to send SIGTERM to server process"
-            );
-        }
-        return;
-    }
-
-    // Give the server up to 500ms to exit gracefully.
-    let deadline = Instant::now() + Duration::from_millis(500);
-    while Instant::now() < deadline {
-        // SAFETY: waitpid with WNOHANG is a standard POSIX call.
-        let mut status: libc::c_int = 0;
-        let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if ret == pid {
-            tracing::info!(target: "claudette::cleanup", pid, "stopped local claudette-server");
-            return;
-        }
-        if ret == -1 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::ECHILD) {
-                // No such child — already reaped.
-                tracing::info!(target: "claudette::cleanup", pid, "stopped local claudette-server");
-                return;
-            }
-            // EINTR or other transient error — retry.
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    // Graceful shutdown timed out — force kill.
-    // SAFETY: pid is a valid positive i32.
-    unsafe { libc::kill(pid, libc::SIGKILL) };
-
-    // Try to reap the process without blocking indefinitely. If it does not
-    // become waitable in time (e.g. stuck in uninterruptible sleep), give up
-    // so app shutdown cannot hang forever.
-    let reap_deadline = Instant::now() + Duration::from_millis(500);
-    while Instant::now() < reap_deadline {
-        let mut status: libc::c_int = 0;
-        // SAFETY: waitpid with WNOHANG is a standard POSIX call.
-        let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if ret == pid {
-            tracing::warn!(target: "claudette::cleanup", pid, "force-killed local claudette-server");
-            return;
-        }
-        if ret == -1 {
-            let err = std::io::Error::last_os_error();
-            match err.raw_os_error() {
-                Some(libc::ECHILD) => {
-                    tracing::warn!(target: "claudette::cleanup", pid, "force-killed local claudette-server");
-                    return;
-                }
-                Some(libc::EINTR) => {} // Retry.
-                _ => {
-                    tracing::warn!(
-                        target: "claudette::cleanup",
-                        pid,
-                        error = %err,
-                        "sent SIGKILL to claudette-server but could not reap"
-                    );
-                    return;
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    tracing::warn!(
-        target: "claudette::cleanup",
-        pid,
-        "sent SIGKILL to claudette-server but timed out waiting to reap"
-    );
 }
 
 /// Result of running `claude --help` at startup, parsed into `ClaudeFlagDef`s.
@@ -925,93 +809,6 @@ impl AppState {
 #[cfg(unix)]
 mod tests {
     use super::*;
-
-    /// Helper: spawn a long-running `sleep` process and return its PID.
-    fn spawn_sleep() -> (tokio::process::Child, u32) {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let child = claudette::process::command("sleep")
-                .arg("3600")
-                .kill_on_drop(true)
-                .spawn()
-                .expect("failed to spawn sleep");
-            let pid = child.id().expect("missing pid");
-            (child, pid)
-        })
-    }
-
-    /// Returns true if the given PID is still alive.
-    fn is_alive(pid: u32) -> bool {
-        // kill(pid, 0) checks existence without sending a signal.
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    }
-
-    #[test]
-    fn kill_process_sync_terminates_running_process() {
-        let (child, pid) = spawn_sleep();
-        assert!(is_alive(pid), "process should be alive after spawn");
-
-        // Forget the tokio child so kill_on_drop doesn't interfere.
-        std::mem::forget(child);
-
-        kill_process_sync(pid);
-
-        // Give the OS a moment to update process table.
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert!(
-            !is_alive(pid),
-            "process should be dead after kill_process_sync"
-        );
-    }
-
-    #[test]
-    fn kill_process_sync_noop_for_dead_process() {
-        let (child, pid) = spawn_sleep();
-        std::mem::forget(child);
-
-        // Kill it once.
-        kill_process_sync(pid);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert!(!is_alive(pid));
-
-        // Calling again on a dead PID should not panic.
-        kill_process_sync(pid);
-    }
-
-    #[test]
-    fn kill_process_sync_noop_for_zero_pid() {
-        // pid 0 would signal our own process group — must be a no-op.
-        kill_process_sync(0);
-    }
-
-    #[test]
-    fn local_server_state_drop_kills_child() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (child, pid) = rt.block_on(async {
-            let child = claudette::process::command("sleep")
-                .arg("3600")
-                .kill_on_drop(true)
-                .spawn()
-                .expect("failed to spawn sleep");
-            let pid = child.id().expect("missing pid");
-            (child, pid)
-        });
-        assert!(is_alive(pid));
-
-        let state = LocalServerState {
-            child,
-            pid,
-            connection_string: String::new(),
-        };
-        // Dropping the state should kill the process.
-        drop(state);
-
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert!(
-            !is_alive(pid),
-            "child should be dead after LocalServerState is dropped"
-        );
-    }
 
     // ---- Regression: Plugins page hangs while env loads ---------------------
     //

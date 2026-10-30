@@ -9,8 +9,6 @@ use crate::state::AppState;
 use crate::state::LocalServerState;
 #[cfg(feature = "server")]
 use claudette::transport::ws::WebSocketTransport;
-#[cfg(feature = "server")]
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Serialize)]
 pub struct PairResult {
@@ -248,16 +246,19 @@ pub struct LocalServerInfo {
 }
 
 #[tauri::command]
-pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServerInfo, String> {
+pub async fn start_local_server(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LocalServerInfo, String> {
     #[cfg(not(feature = "server"))]
     {
-        let _ = &state;
+        let _ = (&app, &state);
         Err("Server not available: built without the 'server' feature".to_string())
     }
 
     #[cfg(feature = "server")]
     {
-        // Hold write lock for the entire operation to prevent concurrent spawns.
+        // Hold write lock for the entire operation to prevent concurrent starts.
         let mut server = state.local_server.write().await;
 
         if let Some(ref srv) = *server {
@@ -267,109 +268,38 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
             });
         }
 
-        // Spawn ourselves with `--server` to run the embedded server as a subprocess.
-        let server_bin = std::env::current_exe()
-            .map_err(|e| format!("Failed to locate current executable: {e}"))?;
-
-        let mut child = claudette::process::command(&server_bin)
-            .arg("--server")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| format!("Failed to start embedded server: {e}"))?;
-
-        // Capture PID eagerly — child.id() returns None after the process is
-        // reaped, and we need the PID for synchronous cleanup on app exit.
-        let pid = child.id().ok_or("Failed to get server process PID")?;
-
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or("Failed to capture server stdout")?;
-        let stderr_handle = child.stderr.take();
-        let mut reader = BufReader::new(stdout).lines();
-
-        let mut connection_string = String::new();
-        let timeout = tokio::time::Duration::from_secs(10);
-        let deadline = tokio::time::Instant::now() + timeout;
-
-        while tokio::time::Instant::now() < deadline {
-            let line = tokio::time::timeout_at(deadline, reader.next_line())
+        // Serve in-process so paired clients drive this window's own agent
+        // sessions (and see them live) rather than a second runtime.
+        let host = crate::remote_host::TauriRpcHost::attach(app.clone());
+        let handle =
+            match claudette_server::start(claudette_server::ServerOptions::default(), host.clone())
                 .await
-                .map_err(|_| "Timed out waiting for server to start")?
-                .map_err(|e| format!("Error reading server output: {e}"))?;
-
-            if let Some(line) = line {
-                let trimmed = line.trim();
-                if trimmed.starts_with("claudette://") {
-                    connection_string = trimmed.to_string();
-                    break;
+            {
+                Ok(handle) => handle,
+                Err(e) => {
+                    host.detach();
+                    return Err(format!("Failed to start server: {e}"));
                 }
-            } else {
-                // Server exited — capture stderr for a useful error message.
-                let detail = match stderr_handle {
-                    Some(mut se) => {
-                        let mut buf = String::new();
-                        let _ = tokio::io::AsyncReadExt::read_to_string(&mut se, &mut buf).await;
-                        let t = buf.trim();
-                        if t.is_empty() {
-                            String::new()
-                        } else {
-                            format!(": {t}")
-                        }
-                    }
-                    None => String::new(),
-                };
-                // Reap the child so it doesn't become a zombie.
-                let status = child.wait().await.ok();
-                let code = status.and_then(|s| s.code());
-                let exit_info = match code {
-                    Some(c) => format!(" (exit code {c})"),
-                    None => String::new(),
-                };
-                return Err(format!("Server exited before ready{exit_info}{detail}"));
-            }
-        }
-
-        if connection_string.is_empty() {
-            let _ = child.kill().await;
-            return Err("Server started but did not print a connection string".to_string());
-        }
-
-        // Spawn tasks to continuously drain stdout and stderr to prevent broken
-        // pipe panics. If we don't read them, the pipe buffer fills and the server
-        // will die with "Broken pipe" on its next write.
-        tokio::spawn(async move { while let Ok(Some(_)) = reader.next_line().await {} });
-        if let Some(se) = stderr_handle {
-            tokio::spawn(async move {
-                let mut stderr_reader = BufReader::new(se).lines();
-                while let Ok(Some(_)) = stderr_reader.next_line().await {}
-            });
-        }
-
-        let info = LocalServerInfo {
-            running: true,
-            connection_string: Some(connection_string.clone()),
-        };
+            };
+        let connection_string = handle.connection_string.clone();
 
         *server = Some(LocalServerState {
-            child,
-            pid,
-            connection_string,
+            connection_string: connection_string.clone(),
+            handle,
+            host,
         });
 
-        Ok(info)
-    } // #[cfg(feature = "server")]
+        Ok(LocalServerInfo {
+            running: true,
+            connection_string: Some(connection_string),
+        })
+    }
 }
 
 #[tauri::command]
 pub async fn stop_local_server(state: State<'_, AppState>) -> Result<(), String> {
-    let mut server = state.local_server.write().await;
-    if let Some(mut srv) = server.take() {
-        let _ = srv.child.kill().await;
-        let _ = srv.child.wait().await;
-    }
+    // Dropping the state stops the listener and the event bridge.
+    state.local_server.write().await.take();
     Ok(())
 }
 

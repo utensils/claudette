@@ -67,8 +67,8 @@ pub struct ServerHandle {
 
 impl ServerHandle {
     /// Stop accepting connections and drop the mDNS advertisement.
-    /// Established connections end when their sockets close.
-    pub fn stop(mut self) {
+    /// Established connections end when their sockets close. Idempotent.
+    pub fn stop(&mut self) {
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
         }
