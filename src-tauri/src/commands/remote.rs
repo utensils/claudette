@@ -258,32 +258,50 @@ async fn revoke_over(transport: &WebSocketTransport) -> Result<(), String> {
 
 /// Revoke this device's session on a saved server: over the live
 /// connection when there is one, otherwise over a short-lived connection
-/// pinned to the saved certificate.
+/// pinned to the saved certificate. Whatever happens, the connection used
+/// is closed: only the network steps are bounded by [`REVOKE_TIMEOUT`],
+/// so a timeout can't leave a taken connection open.
 async fn revoke_saved_session(
     conn: &claudette::model::RemoteConnection,
     manager: &RemoteConnectionManager,
 ) -> Result<(), String> {
     use claudette::transport::Transport;
-    if let Some(transport) = manager.take(&conn.id).await {
-        let result = revoke_over(&transport).await;
-        let _ = transport.close().await;
-        return result;
-    }
-    let token = conn
-        .session_token
-        .as_deref()
-        .ok_or("no saved session to revoke")?;
-    let fingerprint = conn
-        .cert_fingerprint
-        .as_deref()
-        .ok_or("no pinned certificate for this server")?;
-    let transport = WebSocketTransport::connect(&conn.host, conn.port, Some(fingerprint))
-        .await?
-        .transport;
-    let result = match transport.authenticate_session(token).await {
-        Ok(_) => revoke_over(&transport).await,
-        Err(e) => Err(e),
+    let deadline = tokio::time::Instant::now() + REVOKE_TIMEOUT;
+    let timed_out = || "timed out".to_string();
+
+    let transport = match manager.take(&conn.id).await {
+        Some(live) => live,
+        None => {
+            let token = conn
+                .session_token
+                .as_deref()
+                .ok_or("no saved session to revoke")?;
+            let fingerprint = conn
+                .cert_fingerprint
+                .as_deref()
+                .ok_or("no pinned certificate for this server")?;
+            let transport = tokio::time::timeout_at(
+                deadline,
+                WebSocketTransport::connect(&conn.host, conn.port, Some(fingerprint)),
+            )
+            .await
+            .map_err(|_| timed_out())??
+            .transport;
+            let transport = std::sync::Arc::new(transport);
+            if let Err(e) = tokio::time::timeout_at(deadline, transport.authenticate_session(token))
+                .await
+                .map_err(|_| timed_out())
+                .and_then(|r| r.map(|_| ()))
+            {
+                let _ = transport.close().await;
+                return Err(e);
+            }
+            transport
+        }
     };
+    let result = tokio::time::timeout_at(deadline, revoke_over(&transport))
+        .await
+        .unwrap_or_else(|_| Err(timed_out()));
     let _ = transport.close().await;
     result
 }
@@ -296,9 +314,7 @@ pub async fn remove_remote_connection(
 ) -> Result<RemoveResult, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let revoke = match db.get_remote_connection(&id).map_err(|e| e.to_string())? {
-        Some(conn) => tokio::time::timeout(REVOKE_TIMEOUT, revoke_saved_session(&conn, &manager))
-            .await
-            .unwrap_or_else(|_| Err("timed out".to_string())),
+        Some(conn) => revoke_saved_session(&conn, &manager).await,
         None => Ok(()),
     };
     // Whatever happened above, nothing of this connection stays live.
