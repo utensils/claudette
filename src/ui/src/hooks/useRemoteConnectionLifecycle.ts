@@ -15,7 +15,8 @@ import {
   wasDisconnectedByUser,
 } from "../components/sidebar/remoteConnectionActions";
 
-/** Payload of the Rust-side `remote-connection-lost` event. */
+/** Payload of the Rust-side `remote-connection-lost` and
+ *  `remote-events-lost` events. */
 interface RemoteConnectionLostPayload {
   connection_id: string;
 }
@@ -92,7 +93,8 @@ export function scheduleReconnect(
  * - on launch (or webview reload), re-adopt connections the Rust side
  *   still holds and auto-connect saved servers marked `auto_connect`;
  * - when a connection drops unexpectedly, clear its live state and keep
- *   reconnecting in the background.
+ *   reconnecting in the background;
+ * - when a live connection loses events, resync it.
  */
 export function useRemoteConnectionLifecycle() {
   const { t } = useTranslation("sidebar");
@@ -133,9 +135,22 @@ export function useRemoteConnectionLifecycle() {
         scheduleReconnect(id, t, { announce: true });
       },
     );
+    // Some of a live connection's events were lost (it fell behind):
+    // reload its workspaces and recover pending approvals.
+    const unlistenLost = listen<RemoteConnectionLostPayload>(
+      "remote-events-lost",
+      (event) => {
+        const id = event.payload.connection_id;
+        if (!useAppStore.getState().activeRemoteIds.includes(id)) return;
+        resyncActiveConnection(id).catch((e) =>
+          console.error("Failed to resync remote connection:", e),
+        );
+      },
+    );
     return () => {
       cancelled = true;
       void unlisten.then((fn) => fn());
+      void unlistenLost.then((fn) => fn());
       for (const id of [...pending.keys()]) stopReconnecting(id);
     };
   }, [t]);

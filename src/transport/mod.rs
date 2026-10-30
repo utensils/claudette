@@ -10,6 +10,10 @@ pub struct ServerEvent {
     pub payload: serde_json::Value,
 }
 
+/// Event a server sends in place of events a client fell too far behind to
+/// receive. Clients resync (initial data, pending approvals) on it.
+pub const EVENTS_DROPPED_EVENT: &str = "server-events-dropped";
+
 /// Transport-agnostic connection to a remote claudette-server.
 // async_trait's expansion marks the boxed futures `#[must_use]`, which newer
 // clippy flags as `double_must_use` on the generated trait methods.

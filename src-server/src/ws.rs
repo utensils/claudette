@@ -491,6 +491,15 @@ async fn serve_authenticated(ctx: ConnectionContext, established: Established, a
                             skipped,
                             "client fell behind; events dropped"
                         );
+                        // Tell the client so it can resync from snapshots.
+                        send_message(
+                            &writer,
+                            &serde_json::json!({
+                                "event": claudette::transport::EVENTS_DROPPED_EVENT,
+                                "payload": { "skipped": skipped },
+                            }),
+                        )
+                        .await;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }

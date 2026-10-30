@@ -9,6 +9,7 @@ import {
 } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import type { PairResult, RemoteInitialData } from "../../types/remote";
+import { hydrateConnectionPendingControls } from "../chat/remotePendingControls";
 
 /**
  * Connection lifecycle for paired servers, shared by the sidebar and the
@@ -29,6 +30,8 @@ function adoptConnection(id: string, data: RemoteInitialData | null): void {
   const state = useAppStore.getState();
   state.addActiveRemoteId(id);
   if (data) state.mergeRemoteData(id, data);
+  // Approval prompts raised while this window wasn't listening.
+  hydrateConnectionPendingControls(id);
 }
 
 export async function connectRemoteConnection(id: string): Promise<void> {
@@ -101,8 +104,8 @@ export function adoptPairResult(result: PairResult): void {
 }
 
 /**
- * Re-adopt connections the Rust side still holds (after a webview reload
- * the store is empty but the sockets are up).
+ * Re-adopt a connection the Rust side still holds: after a webview reload
+ * (the store is empty but the socket is up) or after events were lost.
  */
 export async function resyncActiveConnection(id: string): Promise<void> {
   const data = (await sendRemoteCommand(

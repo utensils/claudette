@@ -224,6 +224,9 @@ async fn forward_remote_events(
     loop {
         tokio::select! {
             received = event_rx.recv() => match received {
+                Ok(event) if event.event == claudette::transport::EVENTS_DROPPED_EVENT => {
+                    notify_events_lost(&app, &connection_id);
+                }
                 Ok(event) => {
                     let manager = app.state::<RemoteConnectionManager>();
                     let Some(payload) = manager.with_pty_aliases(|a| {
@@ -241,6 +244,7 @@ async fn forward_remote_events(
                         skipped,
                         "remote event forwarder lagged; events dropped"
                     );
+                    notify_events_lost(&app, &connection_id);
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             },
@@ -263,6 +267,18 @@ async fn forward_remote_events(
             serde_json::json!({ "connection_id": connection_id }),
         );
     }
+}
+
+/// Event emitted on the local bus when some of a connection's events were
+/// lost (by this forwarder or by the server). The frontend resyncs that
+/// connection's state from snapshots.
+pub const REMOTE_EVENTS_LOST_EVENT: &str = "remote-events-lost";
+
+fn notify_events_lost(app: &AppHandle, connection_id: &str) {
+    let _ = app.emit(
+        REMOTE_EVENTS_LOST_EVENT,
+        serde_json::json!({ "connection_id": connection_id }),
+    );
 }
 
 fn tag_remote_payload(mut payload: serde_json::Value, connection_id: &str) -> serde_json::Value {
