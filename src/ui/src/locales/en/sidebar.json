@@ -84,5 +84,6 @@
   "no_repos": "No local repositories yet — add one from the toolbar below.",
   "no_workspaces": "No workspaces yet.",
   "no_workspaces_repo_filter": "No workspaces match this repo filter.",
-  "nothing_to_show": "Nothing to show."
+  "nothing_to_show": "Nothing to show.",
+  "remote_connection_lost": "Lost connection to {{name}}"
 }

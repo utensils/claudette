@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::{ServerEvent, Transport};
@@ -25,6 +25,9 @@ pub struct WebSocketTransport {
     next_id: AtomicU64,
     event_tx: broadcast::Sender<ServerEvent>,
     connected: Arc<AtomicBool>,
+    /// Flips to `true` once the reader task observes the socket closing.
+    /// Lets owners react to a dropped connection without polling.
+    closed_rx: watch::Receiver<bool>,
     _reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -89,6 +92,7 @@ impl WebSocketTransport {
             Arc::new(Mutex::new(HashMap::new()));
         let (event_tx, _) = broadcast::channel(256);
         let connected = Arc::new(AtomicBool::new(true));
+        let (closed_tx, closed_rx) = watch::channel(false);
 
         // Spawn reader task.
         let pending_clone = Arc::clone(&pending);
@@ -134,6 +138,8 @@ impl WebSocketTransport {
                     "error": {"code": -3, "message": "Connection closed"}
                 }));
             }
+            drop(pending);
+            let _ = closed_tx.send(true);
         });
 
         Ok(ConnectionResult {
@@ -143,6 +149,7 @@ impl WebSocketTransport {
                 next_id: AtomicU64::new(1),
                 event_tx,
                 connected,
+                closed_rx,
                 _reader_task: reader_task,
             },
             cert_fingerprint,
@@ -237,16 +244,23 @@ impl Transport for WebSocketTransport {
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
+            // Checked under the `pending` lock: the reader task drains
+            // `pending` under the same lock after clearing `connected`, so a
+            // request inserted here is either drained or rejected — never
+            // parked forever on a dead socket.
+            if !self.connected.load(Ordering::Relaxed) {
+                return Err("Connection closed".to_string());
+            }
             pending.insert(id, tx);
         }
 
         let text = serde_json::to_string(&req).map_err(|e| e.to_string())?;
         {
             let mut writer = self.writer.lock().await;
-            writer
-                .send(Message::Text(text.into()))
-                .await
-                .map_err(|e| format!("Failed to send: {e}"))?;
+            if let Err(e) = writer.send(Message::Text(text.into())).await {
+                self.pending.lock().await.remove(&id);
+                return Err(format!("Failed to send: {e}"));
+            }
         }
 
         rx.await.map_err(|_| "Response channel closed".to_string())
@@ -268,6 +282,10 @@ impl Transport for WebSocketTransport {
 
     fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
+    }
+
+    fn closed(&self) -> watch::Receiver<bool> {
+        self.closed_rx.clone()
     }
 }
 

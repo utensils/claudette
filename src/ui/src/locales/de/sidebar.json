@@ -84,5 +84,6 @@
   "no_repos": "Noch keine lokalen Repositories — füge eins über die Toolbar unten hinzu.",
   "no_workspaces": "Noch keine Workspaces.",
   "no_workspaces_repo_filter": "Keine Workspaces passen zu diesem Repo-Filter.",
-  "nothing_to_show": "Nichts anzuzeigen."
+  "nothing_to_show": "Nichts anzuzeigen.",
+  "remote_connection_lost": "Verbindung zu {{name}} verloren"
 }

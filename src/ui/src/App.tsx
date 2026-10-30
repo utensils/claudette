@@ -19,6 +19,7 @@ import type { WorkspaceOrderModeByRepo } from "./utils/workspaceOrdering";
 import { useCiAutoFixSession } from "./hooks/useCiAutoFixSession";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { useChatSessionCreatedEvent } from "./hooks/useChatSessionCreatedEvent";
+import { useRemoteConnectionLifecycle } from "./hooks/useRemoteConnectionLifecycle";
 import { useUsageInsightsPoller } from "./hooks/useUsageInsightsPoller";
 import {
   hydratePersistedViewState,
@@ -124,6 +125,7 @@ function App() {
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
   useChatSessionCreatedEvent();
+  useRemoteConnectionLifecycle();
   useUsageInsightsPoller();
   useCiAutoFixSession();
 

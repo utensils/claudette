@@ -102,8 +102,8 @@ pub async fn pair_with_server(
             "params": {}
         }))
         .await
-        .ok()
-        .and_then(|r| r.get("result").cloned());
+        .and_then(crate::remote::rpc_result)
+        .ok();
 
     // Add to active connections.
     manager.add(info.clone(), transport, app).await;
@@ -155,21 +155,19 @@ pub async fn connect_remote(
 
     // Load remote data.
     use claudette::transport::Transport;
-    let remote_data = transport
-        .send(serde_json::json!({
-            "method": "load_initial_data",
-            "params": {}
-        }))
-        .await?;
+    let remote_data = crate::remote::rpc_result(
+        transport
+            .send(serde_json::json!({
+                "method": "load_initial_data",
+                "params": {}
+            }))
+            .await?,
+    )?;
 
     // Add to active connections.
     manager.add(info, transport, app).await;
 
-    // Return the remote initial data.
-    Ok(remote_data
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null))
+    Ok(remote_data)
 }
 
 #[tauri::command]
@@ -238,15 +236,7 @@ pub async fn send_remote_command(
     params: serde_json::Value,
     manager: State<'_, RemoteConnectionManager>,
 ) -> Result<serde_json::Value, String> {
-    let request = serde_json::json!({
-        "method": method,
-        "params": params,
-    });
-    let response = manager.send(&connection_id, request).await?;
-    Ok(response
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null))
+    manager.call(&connection_id, &method, params).await
 }
 
 // -- Local server (Share this machine) --

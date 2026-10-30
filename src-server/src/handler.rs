@@ -309,6 +309,22 @@ pub async fn handle_request(
     }
 }
 
+/// Payload for the `agent-stream` event. The desktop UI keys streams on
+/// `chat_session_id` (matching the local Tauri event); the mobile client
+/// reads the older `session_id`. Emit both so neither breaks.
+pub fn agent_stream_payload(
+    workspace_id: &str,
+    chat_session_id: &str,
+    event: &AgentEvent,
+) -> serde_json::Value {
+    json!({
+        "workspace_id": workspace_id,
+        "chat_session_id": chat_session_id,
+        "session_id": chat_session_id,
+        "event": event,
+    })
+}
+
 fn param_str(params: &serde_json::Value, key: &str) -> String {
     params
         .get(key)
@@ -1075,11 +1091,7 @@ pub fn spawn_turn_event_bridge(
             // Emit event over WebSocket.
             let event_msg = json!({
                 "event": "agent-stream",
-                "payload": {
-                    "workspace_id": ws_id,
-                    "session_id": chat_session_id_for_stream,
-                    "event": event,
-                }
+                "payload": agent_stream_payload(&ws_id, &chat_session_id_for_stream, &event),
             });
             send_message(&writer, &event_msg).await;
         }
@@ -1917,5 +1929,20 @@ fn resolve_extra_claude_flags(
             tracing::warn!(target: "claudette::ws", error = %msg, "claude flag discovery failed");
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_stream_payload_carries_both_session_keys() {
+        let payload = agent_stream_payload("ws-1", "chat-1", &AgentEvent::ProcessExited(Some(0)));
+        assert_eq!(payload["workspace_id"], "ws-1");
+        // Desktop reads `chat_session_id`; mobile reads `session_id`.
+        assert_eq!(payload["chat_session_id"], "chat-1");
+        assert_eq!(payload["session_id"], "chat-1");
+        assert_eq!(payload["event"]["ProcessExited"], 0);
     }
 }

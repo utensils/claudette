@@ -82,5 +82,6 @@
   "no_repos": "尚无本地仓库 — 从下方工具栏添加一个。",
   "no_workspaces": "尚无工作区。",
   "no_workspaces_repo_filter": "没有工作区匹配此仓库筛选。",
-  "nothing_to_show": "无内容可显示。"
+  "nothing_to_show": "无内容可显示。",
+  "remote_connection_lost": "与 {{name}} 的连接已断开"
 }
