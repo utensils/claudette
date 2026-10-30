@@ -463,6 +463,8 @@ fn copy_history(
                     agent_thinking_blocks_json: a.agent_thinking_blocks_json.clone(),
                     agent_result_text: a.agent_result_text.clone(),
                     workflow_progress_json: a.workflow_progress_json.clone(),
+                    agent_total_tokens: a.agent_total_tokens,
+                    agent_duration_ms: a.agent_duration_ms,
                 })
                 .collect();
             db.insert_turn_tool_activities(&remapped)?;
@@ -748,6 +750,8 @@ mod tests {
             agent_thinking_blocks_json: "[]".into(),
             agent_result_text: None,
             workflow_progress_json: "[]".into(),
+            agent_total_tokens: None,
+            agent_duration_ms: None,
         }])
         .unwrap();
         db.insert_turn_tool_activities(&[TurnToolActivity {
@@ -769,6 +773,8 @@ mod tests {
             agent_thinking_blocks_json: "[]".into(),
             agent_result_text: None,
             workflow_progress_json: "[]".into(),
+            agent_total_tokens: None,
+            agent_duration_ms: None,
         }])
         .unwrap();
         db

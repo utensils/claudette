@@ -67,6 +67,13 @@ pub struct TurnToolActivity {
     /// the column existed still load.
     #[serde(default = "empty_json_array")]
     pub workflow_progress_json: String,
+    /// Subagent token total from the CLI's task usage. `None` for non-Agent
+    /// tools and rows persisted before the column existed.
+    #[serde(default)]
+    pub agent_total_tokens: Option<i64>,
+    /// Subagent wall-clock duration from the CLI's task usage.
+    #[serde(default)]
+    pub agent_duration_ms: Option<i64>,
 }
 
 fn empty_json_array() -> String {

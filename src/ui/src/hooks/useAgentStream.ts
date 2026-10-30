@@ -1,7 +1,10 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
-import { findToolActivity } from "../stores/findToolActivity";
+import {
+  findToolActivity,
+  findToolActivityWhere,
+} from "../stores/findToolActivity";
 import { collectInFlightWorkflows } from "../stores/inFlightWorkflows";
 import {
   FAILED_BACKGROUND_TASK_STATUS,
@@ -14,6 +17,7 @@ import {
   loadChatHistory,
   saveTurnToolActivities,
   updateTurnToolActivityProgress,
+  updateTurnAgentActivity,
   setSessionCliInvocation,
 } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
@@ -208,6 +212,81 @@ function resolveNeverStartedWorkflow(
       });
     },
   );
+}
+
+/**
+ * `reapInFlightWorkflows` for subagents: once the session's CLI process has
+ * exited, no `SubagentStop` can arrive, so an `Agent` still reading as
+ * running (a stopped turn, a crash, a background subagent cut off) would
+ * spin forever and replay that way after reload.
+ *
+ * Deliberately narrow: only an explicit `running` / `starting` status is
+ * reaped. Historical Agent rows with a null status (saved before task
+ * events were tracked) must not be rewritten as stopped on every exit.
+ */
+function reapInFlightAgents(
+  sessionId: string,
+  updateToolActivity: (
+    sessionId: string,
+    toolUseId: string,
+    updates: Partial<ToolActivity>,
+  ) => void,
+): void {
+  const state = useAppStore.getState();
+  const candidates = [
+    ...(state.toolActivities[sessionId] ?? []),
+    ...(state.completedTurns[sessionId] ?? []).flatMap((t) => t.activities),
+  ].filter((a) => {
+    if (a.toolName !== "Agent") return false;
+    const status = (a.agentStatus ?? "").toLowerCase();
+    return status === "running" || status === "starting";
+  });
+  for (const activity of candidates) {
+    updateToolActivity(sessionId, activity.toolUseId, {
+      agentStatus: REAPED_BACKGROUND_TASK_STATUS,
+    });
+    persistBackgroundAgentActivity(sessionId, activity.toolUseId);
+  }
+}
+
+/**
+ * Write a background subagent's current state onto its checkpointed row.
+ *
+ * A no-op while the activity is still in the live lane: the turn's own
+ * checkpoint write (`saveTurnToolActivities`) will carry everything. Only
+ * once the activity has migrated into `completedTurns` — i.e. the subagent
+ * outlived its launching turn — is there a saved row that would otherwise
+ * replay a stale "running" status with no result after reload.
+ */
+function persistBackgroundAgentActivity(
+  sessionId: string,
+  toolUseId: string,
+): void {
+  const state = useAppStore.getState();
+  const isLive = (state.toolActivities[sessionId] ?? []).some(
+    (a) => a.toolUseId === toolUseId,
+  );
+  if (isLive) return;
+  const activity = findToolActivity(state, sessionId, toolUseId);
+  if (activity?.toolName !== "Agent") return;
+  void updateTurnAgentActivity(sessionId, toolUseId, {
+    agentStatus: activity.agentStatus ?? null,
+    agentResultText: activity.agentResultText ?? null,
+    agentToolCallsJson: activity.agentToolCalls?.length
+      ? JSON.stringify(activity.agentToolCalls)
+      : null,
+    agentThinkingBlocksJson: activity.agentThinkingBlocks?.length
+      ? JSON.stringify(activity.agentThinkingBlocks)
+      : null,
+    agentToolUseCount: activity.agentToolUseCount ?? null,
+    agentTotalTokens: activity.agentTotalTokens ?? null,
+    agentDurationMs: activity.agentDurationMs ?? null,
+  }).catch((err) => {
+    debugChat("stream", "persist background agent failed", {
+      toolUseId,
+      error: String(err),
+    });
+  });
 }
 
 function isCodexApprovalTool(toolName: string): boolean {
@@ -418,6 +497,7 @@ export function useAgentStream() {
         // After `finalizeTurn`, so the activity sits in exactly one lane
         // (`completedTurns`) and the update has one place to land.
         reapInFlightWorkflows(sessionId, updateToolActivity);
+        reapInFlightAgents(sessionId, updateToolActivity);
         turnMessageCountRef.current[sessionId] = 0;
         turnFinalizedRef.current[sessionId] = false;
         turnCheckpointIdRef.current[sessionId] = undefined;
@@ -486,6 +566,12 @@ export function useAgentStream() {
               if (typeof streamEvent.usage?.tool_uses === "number") {
                 updates.agentToolUseCount = streamEvent.usage.tool_uses;
               }
+              if (typeof streamEvent.usage?.total_tokens === "number") {
+                updates.agentTotalTokens = streamEvent.usage.total_tokens;
+              }
+              if (typeof streamEvent.usage?.duration_ms === "number") {
+                updates.agentDurationMs = streamEvent.usage.duration_ms;
+              }
               // Full replacement snapshot of a Workflow run's phase/agent
               // tree. The CLI only attaches it on real state transitions;
               // the throttled in-between ticks omit the key entirely, and
@@ -533,6 +619,12 @@ export function useAgentStream() {
                   sessionId,
                   streamEvent.tool_use_id,
                 );
+                if (activity?.toolName === "Agent") {
+                  persistBackgroundAgentActivity(
+                    sessionId,
+                    streamEvent.tool_use_id,
+                  );
+                }
                 // Persist for workflows even when no tree was ever reported
                 // (a run that failed before its first `task_progress`): the
                 // terminal status alone still has to land, or the pill keeps
@@ -988,9 +1080,12 @@ export function useAgentStream() {
       }
 
       if (hookName === "SubagentStop") {
-        const activity = (
-          useAppStore.getState().toolActivities[sessionId] || []
-        ).find(
+        // Search completed turns too: a `run_in_background` subagent stops
+        // long after the turn that launched it was finalized, and a
+        // live-only lookup dropped its result and left it "running".
+        const activity = findToolActivityWhere(
+          useAppStore.getState(),
+          sessionId,
           (item) =>
             item.agentTaskId === agentId ||
             item.toolUseId === input.tool_use_id ||
@@ -1011,6 +1106,7 @@ export function useAgentStream() {
           updates.agentThinkingBlocks = thinkingBlocks;
         }
         updateToolActivity(sessionId, activity.toolUseId, updates);
+        persistBackgroundAgentActivity(sessionId, activity.toolUseId);
         return;
       }
 
@@ -1243,6 +1339,8 @@ export function useAgentStream() {
               ),
               agent_result_text: a.agentResultText ?? null,
               workflow_progress_json: JSON.stringify(a.workflowProgress ?? []),
+              agent_total_tokens: a.agentTotalTokens ?? null,
+              agent_duration_ms: a.agentDurationMs ?? null,
             }));
             return saveTurnToolActivities(checkpoint.id, messageCount, activities);
           })()

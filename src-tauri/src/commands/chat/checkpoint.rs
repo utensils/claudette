@@ -349,6 +349,22 @@ pub async fn update_turn_tool_activity_progress(
     Ok(())
 }
 
+/// Persist late-arriving state for a background `Agent` activity (terminal
+/// status, final result, nested tool calls, usage). Session-scoped — see
+/// [`Database::update_turn_agent_activity`]. A zero-row update is normal.
+#[tauri::command]
+pub async fn update_turn_agent_activity(
+    chat_session_id: String,
+    tool_use_id: String,
+    update: claudette::db::AgentActivityUpdate,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.update_turn_agent_activity(&chat_session_id, &tool_use_id, &update)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Whether a chat session still owns a CLI process that could be running
 /// workflows for it.
 ///

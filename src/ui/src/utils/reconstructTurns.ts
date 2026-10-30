@@ -98,6 +98,8 @@ export function reconstructCompletedTurns(
         agentToolCalls: parseAgentToolCalls(a.agent_tool_calls_json),
         agentThinkingBlocks: parseStringArray(a.agent_thinking_blocks_json),
         agentResultText: a.agent_result_text,
+        agentTotalTokens: a.agent_total_tokens ?? null,
+        agentDurationMs: a.agent_duration_ms ?? null,
         workflowProgress: parseWorkflowProgress(a.workflow_progress_json),
       })),
       messageCount: td.message_count,

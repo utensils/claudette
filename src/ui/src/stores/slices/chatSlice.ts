@@ -28,6 +28,9 @@ export interface ToolActivity {
   agentToolCalls?: AgentToolCall[];
   agentThinkingBlocks?: string[];
   agentResultText?: string | null;
+  /** Subagent usage reported on `task_progress` / `task_notification`. */
+  agentTotalTokens?: number | null;
+  agentDurationMs?: number | null;
   /** Phase/agent tree for a `Workflow` tool activity. Undefined for every
    *  other tool, and also for a workflow whose first progress tick hasn't
    *  landed yet. */
@@ -527,33 +530,52 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
     }),
   upsertAgentToolCall: (sessionId, agentId, call) => {
     let matched = false;
+    const applyCall = (activity: ToolActivity): ToolActivity => {
+      if (activity.agentTaskId !== agentId) return activity;
+      matched = true;
+      const calls = activity.agentToolCalls || [];
+      const existing = calls.find((item) => item.toolUseId === call.toolUseId);
+      const nextCalls = existing
+        ? calls.map((item) =>
+            item.toolUseId === call.toolUseId
+              ? { ...item, ...call, startedAt: item.startedAt }
+              : item,
+          )
+        : [...calls, call];
+      return {
+        ...activity,
+        agentToolCalls: nextCalls,
+        agentLastToolName: call.toolName,
+        agentToolUseCount: Math.max(
+          activity.agentToolUseCount ?? 0,
+          nextCalls.length,
+        ),
+      };
+    };
     set((s) => {
       const activities = s.toolActivities[sessionId] || [];
-      const nextActivities = activities.map((activity) => {
-        if (activity.agentTaskId !== agentId) return activity;
-        matched = true;
-        const calls = activity.agentToolCalls || [];
-        const existing = calls.find((item) => item.toolUseId === call.toolUseId);
-        const nextCalls = existing
-          ? calls.map((item) =>
-              item.toolUseId === call.toolUseId
-                ? { ...item, ...call, startedAt: item.startedAt }
-                : item,
-            )
-          : [...calls, call];
+      const nextActivities = activities.map(applyCall);
+      if (matched) {
         return {
-          ...activity,
-          agentToolCalls: nextCalls,
-          agentLastToolName: call.toolName,
-          agentToolUseCount: Math.max(
-            activity.agentToolUseCount ?? 0,
-            nextCalls.length,
-          ),
+          toolActivities: { ...s.toolActivities, [sessionId]: nextActivities },
         };
-      });
-      return matched
-        ? { toolActivities: { ...s.toolActivities, [sessionId]: nextActivities } }
-        : {};
+      }
+      // A background subagent (`run_in_background`) keeps working after the
+      // turn that launched it has finalized, so its activity now lives in
+      // `completedTurns`. Without this fallback its nested calls never land
+      // and pile up in the stream hook's pending buffer forever.
+      const turns = s.completedTurns[sessionId];
+      if (!turns) return {};
+      for (let i = turns.length - 1; i >= 0; i--) {
+        const nextTurnActivities = turns[i].activities.map(applyCall);
+        if (!matched) continue;
+        const nextTurns = [...turns];
+        nextTurns[i] = { ...turns[i], activities: nextTurnActivities };
+        return {
+          completedTurns: { ...s.completedTurns, [sessionId]: nextTurns },
+        };
+      }
+      return {};
     });
     return matched;
   },
@@ -633,6 +655,8 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
           agentToolCalls: a.agentToolCalls,
           agentThinkingBlocks: a.agentThinkingBlocks,
           agentResultText: a.agentResultText,
+          agentTotalTokens: a.agentTotalTokens,
+          agentDurationMs: a.agentDurationMs,
           workflowProgress: a.workflowProgress,
         })),
         messageCount,

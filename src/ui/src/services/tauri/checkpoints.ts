@@ -86,6 +86,34 @@ export function resolveStaleWorkflowActivities(
   return invoke("resolve_stale_workflow_activities", { sessionId });
 }
 
+/** Late-arriving fields for an already-checkpointed `Agent` activity.
+ *  `null`/omitted fields leave the stored column untouched (COALESCE). */
+export interface AgentActivityUpdate {
+  agentStatus?: string | null;
+  agentResultText?: string | null;
+  agentToolCallsJson?: string | null;
+  agentThinkingBlocksJson?: string | null;
+  agentToolUseCount?: number | null;
+  agentTotalTokens?: number | null;
+  agentDurationMs?: number | null;
+}
+
+/** Persist a background subagent's outcome onto its activity row. Needed
+ *  because a `run_in_background` Agent finishes after its launching turn was
+ *  checkpointed — the same lifecycle `updateTurnToolActivityProgress` covers
+ *  for workflows. Session-scoped (forks copy `tool_use_id`). */
+export function updateTurnAgentActivity(
+  chatSessionId: string,
+  toolUseId: string,
+  update: AgentActivityUpdate,
+): Promise<void> {
+  return invoke("update_turn_agent_activity", {
+    chatSessionId,
+    toolUseId,
+    update,
+  });
+}
+
 export function loadCompletedTurns(
   sessionId: string,
 ): Promise<CompletedTurnData[]> {

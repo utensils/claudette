@@ -106,8 +106,8 @@ pub use terminal::CLAUDETTE_TERMINAL_TITLE;
 mod remote;
 
 mod checkpoint;
-pub use checkpoint::WorkflowActivityResolution;
 pub(crate) use checkpoint::sha256_hex;
+pub use checkpoint::{AgentActivityUpdate, WorkflowActivityResolution};
 
 mod chat;
 

@@ -109,6 +109,8 @@ function turnFromData(data: CompletedTurnData): TaskActivityTurn {
       agentToolCalls: parseAgentToolCalls(activity.agent_tool_calls_json),
       agentThinkingBlocks: parseStringArray(activity.agent_thinking_blocks_json),
       agentResultText: activity.agent_result_text,
+      agentTotalTokens: activity.agent_total_tokens ?? null,
+      agentDurationMs: activity.agent_duration_ms ?? null,
     })),
   };
 }

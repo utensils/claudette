@@ -30,6 +30,9 @@ export interface TurnToolActivityData {
   /** Serialized `WorkflowProgressEntry[]` for a `Workflow` tool activity;
    *  `"[]"` for every other tool. */
   workflow_progress_json: string;
+  /** Subagent usage from the CLI's task events; null for other tools. */
+  agent_total_tokens?: number | null;
+  agent_duration_ms?: number | null;
 }
 
 export interface CompletedTurnData {

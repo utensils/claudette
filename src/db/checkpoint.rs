@@ -16,6 +16,20 @@ use crate::model::{
 
 use super::{Database, retry_on_busy};
 
+/// Late-arriving fields for an `Agent` activity row; see
+/// [`Database::update_turn_agent_activity`]. `None` leaves a column as is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActivityUpdate {
+    pub agent_status: Option<String>,
+    pub agent_result_text: Option<String>,
+    pub agent_tool_calls_json: Option<String>,
+    pub agent_thinking_blocks_json: Option<String>,
+    pub agent_tool_use_count: Option<i32>,
+    pub agent_total_tokens: Option<i64>,
+    pub agent_duration_ms: Option<i64>,
+}
+
 /// Outcome of [`Database::finish_workflow_activity`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowActivityResolution {
@@ -863,9 +877,10 @@ impl Database {
                     result_text, summary, sort_order, assistant_message_ordinal,
                     agent_task_id, agent_description, agent_last_tool_name,
                     agent_tool_use_count, agent_status, agent_tool_calls_json,
-                    agent_thinking_blocks_json, agent_result_text, workflow_progress_json
+                    agent_thinking_blocks_json, agent_result_text, workflow_progress_json,
+                    agent_total_tokens, agent_duration_ms
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -887,6 +902,8 @@ impl Database {
                     a.agent_thinking_blocks_json,
                     a.agent_result_text,
                     a.workflow_progress_json,
+                    a.agent_total_tokens,
+                    a.agent_duration_ms,
                 ])?;
             }
         }
@@ -925,9 +942,10 @@ impl Database {
                     result_text, summary, sort_order, assistant_message_ordinal,
                     agent_task_id, agent_description, agent_last_tool_name,
                     agent_tool_use_count, agent_status, agent_tool_calls_json,
-                    agent_thinking_blocks_json, agent_result_text, workflow_progress_json
+                    agent_thinking_blocks_json, agent_result_text, workflow_progress_json,
+                    agent_total_tokens, agent_duration_ms
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -949,6 +967,8 @@ impl Database {
                     a.agent_thinking_blocks_json,
                     a.agent_result_text,
                     a.workflow_progress_json,
+                    a.agent_total_tokens,
+                    a.agent_duration_ms,
                 ])?;
             }
         }
@@ -988,6 +1008,57 @@ impl Database {
                     agent_status = COALESCE(?2, agent_status)
               WHERE tool_use_id = ?3",
             params![workflow_progress_json, agent_status, tool_use_id],
+        )
+    }
+
+    /// Record late-arriving state for an already-saved `Agent` activity.
+    ///
+    /// A subagent launched with `run_in_background` routinely outlives the
+    /// turn that started it, exactly like a backgrounded `Workflow`: the
+    /// activity is checkpointed with a running status and no result, and the
+    /// `SubagentStop` hook (final result, thinking, terminal status) arrives
+    /// minutes later. Without a targeted write that outcome only ever lived in
+    /// the webview store and vanished on reload.
+    ///
+    /// Scoped to one chat session for the same reason as
+    /// [`Database::finish_workflow_activity`]: forks copy `tool_use_id`
+    /// verbatim. Every field is `COALESCE`d so a partial update never blanks a
+    /// column it has nothing to say about. Returns the number of rows updated;
+    /// zero is normal (the turn may not have been checkpointed yet).
+    pub fn update_turn_agent_activity(
+        &self,
+        chat_session_id: &str,
+        tool_use_id: &str,
+        update: &AgentActivityUpdate,
+    ) -> Result<usize, rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE turn_tool_activities
+                SET agent_status = COALESCE(?1, agent_status),
+                    agent_result_text = COALESCE(?2, agent_result_text),
+                    agent_tool_calls_json = COALESCE(?3, agent_tool_calls_json),
+                    agent_thinking_blocks_json = COALESCE(?4, agent_thinking_blocks_json),
+                    agent_tool_use_count = COALESCE(?5, agent_tool_use_count),
+                    agent_total_tokens = COALESCE(?6, agent_total_tokens),
+                    agent_duration_ms = COALESCE(?7, agent_duration_ms)
+              WHERE id = (
+                    SELECT ta.id FROM turn_tool_activities ta
+                      JOIN conversation_checkpoints cp ON cp.id = ta.checkpoint_id
+                     WHERE ta.tool_name = 'Agent'
+                       AND ta.tool_use_id = ?8
+                       AND cp.chat_session_id = ?9
+                     ORDER BY ta.rowid DESC LIMIT 1
+              )",
+            params![
+                update.agent_status,
+                update.agent_result_text,
+                update.agent_tool_calls_json,
+                update.agent_thinking_blocks_json,
+                update.agent_tool_use_count,
+                update.agent_total_tokens,
+                update.agent_duration_ms,
+                tool_use_id,
+                chat_session_id,
+            ],
         )
     }
 
@@ -1349,7 +1420,8 @@ impl Database {
                     ta.assistant_message_ordinal, ta.agent_task_id,
                     ta.agent_description, ta.agent_last_tool_name,
                     ta.agent_tool_use_count, ta.agent_status, ta.agent_tool_calls_json,
-                    ta.agent_thinking_blocks_json, ta.agent_result_text, ta.workflow_progress_json
+                    ta.agent_thinking_blocks_json, ta.agent_result_text, ta.workflow_progress_json,
+                    ta.agent_total_tokens, ta.agent_duration_ms
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.workspace_id = ?1
@@ -1376,6 +1448,8 @@ impl Database {
                     agent_thinking_blocks_json: row.get(15)?,
                     agent_result_text: row.get(16)?,
                     workflow_progress_json: row.get(17)?,
+                    agent_total_tokens: row.get(18)?,
+                    agent_duration_ms: row.get(19)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1459,7 +1533,8 @@ impl Database {
                     ta.assistant_message_ordinal, ta.agent_task_id,
                     ta.agent_description, ta.agent_last_tool_name,
                     ta.agent_tool_use_count, ta.agent_status, ta.agent_tool_calls_json,
-                    ta.agent_thinking_blocks_json, ta.agent_result_text, ta.workflow_progress_json
+                    ta.agent_thinking_blocks_json, ta.agent_result_text, ta.workflow_progress_json,
+                    ta.agent_total_tokens, ta.agent_duration_ms
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.chat_session_id = ?1
@@ -1486,6 +1561,8 @@ impl Database {
                     agent_thinking_blocks_json: row.get(15)?,
                     agent_result_text: row.get(16)?,
                     workflow_progress_json: row.get(17)?,
+                    agent_total_tokens: row.get(18)?,
+                    agent_duration_ms: row.get(19)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1578,6 +1655,8 @@ mod tests {
             agent_thinking_blocks_json: "[]".into(),
             agent_result_text: None,
             workflow_progress_json: "[]".into(),
+            agent_total_tokens: None,
+            agent_duration_ms: None,
         }
     }
 
@@ -1852,6 +1931,54 @@ mod tests {
 
     /// A backgrounded `Workflow` finishes long after its turn was saved, so
     /// the final tree has to be written straight at the activity row.
+    #[test]
+    fn test_update_turn_agent_activity_coalesces_and_scopes_to_session() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        let cp = make_checkpoint(&db, "cp1", "w1", "m1", 0);
+        let session = cp.chat_session_id.clone();
+        db.insert_checkpoint(&cp).unwrap();
+        let mut agent = make_tool_activity("a1", "cp1", "Agent", 0);
+        agent.agent_status = Some("running".into());
+        agent.agent_result_text = Some("partial".into());
+        db.insert_turn_tool_activities(&[agent]).unwrap();
+
+        // Wrong session: no write.
+        let rows = db
+            .update_turn_agent_activity(
+                "other-session",
+                "tu_a1",
+                &AgentActivityUpdate {
+                    agent_status: Some("completed".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
+
+        let rows = db
+            .update_turn_agent_activity(
+                &session,
+                "tu_a1",
+                &AgentActivityUpdate {
+                    agent_status: Some("completed".into()),
+                    agent_total_tokens: Some(84_669),
+                    agent_duration_ms: Some(180_027),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(rows, 1);
+
+        let saved = &db.list_completed_turns("w1").unwrap()[0].activities[0];
+        assert_eq!(saved.agent_status.as_deref(), Some("completed"));
+        // Not supplied → preserved, not blanked.
+        assert_eq!(saved.agent_result_text.as_deref(), Some("partial"));
+        assert_eq!(saved.agent_total_tokens, Some(84_669));
+        assert_eq!(saved.agent_duration_ms, Some(180_027));
+    }
+
     #[test]
     fn test_update_turn_tool_activity_progress_writes_tree_and_status() {
         let db = setup_db_with_workspace();
