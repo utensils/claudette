@@ -21,6 +21,7 @@ struct Fixture {
     pairing_token: String,
     repo: Repository,
     state: Arc<ServerState>,
+    config_path: std::path::PathBuf,
 }
 
 async fn setup() -> Fixture {
@@ -74,13 +75,14 @@ async fn setup() -> Fixture {
     });
 
     let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("server.toml");
     let handle = claudette_server::start(
         ServerOptions {
             port: 0,
             bind: "127.0.0.1".into(),
             name: Some("test-server".into()),
             no_mdns: true,
-            config_path: Some(config_dir.path().join("server.toml")),
+            config_path: Some(config_path.clone()),
             tls_dir: Some(config_dir.path().to_path_buf()),
         },
         host,
@@ -100,6 +102,7 @@ async fn setup() -> Fixture {
         pairing_token,
         repo,
         state,
+        config_path,
     }
 }
 
@@ -294,4 +297,70 @@ async fn a_disconnecting_clients_terminals_are_closed() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[tokio::test]
+async fn revoking_a_token_closes_every_connection_using_it() {
+    let f = setup().await;
+    let first = WebSocketTransport::connect("127.0.0.1", f.handle.port, None)
+        .await
+        .unwrap()
+        .transport;
+    let token = first
+        .authenticate_pairing(&f.pairing_token, "x")
+        .await
+        .unwrap()
+        .session_token
+        .unwrap();
+    let second = WebSocketTransport::connect("127.0.0.1", f.handle.port, None)
+        .await
+        .unwrap()
+        .transport;
+    second.authenticate_session(&token).await.unwrap();
+    let mut second_closed = second.closed();
+
+    assert_eq!(
+        call(&first, "revoke_session", json!({})).await["revoked"],
+        true
+    );
+
+    tokio::time::timeout(Duration::from_secs(5), second_closed.wait_for(|c| *c))
+        .await
+        .expect("a connection using the revoked token stayed open")
+        .unwrap();
+    assert!(
+        second
+            .send(json!({"method": "load_initial_data", "params": {}}))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_connection_opened_before_reset_cannot_restore_the_old_pairing() {
+    let mut f = setup().await;
+    // Connected but not yet authenticated when the reset starts.
+    let waiting = WebSocketTransport::connect("127.0.0.1", f.handle.port, None)
+        .await
+        .unwrap()
+        .transport;
+
+    tokio::time::timeout(Duration::from_secs(5), f.handle.stop_and_wait())
+        .await
+        .expect("stop waited on an unauthenticated connection");
+    let mut config = claudette_server::auth::ServerConfig::load_or_create(&f.config_path).unwrap();
+    config.regenerate_token();
+    config.save(&f.config_path).unwrap();
+    let new_token = config.auth.pairing_token.clone();
+
+    assert!(
+        waiting
+            .authenticate_pairing(&f.pairing_token, "x")
+            .await
+            .is_err(),
+        "the old pairing token still authenticated after reset"
+    );
+    let on_disk = claudette_server::auth::ServerConfig::load_or_create(&f.config_path).unwrap();
+    assert_eq!(on_disk.auth.pairing_token, new_token);
+    assert!(on_disk.sessions.is_empty());
 }

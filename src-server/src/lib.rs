@@ -14,6 +14,10 @@ use tokio::net::TcpListener;
 use crate::auth::ServerConfig;
 pub use crate::host::{RpcHost, StandaloneHost};
 
+/// Revocation notices buffered per connection. A connection that lags
+/// re-checks its token against the config instead.
+const REVOCATION_CHANNEL_CAPACITY: usize = 64;
+
 /// Default WebSocket port for claudette-server.
 pub const DEFAULT_PORT: u16 = 7683;
 
@@ -75,8 +79,9 @@ impl ServerHandle {
         let _ = self.shutdown.send(true);
     }
 
-    /// [`Self::stop`], then wait until the listener is closed so its port
-    /// can be bound again right away.
+    /// [`Self::stop`], then wait until the listener is closed and every
+    /// connection task has ended. After this returns the port can be bound
+    /// again and no connection can still save the pairing config.
     pub async fn stop_and_wait(&mut self) {
         self.stop();
         if !self.task.is_finished() {
@@ -157,11 +162,23 @@ pub async fn start(options: ServerOptions, host: Arc<dyn RpcHost>) -> Result<Ser
     );
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut accept_shutdown = shutdown_rx.clone();
+    let ctx = ws::ConnectionContext {
+        host,
+        config,
+        config_path,
+        revocations: tokio::sync::broadcast::channel(REVOCATION_CHANNEL_CAPACITY).0,
+        shutdown: shutdown_rx.clone(),
+    };
+    let mut accept_shutdown = shutdown_rx;
     let task = tokio::spawn(async move {
+        // Owned here so stopping waits for every connection, including ones
+        // still handshaking or authenticating, not just the listener.
+        let mut connections = tokio::task::JoinSet::new();
         loop {
             let accepted = tokio::select! {
                 accepted = listener.accept() => accepted,
+                // Reap finished connections so the set doesn't grow forever.
+                Some(_) = connections.join_next(), if !connections.is_empty() => continue,
                 _ = async { accept_shutdown.wait_for(|stop| *stop).await.is_ok() } => break,
             };
             let (stream, peer_addr) = match accepted {
@@ -171,36 +188,15 @@ pub async fn start(options: ServerOptions, host: Arc<dyn RpcHost>) -> Result<Ser
                     continue;
                 }
             };
-            let acceptor = acceptor.clone();
-            let host = Arc::clone(&host);
-            let config = Arc::clone(&config);
-            let config_path = Arc::clone(&config_path);
-            let shutdown = shutdown_rx.clone();
-
-            tokio::spawn(async move {
-                match acceptor.accept(stream).await {
-                    Ok(tls_stream) => {
-                        ws::handle_tls_connection(
-                            host,
-                            config,
-                            config_path,
-                            tls_stream,
-                            peer_addr,
-                            shutdown,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "claudette::ws",
-                            peer = %peer_addr,
-                            error = %e,
-                            "TLS handshake failed"
-                        );
-                    }
-                }
-            });
+            connections.spawn(ws::handle_connection(
+                ctx.clone(),
+                acceptor.clone(),
+                stream,
+                peer_addr,
+            ));
         }
+        drop(listener);
+        while connections.join_next().await.is_some() {}
         if let Some(daemon) = mdns {
             let _ = daemon.shutdown();
         }

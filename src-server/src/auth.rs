@@ -99,6 +99,11 @@ impl ServerConfig {
         self.sessions.len() != before
     }
 
+    /// Whether a session token is currently valid (without touching `last_seen`).
+    pub fn has_session(&self, session_token: &str) -> bool {
+        self.sessions.iter().any(|s| s.token == session_token)
+    }
+
     /// Validate an existing session token. Returns true and updates last_seen if valid.
     pub fn validate_session(&mut self, session_token: &str) -> bool {
         if let Some(session) = self.sessions.iter_mut().find(|s| s.token == session_token) {
