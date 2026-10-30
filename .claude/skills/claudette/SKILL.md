@@ -58,7 +58,7 @@ claudette routine list
 | `batch` | Run / validate a batch manifest (multi-workspace fan-out) |
 | `plugin` | List loaded plugins, invoke any operation directly |
 | `pr` | Friendly shortcut over the active SCM provider plugin |
-| `routine` | Schedule / list / run / delete cron-style recurring prompts that fire through a chat session |
+| `routine` | Schedule / list / run / pause / resume / delete cron-style recurring prompts that fire through a chat session |
 | `rpc` | Raw JSON-RPC escape hatch for methods without a typed wrapper |
 | `completion <shell>` | Generate shell completion script |
 
@@ -184,13 +184,15 @@ claudette routine list                                              # always JSO
 claudette routine create <session-id> "0 9 * * 1-5" "Check open PRs" --name weekday-prs
 claudette routine create <session-id> "30 14 28 2 *" @prompts/review.md --once
 claudette routine run weekday-prs                                    # fire now, by id or name
+claudette routine pause weekday-prs                                  # stop firing until resumed
+claudette routine resume weekday-prs                                 # re-arm; clears auto-disable + failure count
 claudette routine delete weekday-prs                                 # delete, by id or name
 ```
 
 - `create` takes `<session-id> <cron-expr> <prompt>`. The prompt accepts the same three forms as `chat send`: a literal string, `@path/to/file.md`, or `-` to read from stdin.
-- `--name` assigns a stable handle so `run` / `delete` can address the routine without its generated id.
+- `--name` assigns a stable handle so `run` / `pause` / `resume` / `delete` can address the routine without its generated id.
 - `--once` fires a single time at the next matching slot, then disables the routine; omit it for a recurring schedule.
-- `routine list` always emits JSON (ad-hoc wakeups plus recurring routines), regardless of `--json`. `create` / `run` / `delete` print a short confirmation line by default and full JSON with `--json`.
+- `routine list` always emits JSON (ad-hoc wakeups plus recurring routines, each with `enabled`, `disabled_reason`, `failure_count`, `last_error`, and `last_run`), regardless of `--json`. `create` / `run` / `pause` / `resume` / `delete` print a short confirmation line by default and full JSON with `--json`.
 
 ### Pull requests for the current workspace
 

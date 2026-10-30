@@ -255,6 +255,8 @@ claudette routine list                                          # Wakeups + rout
 claudette routine create <session-id> "0 9 * * 1-5" "Check open PRs" --name weekday-prs
 claudette routine create <session-id> "30 14 28 2 *" "Review the checklist" --once
 claudette routine run weekday-prs                               # Fire immediately by id or name
+claudette routine pause weekday-prs                             # Stop firing until resumed
+claudette routine resume weekday-prs                            # Re-arm (also clears auto-disable)
 claudette routine delete weekday-prs                            # Delete by id or name
 ```
 

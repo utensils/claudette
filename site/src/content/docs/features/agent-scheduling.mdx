@@ -19,6 +19,8 @@ Agents can schedule their own wakeups and routines through native tools:
 
 Claude and Codex agents both reach these tools over the built-in Claudette MCP bridge. Scheduling stays available regardless of the **Agent Attachments** plugin toggle or the experimental Claudette MCP interaction tools.
 
+Claude Code also ships its own built-in `ScheduleWakeup` / `Cron*` tools, but those keep schedules inside the CLI process — they don't survive a restart and Claudette can't see them. Whenever the Claudette MCP bridge is attached, Claudette hides those built-ins (`--disallowedTools`) so every schedule an agent makes lands in Claudette's store and shows up in the Loops and Schedules view.
+
 Wakeups and routines survive app restarts. If a fire time passes while Claudette is closed, the scheduler fires the overdue task when the app starts again.
 
 ## Background task completion
@@ -36,10 +38,12 @@ claudette routine list
 claudette routine create <session-id> "0 9 * * 1-5" "Check open PRs" --name weekday-prs
 claudette routine create <session-id> "30 14 28 2 *" "Review the launch checklist" --once
 claudette routine run weekday-prs
+claudette routine pause weekday-prs
+claudette routine resume weekday-prs
 claudette routine delete weekday-prs
 ```
 
-`routine create` accepts literal prompts, `@file` prompts, and `-` for stdin, matching `chat send`.
+`routine create` accepts literal prompts, `@file` prompts, and `-` for stdin, matching `chat send`. `routine resume` also re-arms a task that was switched off automatically (archived workspace, dispatch error) and clears its failure count. A one-shot wakeup that already fired can't be resumed — use `routine run` to fire it again.
 
 ## Loops and Schedules view
 
@@ -47,12 +51,32 @@ You can drive the same scheduling backend from the GUI without the agent involve
 
 Click the **clock icon** next to the dashboard icon in the sidebar header to open the **Loops and Schedules** view. Like the Dashboard, it keeps the sidebar and header (panel toggles) in place — click the clock again, the dashboard icon, or a workspace to leave it.
 
-The page lists every persisted task, split into two sections:
+The view is a live monitor for everything scheduled across every workspace and backend (Claude and Codex), whether you created it, an agent did, or the CLI did. It updates on its own as tasks are created, fire, fail, or change — no refresh needed.
 
-- **Loops** — cron routines (`kind: cron`). Shows the human-readable schedule, recurring/one-shot mode, target workspace, and next-fire countdown.
-- **Schedules** — one-shot wakeups (`kind: wakeup`). Shows the fire time, countdown, and target workspace.
+**Summary strip.** Counts of armed loops, armed one-shots, runs **in progress right now**, and tasks that **need attention**, plus which task fires next and when. Click the attention tile to filter down to just those.
 
-Each row shows its target workspace, and is annotated **new session each run** when the task creates a fresh session rather than reusing one. Each row has **Run now** (fires immediately, same as the CLI's `routine run`) and **Delete** buttons. The same list also appears under **Settings → Automation**.
+**Filters.** Narrow by status (**All**, **Active**, **Paused**, **Needs attention**), by workspace, or by searching names, prompts, and schedules. **Clear finished** deletes one-shots that already fired.
+
+The list itself is split into:
+
+- **Loops** — recurring cron routines.
+- **Schedules** — one-shot wakeups and run-once cron routines.
+
+Each row shows:
+
+- A **status**: *Running* (its session has a turn in progress), *Active*, *Failing ×N* (still armed, but recent fires errored), *Off* (switched off automatically, with the reason — e.g. the workspace was archived), *Paused*, or *Done* (a one-shot that already fired).
+- The schedule in plain language next to the raw cron expression, a **countdown bar** to the next fire, and when it last ran.
+- The **backend and model** the fired turn will run on, when the task pins one.
+- The target **workspace › session**. Click the session to jump to it. For *new session each run* tasks, **open** next to "last run" jumps to the session the most recent fire created.
+- The last error inline when a task is failing or off.
+
+Expand a row to see the full prompt, the reason (for agent-created wakeups), and its **recent runs** — each with its outcome, whether it was triggered manually, and a link to the session it landed in.
+
+Row actions: **Run now** (same as `routine run`), **Pause** / **Resume**, and **Delete** (click twice to confirm). Resuming re-arms the task at its next cron match (or its original fire time, firing immediately if that passed while paused) and clears the failure count.
+
+At the bottom, **Recent activity** lists the latest fires across every task.
+
+The **clock icon** in the sidebar carries a badge with the number of armed tasks. It turns into a **!** when something needs attention, and pulses while a scheduled run is in progress. The same list (without the monitoring extras) also appears under **Settings → Automation**.
 
 ### Creating a task from the GUI
 
