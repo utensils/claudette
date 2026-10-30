@@ -18,12 +18,15 @@ import {
   disconnectRemoteConnection,
   forgetRemoteConnection,
   isCertificateMismatch,
+  needsRepair,
 } from "./remoteConnectionActions";
+import { stopReconnecting } from "../../hooks/useRemoteConnectionLifecycle";
 import styles from "./Sidebar.module.css";
 
 /** "Nearby" (unpaired mDNS servers) and saved remote connections. */
 export function RemoteSections() {
   const { t } = useTranslation("sidebar");
+  const { t: tModals } = useTranslation("modals");
   const discoveredServers = useAppStore((s) => s.discoveredServers);
   const remoteConnections = useAppStore((s) => s.remoteConnections);
   const activeRemoteIds = useAppStore((s) => s.activeRemoteIds);
@@ -47,11 +50,19 @@ export function RemoteSections() {
     try {
       await connectRemoteConnection(conn.id);
     } catch (e) {
-      if (isCertificateMismatch(e)) {
-        // The server has a new certificate (reinstalled, regenerated).
-        // Re-pairing with its token re-pins it on the same entry.
+      if (needsRepair(e)) {
+        // New certificate (reinstalled, regenerated) or this device's
+        // session was revoked. Re-pairing with the server's token updates
+        // the same entry.
         openPairModal(conn.host, conn.port, conn.name);
-        setConnectError(t("remote_certificate_changed", { name: conn.name }));
+        setConnectError(
+          t(
+            isCertificateMismatch(e)
+              ? "remote_certificate_changed"
+              : "remote_needs_repair",
+            { name: conn.name },
+          ),
+        );
       } else {
         setConnectError(String(e));
       }
@@ -72,9 +83,26 @@ export function RemoteSections() {
     }
   };
 
-  const handleRemove = async (id: string) => {
+  /** Stop background retries; like a disconnect, this turns off
+   *  auto-connect until the user connects again. */
+  const handleCancelReconnect = async (id: string) => {
+    stopReconnecting(id);
+    await handleDisconnect(id);
+  };
+
+  const handleRemove = async (conn: RemoteConnectionInfo) => {
+    stopReconnecting(conn.id);
     try {
-      await forgetRemoteConnection(id);
+      const result = await forgetRemoteConnection(conn.id);
+      if (!result.revoked) {
+        addToast(
+          t("remote_revoke_failed", {
+            name: conn.name,
+            error: result.revoke_error ?? "",
+            reset: tModals("share_reset"),
+          }),
+        );
+      }
     } catch (e) {
       addToast(t("remote_action_failed", { error: String(e) }));
     }
@@ -127,13 +155,12 @@ export function RemoteSections() {
               key={conn.id}
               conn={conn}
               isActive={activeRemoteIds.includes(conn.id)}
-              isConnecting={
-                connectingIds.has(conn.id) ||
-                reconnectingRemoteIds.includes(conn.id)
-              }
+              isConnecting={connectingIds.has(conn.id)}
+              isReconnecting={reconnectingRemoteIds.includes(conn.id)}
               onConnect={() => handleConnect(conn)}
               onDisconnect={() => handleDisconnect(conn.id)}
-              onRemove={() => handleRemove(conn.id)}
+              onCancelReconnect={() => handleCancelReconnect(conn.id)}
+              onRemove={() => handleRemove(conn)}
             />
           ))}
         </div>
@@ -146,15 +173,21 @@ function RemoteConnectionGroup({
   conn,
   isActive,
   isConnecting,
+  isReconnecting,
   onConnect,
   onDisconnect,
+  onCancelReconnect,
   onRemove,
 }: {
   conn: RemoteConnectionInfo;
   isActive: boolean;
+  /** A connect the user started is in flight. */
   isConnecting: boolean;
+  /** A background reconnect is pending; the user can cancel it. */
+  isReconnecting: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
+  onCancelReconnect: () => void;
   onRemove: () => void;
 }) {
   const { t } = useTranslation("sidebar");
@@ -263,7 +296,7 @@ function RemoteConnectionGroup({
       <div className={`${styles.repoHeader} ${styles.remoteConnectionHeader}`}>
         <span
           className={`${styles.statusDot} ${styles.remoteStatusDot} ${
-            isConnecting
+            isConnecting || isReconnecting
               ? styles.remoteStatusIdle
               : isActive
                 ? styles.remoteStatusActive
@@ -282,14 +315,25 @@ function RemoteConnectionGroup({
             <X size={12} />
           </button>
         )}
-        <button
-          className={`${styles.iconBtn} ${isConnecting ? styles.smallBtnConnecting : styles.smallBtn}`}
-          onClick={() => (isActive ? onDisconnect() : onConnect())}
-          disabled={isConnecting}
-          title={isConnecting ? t("workspace_connecting") : isActive ? t("workspace_disconnect") : t("workspace_connect")}
-        >
-          {isConnecting ? "…" : isActive ? "×" : "→"}
-        </button>
+        {isReconnecting && !isConnecting ? (
+          <button
+            className={`${styles.iconBtn} ${styles.smallBtnConnecting}`}
+            onClick={onCancelReconnect}
+            title={t("remote_cancel_reconnect")}
+            aria-label={t("remote_cancel_reconnect")}
+          >
+            …
+          </button>
+        ) : (
+          <button
+            className={`${styles.iconBtn} ${isConnecting ? styles.smallBtnConnecting : styles.smallBtn}`}
+            onClick={() => (isActive ? onDisconnect() : onConnect())}
+            disabled={isConnecting}
+            title={isConnecting ? t("workspace_connecting") : isActive ? t("workspace_disconnect") : t("workspace_connect")}
+          >
+            {isConnecting ? "…" : isActive ? "×" : "→"}
+          </button>
+        )}
       </div>
 
       {/* Remote repos and their workspaces */}

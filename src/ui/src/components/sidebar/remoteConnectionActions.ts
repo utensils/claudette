@@ -8,7 +8,11 @@ import {
   setRemoteAutoConnect,
 } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
-import type { PairResult, RemoteInitialData } from "../../types/remote";
+import type {
+  PairResult,
+  RemoteInitialData,
+  RemoveResult,
+} from "../../types/remote";
 import { hydrateConnectionPendingControls } from "../chat/remotePendingControls";
 
 /**
@@ -64,11 +68,14 @@ function rememberAutoConnect(id: string, autoConnect: boolean): void {
   );
 }
 
-export async function forgetRemoteConnection(id: string): Promise<void> {
+/** Remove a saved server, revoking this device's session on it. The
+ *  entry is removed even when revocation fails; the result says so. */
+export async function forgetRemoteConnection(id: string): Promise<RemoveResult> {
   userDisconnected.add(id);
-  await removeRemoteConnection(id);
+  const result = await removeRemoteConnection(id);
   dropConnectionState(id);
   useAppStore.getState().removeRemoteConnection(id);
+  return result;
 }
 
 /** Pair (or re-pair) with a server and adopt the resulting connection. */
@@ -127,4 +134,20 @@ export function dropConnectionState(id: string): void {
 /** True when a connect error means the server's certificate changed. */
 export function isCertificateMismatch(error: unknown): boolean {
   return String(error).includes("fingerprint mismatch");
+}
+
+/** True when a connect error means the server no longer accepts this
+ *  device's session (revoked, or pairing reset). Retrying can't fix it;
+ *  the user has to pair again. */
+export function isAuthFailure(error: unknown): boolean {
+  const message = String(error);
+  return (
+    message.includes("Authentication failed") ||
+    message.includes("need to re-pair")
+  );
+}
+
+/** True when a connect error needs the user to pair again. */
+export function needsRepair(error: unknown): boolean {
+  return isCertificateMismatch(error) || isAuthFailure(error);
 }

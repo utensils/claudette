@@ -86,5 +86,8 @@
   "remote_connection_lost": "Se perdió la conexión con {{name}}",
   "remote_reconnected": "Reconectado a {{name}}",
   "remote_certificate_changed": "{{name}} tiene un certificado nuevo: vuelve a emparejar con su token",
-  "remote_action_failed": "La acción remota falló: {{error}}"
+  "remote_action_failed": "La acción remota falló: {{error}}",
+  "remote_needs_repair": "{{name}} ya no acepta este dispositivo: vuelve a emparejar con su token",
+  "remote_cancel_reconnect": "Dejar de reconectar",
+  "remote_revoke_failed": "Se quitó {{name}}, pero no se pudo revocar su acceso allí ({{error}}). Usa «{{reset}}» en esa máquina para revocarlo."
 }

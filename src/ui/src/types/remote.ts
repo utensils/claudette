@@ -17,6 +17,14 @@ export interface DiscoveredServer {
   is_paired: boolean;
 }
 
+/** Outcome of removing a saved server. */
+export interface RemoveResult {
+  /** The server confirmed it revoked this device's session. */
+  revoked: boolean;
+  /** Why revocation failed, when it did. */
+  revoke_error: string | null;
+}
+
 export interface PairResult {
   connection: RemoteConnectionInfo;
   server_name: string;

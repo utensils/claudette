@@ -86,5 +86,8 @@
   "remote_connection_lost": "{{name}} との接続が切れました",
   "remote_reconnected": "{{name}} に再接続しました",
   "remote_certificate_changed": "{{name}} の証明書が変わりました。トークンで再ペアリングしてください",
-  "remote_action_failed": "リモート操作に失敗しました: {{error}}"
+  "remote_action_failed": "リモート操作に失敗しました: {{error}}",
+  "remote_needs_repair": "{{name}} はこのデバイスを受け付けなくなりました。トークンで再ペアリングしてください",
+  "remote_cancel_reconnect": "再接続を中止",
+  "remote_revoke_failed": "{{name}} を削除しましたが、そのマシンでのアクセスを取り消せませんでした（{{error}}）。そのマシンで「{{reset}}」を使って取り消してください。"
 }

@@ -11,6 +11,7 @@ import {
   connectRemoteConnection,
   dropConnectionState,
   isCertificateMismatch,
+  needsRepair,
   resyncActiveConnection,
   wasDisconnectedByUser,
 } from "../components/sidebar/remoteConnectionActions";
@@ -33,7 +34,8 @@ function connectionName(id: string): string {
   );
 }
 
-function stopReconnecting(id: string): void {
+/** Cancel a pending reconnect for `id` (if any). */
+export function stopReconnecting(id: string): void {
   const timer = pending.get(id);
   if (timer) clearTimeout(timer);
   pending.delete(id);
@@ -42,8 +44,8 @@ function stopReconnecting(id: string): void {
 
 /**
  * Keep trying to connect `id` with backoff until it succeeds, the user
- * disconnects or removes it, or the server's certificate changes (which
- * needs the user to re-pair).
+ * cancels, disconnects or removes it, or the server needs the user to pair
+ * again (its certificate changed, or it no longer accepts this device).
  */
 export function scheduleReconnect(
   id: string,
@@ -75,11 +77,12 @@ export function scheduleReconnect(
           state.addToast(t("remote_reconnected", { name: connectionName(id) }));
         }
       } catch (e) {
-        if (isCertificateMismatch(e)) {
+        if (needsRepair(e)) {
           stopReconnecting(id);
-          state.addToast(
-            t("remote_certificate_changed", { name: connectionName(id) }),
-          );
+          const key = isCertificateMismatch(e)
+            ? "remote_certificate_changed"
+            : "remote_needs_repair";
+          state.addToast(t(key, { name: connectionName(id) }));
           return;
         }
         scheduleReconnect(id, t, { announce, attempt: attempt + 1 });

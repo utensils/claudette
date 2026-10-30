@@ -18,6 +18,15 @@ interface RemoteSectionsStore {
   reconnectingRemoteIds: string[];
   openModal: ReturnType<typeof vi.fn>;
   addToast: ReturnType<typeof vi.fn>;
+  repositories: unknown[];
+  workspaces: unknown[];
+  repoCollapsed: Record<string, boolean>;
+  selectedWorkspaceId: string | null;
+  selectWorkspace: ReturnType<typeof vi.fn>;
+  addWorkspace: ReturnType<typeof vi.fn>;
+  updateWorkspace: ReturnType<typeof vi.fn>;
+  markWorkspaceAsUnread: ReturnType<typeof vi.fn>;
+  toggleRepoCollapsed: ReturnType<typeof vi.fn>;
 }
 
 const remoteServices = vi.hoisted(() => ({
@@ -53,10 +62,32 @@ const store = vi.hoisted(
     reconnectingRemoteIds: [],
     openModal: vi.fn(),
     addToast: vi.fn(),
+    repositories: [],
+    workspaces: [],
+    repoCollapsed: {},
+    selectedWorkspaceId: null,
+    selectWorkspace: vi.fn(),
+    addWorkspace: vi.fn(),
+    updateWorkspace: vi.fn(),
+    markWorkspaceAsUnread: vi.fn(),
+    toggleRepoCollapsed: vi.fn(),
   }),
 );
 
 vi.mock("../../services/tauri", () => remoteServices);
+
+const lifecycle = vi.hoisted(() => ({ stopReconnecting: vi.fn() }));
+vi.mock("../../hooks/useRemoteConnectionLifecycle", () => lifecycle);
+
+const connectionActions = vi.hoisted(() => ({
+  connectRemoteConnection: vi.fn(),
+  disconnectRemoteConnection: vi.fn(),
+  forgetRemoteConnection: vi.fn(),
+}));
+vi.mock("./remoteConnectionActions", async (importActual) => ({
+  ...(await importActual<typeof import("./remoteConnectionActions")>()),
+  ...connectionActions,
+}));
 
 vi.mock("../../stores/useAppStore", () => ({
   useAppStore: <T,>(selector: (state: typeof store) => T): T => selector(store),
@@ -129,6 +160,10 @@ describe("RemoteSections", () => {
     store.activeRemoteIds = [];
     store.discoveredServers = [];
     store.remoteConnections = [];
+    store.reconnectingRemoteIds = [];
+    store.addToast.mockReset();
+    lifecycle.stopReconnecting.mockReset();
+    Object.values(connectionActions).forEach((mock) => mock.mockReset());
   });
 
   afterEach(async () => {
@@ -175,6 +210,55 @@ describe("RemoteSections", () => {
       port: 7683,
       name: "Studio Mac",
       fingerprintPrefix: "feed1234",
+    });
+  });
+
+  describe("a saved server that is reconnecting", () => {
+    const saved: RemoteConnectionInfo = {
+      id: "c1",
+      name: "Box",
+      host: "box.local",
+      port: 7683,
+      session_token: null,
+      cert_fingerprint: "ff",
+      auto_connect: true,
+      created_at: "",
+    };
+
+    function button(title: string): HTMLButtonElement | undefined {
+      return [...document.querySelectorAll("button")].find(
+        (b) => b.title === title,
+      );
+    }
+
+    beforeEach(() => {
+      store.remoteConnections = [saved];
+      store.reconnectingRemoteIds = ["c1"];
+    });
+
+    it("can be cancelled", async () => {
+      await renderRemoteSections();
+      const cancel = button("remote_cancel_reconnect");
+      expect(cancel?.disabled).toBe(false);
+      await act(async () => {
+        cancel?.click();
+      });
+      expect(lifecycle.stopReconnecting).toHaveBeenCalledWith("c1");
+      expect(connectionActions.disconnectRemoteConnection).toHaveBeenCalledWith("c1");
+    });
+
+    it("can be removed, and says when its access couldn't be revoked", async () => {
+      connectionActions.forgetRemoteConnection.mockResolvedValue({
+        revoked: false,
+        revoke_error: "timed out",
+      });
+      await renderRemoteSections();
+      await act(async () => {
+        button("remote_remove")?.click();
+      });
+      expect(lifecycle.stopReconnecting).toHaveBeenCalledWith("c1");
+      expect(connectionActions.forgetRemoteConnection).toHaveBeenCalledWith("c1");
+      expect(store.addToast).toHaveBeenCalledWith("remote_revoke_failed");
     });
   });
 });

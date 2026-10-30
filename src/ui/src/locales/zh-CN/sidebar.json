@@ -86,5 +86,8 @@
   "remote_connection_lost": "与 {{name}} 的连接已断开",
   "remote_reconnected": "已重新连接到 {{name}}",
   "remote_certificate_changed": "{{name}} 的证书已更改，请使用令牌重新配对",
-  "remote_action_failed": "远程操作失败：{{error}}"
+  "remote_action_failed": "远程操作失败：{{error}}",
+  "remote_needs_repair": "{{name}} 不再接受此设备，请使用令牌重新配对",
+  "remote_cancel_reconnect": "停止重新连接",
+  "remote_revoke_failed": "已移除 {{name}}，但无法撤销其在该机器上的访问权限（{{error}}）。请在该机器上使用“{{reset}}”撤销。"
 }

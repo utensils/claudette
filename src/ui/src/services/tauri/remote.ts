@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   DiscoveredServer,
   PairResult,
+  RemoveResult,
   RemoteConnectionInfo,
   RemoteInitialData,
 } from "../../types/remote";
@@ -48,7 +49,7 @@ export function disconnectRemote(id: string): Promise<void> {
   return invoke("disconnect_remote", { id });
 }
 
-export function removeRemoteConnection(id: string): Promise<void> {
+export function removeRemoteConnection(id: string): Promise<RemoveResult> {
   return invoke("remove_remote_connection", { id });
 }
 

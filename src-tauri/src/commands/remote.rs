@@ -7,7 +7,6 @@ use crate::remote::{DiscoveredServer, RemoteConnectionInfo, RemoteConnectionMana
 use crate::state::AppState;
 #[cfg(feature = "server")]
 use crate::state::LocalServerState;
-#[cfg(feature = "server")]
 use claudette::transport::ws::WebSocketTransport;
 
 #[derive(Serialize)]
@@ -230,24 +229,86 @@ pub async fn disconnect_remote(
     manager.remove(&id).await
 }
 
+/// How long removing a server may spend revoking its session.
+const REVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Serialize)]
+pub struct RemoveResult {
+    /// Whether the server confirmed it revoked this device's session.
+    pub revoked: bool,
+    /// Why revocation failed, when it did. The saved entry is removed
+    /// either way; the session stays valid on the server until it resets
+    /// pairing.
+    pub revoke_error: Option<String>,
+}
+
+/// Ask the server to forget the session `transport` authenticated with.
+async fn revoke_over(transport: &WebSocketTransport) -> Result<(), String> {
+    use claudette::transport::Transport;
+    let response = transport
+        .send(serde_json::json!({ "method": "revoke_session", "params": {} }))
+        .await?;
+    let result = crate::remote::rpc_result(response)?;
+    if result.get("revoked").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err("the server no longer had this session".to_string())
+    }
+}
+
+/// Revoke this device's session on a saved server: over the live
+/// connection when there is one, otherwise over a short-lived connection
+/// pinned to the saved certificate.
+async fn revoke_saved_session(
+    conn: &claudette::model::RemoteConnection,
+    manager: &RemoteConnectionManager,
+) -> Result<(), String> {
+    use claudette::transport::Transport;
+    if let Some(transport) = manager.take(&conn.id).await {
+        let result = revoke_over(&transport).await;
+        let _ = transport.close().await;
+        return result;
+    }
+    let token = conn
+        .session_token
+        .as_deref()
+        .ok_or("no saved session to revoke")?;
+    let fingerprint = conn
+        .cert_fingerprint
+        .as_deref()
+        .ok_or("no pinned certificate for this server")?;
+    let transport = WebSocketTransport::connect(&conn.host, conn.port, Some(fingerprint))
+        .await?
+        .transport;
+    let result = match transport.authenticate_session(token).await {
+        Ok(_) => revoke_over(&transport).await,
+        Err(e) => Err(e),
+    };
+    let _ = transport.close().await;
+    result
+}
+
 #[tauri::command]
 pub async fn remove_remote_connection(
     id: String,
     state: State<'_, AppState>,
     manager: State<'_, RemoteConnectionManager>,
-) -> Result<(), String> {
-    // Revoke this device's session on the server (best effort — it may be
-    // offline), then disconnect.
-    let _ = manager
-        .call(&id, "revoke_session", serde_json::json!({}))
-        .await;
-    let _ = manager.remove(&id).await;
-
-    // Remove from DB.
+) -> Result<RemoveResult, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let revoke = match db.get_remote_connection(&id).map_err(|e| e.to_string())? {
+        Some(conn) => tokio::time::timeout(REVOKE_TIMEOUT, revoke_saved_session(&conn, &manager))
+            .await
+            .unwrap_or_else(|_| Err("timed out".to_string())),
+        None => Ok(()),
+    };
+    // Whatever happened above, nothing of this connection stays live.
+    let _ = manager.remove(&id).await;
     db.delete_remote_connection(&id)
         .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(RemoveResult {
+        revoked: revoke.is_ok(),
+        revoke_error: revoke.err(),
+    })
 }
 
 #[tauri::command]

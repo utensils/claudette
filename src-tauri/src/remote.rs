@@ -151,6 +151,20 @@ impl RemoteConnectionManager {
         }
     }
 
+    /// Remove a connection without closing its socket, handing the
+    /// transport to the caller. Its forwarder then sees the socket close as
+    /// an explicit disconnect (no `remote-connection-lost`).
+    pub async fn take(&self, connection_id: &str) -> Option<Arc<WebSocketTransport>> {
+        let mut connections = self.connections.write().await;
+        let idx = connections
+            .iter()
+            .position(|c| c.info.id == connection_id)?;
+        let conn = connections.remove(idx);
+        drop(connections);
+        self.with_pty_aliases(|a| a.drop_connection(connection_id));
+        Some(conn.transport)
+    }
+
     /// Disconnect and remove a remote connection.
     pub async fn remove(&self, connection_id: &str) -> Result<(), String> {
         let mut connections = self.connections.write().await;

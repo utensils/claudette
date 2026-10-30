@@ -5,6 +5,8 @@ const actions = vi.hoisted(() => ({
   connectRemoteConnection: vi.fn(),
   dropConnectionState: vi.fn(),
   isCertificateMismatch: (e: unknown) => String(e).includes("fingerprint mismatch"),
+  needsRepair: (e: unknown) =>
+    /fingerprint mismatch|Authentication failed/.test(String(e)),
   resyncActiveConnection: vi.fn(),
   wasDisconnectedByUser: vi.fn(() => false),
 }));
@@ -66,6 +68,19 @@ describe("scheduleReconnect", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(actions.connectRemoteConnection).toHaveBeenCalledTimes(1);
     expect(useAppStore.getState().reconnectingRemoteIds).toEqual([]);
+  });
+
+  it("gives up when the server no longer accepts this device", async () => {
+    const addToast = vi.fn();
+    useAppStore.setState({ addToast });
+    actions.connectRemoteConnection.mockRejectedValue(
+      new Error("Authentication failed (1/3)"),
+    );
+    scheduleReconnect("c1", t, { announce: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(actions.connectRemoteConnection).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().reconnectingRemoteIds).toEqual([]);
+    expect(addToast).toHaveBeenCalledWith("remote_needs_repair");
   });
 
   it("does nothing for a connection the user removed", async () => {
