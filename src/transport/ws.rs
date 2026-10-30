@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use sha2::{Digest, Sha256};
@@ -9,26 +10,53 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::{ServerEvent, Transport};
 
+/// Deadlines that keep a silently broken link from looking connected.
+#[derive(Debug, Clone, Copy)]
+pub struct Timeouts {
+    /// Limit on the TCP + TLS + WebSocket handshake.
+    pub connect: Duration,
+    /// Limit on waiting for a response. On expiry the request's outcome is
+    /// unknown (the server may still complete it), so callers get an error
+    /// saying so and nothing is retried automatically.
+    pub request: Duration,
+    /// How often the connection pings the server.
+    pub heartbeat: Duration,
+    /// A connection that has received nothing (not even a pong) for this
+    /// long is treated as dead, so sleep or a network change can't leave
+    /// it "connected" with requests hanging.
+    pub liveness: Duration,
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            connect: Duration::from_secs(15),
+            request: Duration::from_secs(60),
+            heartbeat: Duration::from_secs(15),
+            liveness: Duration::from_secs(45),
+        }
+    }
+}
+
 /// WebSocket transport connecting to a remote claudette-server over WSS.
 pub struct WebSocketTransport {
-    writer: Arc<
-        Mutex<
-            futures_util::stream::SplitSink<
-                tokio_tungstenite::WebSocketStream<
-                    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-                >,
-                Message,
-            >,
-        >,
-    >,
+    writer: Arc<Writer>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
     next_id: AtomicU64,
+    request_timeout: Duration,
     event_tx: broadcast::Sender<ServerEvent>,
     connected: Arc<AtomicBool>,
     /// Flips to `true` once the reader task observes the socket closing.
     /// Lets owners react to a dropped connection without polling.
     closed_rx: watch::Receiver<bool>,
     _reader_task: tokio::task::JoinHandle<()>,
+    heartbeat_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for WebSocketTransport {
+    fn drop(&mut self) {
+        self.heartbeat_task.abort();
+    }
 }
 
 /// Certificate fingerprint (SHA-256 hex) obtained during connection.
@@ -47,6 +75,16 @@ impl WebSocketTransport {
         port: u16,
         expected_fingerprint: Option<&str>,
     ) -> Result<ConnectionResult, String> {
+        Self::connect_with(host, port, expected_fingerprint, Timeouts::default()).await
+    }
+
+    /// [`Self::connect`] with explicit [`Timeouts`].
+    pub async fn connect_with(
+        host: &str,
+        port: u16,
+        expected_fingerprint: Option<&str>,
+        timeouts: Timeouts,
+    ) -> Result<ConnectionResult, String> {
         let url = format!("wss://{host}:{port}");
 
         // Shared slot to capture the cert fingerprint from the TLS verifier callback.
@@ -64,10 +102,13 @@ impl WebSocketTransport {
 
         let connector = tokio_tungstenite::Connector::Rustls(Arc::new(tls_config));
 
-        let (ws_stream, _response) =
-            tokio_tungstenite::connect_async_tls_with_config(&url, None, false, Some(connector))
-                .await
-                .map_err(|e| format!("WebSocket connection failed: {e}"))?;
+        let (ws_stream, _response) = tokio::time::timeout(
+            timeouts.connect,
+            tokio_tungstenite::connect_async_tls_with_config(&url, None, false, Some(connector)),
+        )
+        .await
+        .map_err(|_| format!("WebSocket connection failed: timed out connecting to {url}"))?
+        .map_err(|e| format!("WebSocket connection failed: {e}"))?;
 
         // Read the fingerprint captured during the TLS handshake.
         let cert_fingerprint = fingerprint_slot
@@ -100,7 +141,22 @@ impl WebSocketTransport {
         let connected_clone = Arc::clone(&connected);
         let reader_task = tokio::spawn(async move {
             let mut read = read;
-            while let Some(msg_result) = read.next().await {
+            let mut last_heard = tokio::time::Instant::now();
+            loop {
+                let msg_result = tokio::select! {
+                    msg = read.next() => match msg {
+                        Some(msg) => msg,
+                        None => break,
+                    },
+                    _ = tokio::time::sleep_until(last_heard + timeouts.liveness) => {
+                        tracing::warn!(
+                            target: "claudette::transport",
+                            "no traffic from server within the liveness timeout; closing"
+                        );
+                        break;
+                    }
+                };
+                last_heard = tokio::time::Instant::now();
                 match msg_result {
                     Ok(Message::Text(text)) => {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -120,10 +176,8 @@ impl WebSocketTransport {
                             }
                         }
                     }
-                    Ok(Message::Ping(data)) => {
-                        // Respond with pong — handled by tungstenite automatically.
-                        let _ = data;
-                    }
+                    // Pings are answered by tungstenite; pongs only count
+                    // as traffic (above).
                     Ok(Message::Close(_)) => break,
                     Err(_) => break,
                     _ => {}
@@ -142,15 +196,23 @@ impl WebSocketTransport {
             let _ = closed_tx.send(true);
         });
 
+        let heartbeat_task = tokio::spawn(heartbeat(
+            Arc::clone(&writer),
+            Arc::clone(&connected),
+            timeouts.heartbeat,
+        ));
+
         Ok(ConnectionResult {
             transport: WebSocketTransport {
                 writer,
                 pending,
                 next_id: AtomicU64::new(1),
+                request_timeout: timeouts.request,
                 event_tx,
                 connected,
                 closed_rx,
                 _reader_task: reader_task,
+                heartbeat_task,
             },
             cert_fingerprint,
         })
@@ -227,6 +289,37 @@ impl WebSocketTransport {
     }
 }
 
+type Writer = Mutex<
+    futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        Message,
+    >,
+>;
+
+/// Ping the server every `period` so the reader hears back (a pong) at
+/// least that often while the link is alive.
+async fn heartbeat(writer: Arc<Writer>, connected: Arc<AtomicBool>, period: Duration) {
+    let mut interval = tokio::time::interval(period);
+    interval.tick().await;
+    loop {
+        interval.tick().await;
+        if !connected.load(Ordering::Relaxed) {
+            break;
+        }
+        if writer
+            .lock()
+            .await
+            .send(Message::Ping(Vec::new().into()))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
 pub struct AuthResult {
     pub session_token: Option<String>,
     pub server_name: String,
@@ -263,7 +356,17 @@ impl Transport for WebSocketTransport {
             }
         }
 
-        rx.await.map_err(|_| "Response channel closed".to_string())
+        match tokio::time::timeout(self.request_timeout, rx).await {
+            Ok(response) => response.map_err(|_| "Response channel closed".to_string()),
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                Err(format!(
+                    "No response from the server within {}s; it may still have \
+                     completed the request",
+                    self.request_timeout.as_secs()
+                ))
+            }
+        }
     }
 
     fn event_stream(&self) -> broadcast::Receiver<ServerEvent> {
