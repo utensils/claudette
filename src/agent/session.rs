@@ -635,8 +635,9 @@ fn build_persistent_args(
         args.push(mcp_json.clone());
     }
     if let Some(disallow) = native_scheduling_disallow(settings.mcp_config.as_deref()) {
-        args.push("--disallowedTools".to_string());
-        args.push(disallow);
+        // `=` form: the flag is variadic, so a separate value token would
+        // also swallow any positional that follows it (the prompt).
+        args.push(format!("--disallowedTools={disallow}"));
     }
 
     if settings.plan_mode {
@@ -704,13 +705,11 @@ mod tests {
             ..Default::default()
         };
         let args = build_persistent_args("sess-1", false, &[], None, &with_server);
-        let idx = args
-            .iter()
-            .position(|a| a == "--disallowedTools")
-            .expect("native scheduling tools hidden");
-        assert_eq!(
-            args[idx + 1],
-            "ScheduleWakeup,CronCreate,CronList,CronDelete"
+        assert!(
+            args.contains(
+                &"--disallowedTools=ScheduleWakeup,CronCreate,CronList,CronDelete".to_string()
+            ),
+            "native scheduling tools hidden: {args:?}"
         );
 
         let without = AgentSettings {
@@ -718,7 +717,7 @@ mod tests {
             ..Default::default()
         };
         let args = build_persistent_args("sess-1", false, &[], None, &without);
-        assert!(!args.contains(&"--disallowedTools".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("--disallowedTools")));
     }
 
     #[test]

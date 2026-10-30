@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   listScheduledRoutines: vi.fn(),
   listScheduledTaskRuns: vi.fn(),
+  listChatSessions: vi.fn(),
 }));
 
 vi.mock("../../services/tauri", async (importOriginal) => {
@@ -11,6 +12,7 @@ vi.mock("../../services/tauri", async (importOriginal) => {
     ...actual,
     listScheduledRoutines: mocks.listScheduledRoutines,
     listScheduledTaskRuns: mocks.listScheduledTaskRuns,
+    listChatSessions: mocks.listChatSessions,
   };
 });
 
@@ -20,7 +22,13 @@ describe("schedulingSlice.loadScheduledTasks", () => {
   beforeEach(() => {
     mocks.listScheduledRoutines.mockReset();
     mocks.listScheduledTaskRuns.mockReset().mockResolvedValue([]);
-    useAppStore.setState({ scheduledTasks: [], recentScheduledRuns: [] });
+    mocks.listChatSessions.mockReset().mockResolvedValue([]);
+    useAppStore.setState({
+      scheduledTasks: [],
+      recentScheduledRuns: [],
+      sessionsByWorkspace: {},
+      sessionsLoadedByWorkspace: {},
+    });
   });
 
   it("re-runs once when called during an in-flight load", async () => {
@@ -46,5 +54,21 @@ describe("schedulingSlice.loadScheduledTasks", () => {
     mocks.listScheduledRoutines.mockRejectedValueOnce(new Error("db locked"));
     await useAppStore.getState().loadScheduledTasks();
     expect(useAppStore.getState().scheduledTasks).toEqual([{ id: "kept" }]);
+  });
+
+  it("preloads sessions for task workspaces that aren't loaded yet", async () => {
+    useAppStore.setState({ sessionsLoadedByWorkspace: { wsOpen: true } });
+    mocks.listScheduledRoutines.mockResolvedValueOnce([
+      { id: "a", workspace_id: "wsOpen" },
+      { id: "b", workspace_id: "wsCold" },
+      { id: "c", workspace_id: "wsCold" },
+    ]);
+    mocks.listChatSessions.mockResolvedValueOnce([{ id: "s1", workspace_id: "wsCold" }]);
+    await useAppStore.getState().loadScheduledTasks();
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().sessionsLoadedByWorkspace.wsCold).toBe(true),
+    );
+    expect(mocks.listChatSessions).toHaveBeenCalledTimes(1);
+    expect(mocks.listChatSessions).toHaveBeenCalledWith("wsCold");
   });
 });

@@ -2,6 +2,7 @@ import type { StateCreator } from "zustand";
 import {
   type ScheduledTask,
   type ScheduledTaskRun,
+  listChatSessions,
   listScheduledRoutines,
   listScheduledTaskRuns,
 } from "../../services/tauri";
@@ -28,6 +29,35 @@ export interface SchedulingSlice {
 let inflight: Promise<void> | null = null;
 let reloadQueued = false;
 
+/** Load the session lists of workspaces that own scheduled tasks but haven't
+ *  been opened yet. Live `agent_status` updates only reach sessions already in
+ *  the store, so without this a fire into an unopened workspace would never
+ *  show as running in the scheduler view or the sidebar badge. */
+const preloading = new Set<string>();
+
+function preloadTaskSessions(get: () => AppState, tasks: ScheduledTask[]) {
+  const loaded = get().sessionsLoadedByWorkspace;
+  const pending = new Set(
+    tasks
+      .map((task) => task.workspace_id)
+      .filter((wsId) => !loaded[wsId] && !preloading.has(wsId)),
+  );
+  for (const wsId of pending) {
+    preloading.add(wsId);
+    listChatSessions(wsId)
+      .then((list) => {
+        // Re-check: the workspace may have loaded its own list meanwhile.
+        if (!get().sessionsLoadedByWorkspace[wsId]) {
+          get().setSessionsForWorkspace(wsId, list);
+        }
+      })
+      .catch(() => {
+        // Liveness for this workspace stays unknown; rows still render.
+      })
+      .finally(() => preloading.delete(wsId));
+  }
+}
+
 export const createSchedulingSlice: StateCreator<
   AppState,
   [],
@@ -49,6 +79,7 @@ export const createSchedulingSlice: StateCreator<
       .then(([tasks, runs]) => {
         get().setScheduledTasks(tasks);
         set({ recentScheduledRuns: runs });
+        preloadTaskSessions(get, tasks);
       })
       .catch(() => {
         // Swallow — keep the prior lists visible; the next change event (or

@@ -170,8 +170,9 @@ pub fn build_claude_args(
         args.push(mcp_json.clone());
     }
     if let Some(disallow) = native_scheduling_disallow(settings.mcp_config.as_deref()) {
-        args.push("--disallowedTools".to_string());
-        args.push(disallow);
+        // `=` form: the flag is variadic, so a separate value token would
+        // also swallow any positional that follows it (the prompt).
+        args.push(format!("--disallowedTools={disallow}"));
     }
 
     // Permission mode must be set on every turn — each `claude` invocation is

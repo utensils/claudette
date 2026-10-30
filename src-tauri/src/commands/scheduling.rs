@@ -365,11 +365,7 @@ async fn mark_and_dispatch_due_task(
             return Ok(());
         }
     }
-    let result = dispatch_task_prompt(app.clone(), task.clone(), "scheduled").await;
-    // Covers both outcomes: the fire advanced next/last fire times, and a
-    // failure below adds to the streak (or disables the task).
-    let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
-    match result {
+    let result = match dispatch_task_prompt(app.clone(), task.clone(), "scheduled").await {
         Ok(()) => Ok(()),
         Err(err) => {
             let state = app.state::<AppState>();
@@ -395,7 +391,11 @@ async fn mark_and_dispatch_due_task(
             }
             Err(err)
         }
-    }
+    };
+    // After any failure bookkeeping above, so the refresh sees the advanced
+    // fire times *and* the updated failure streak / disable reason.
+    let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
+    result
 }
 
 pub async fn dispatch_task_prompt(

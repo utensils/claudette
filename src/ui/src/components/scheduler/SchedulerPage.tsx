@@ -106,8 +106,12 @@ export function SchedulerPage() {
   const isRunning = (task: ScheduledTask): boolean => {
     const sid = liveSessionId(task);
     if (!sid) return false;
-    const live = sessionsByWorkspace[task.workspace_id]?.find((s) => s.id === sid);
-    return (live ?? sessionInfo[sid])?.agent_status === "Running";
+    // Store sessions only: they receive live status updates (the slice
+    // preloads every task workspace); `sessionInfo` is a one-shot snapshot.
+    return (
+      sessionsByWorkspace[task.workspace_id]?.find((s) => s.id === sid)?.agent_status ===
+      "Running"
+    );
   };
 
   const statusById = new Map<string, TaskStatus>(
@@ -118,7 +122,14 @@ export function SchedulerPage() {
 
   const visible = scheduledTasks
     .filter((task) => matchesFilter(task, statusOf(task), filter, query, workspaceFilter))
-    .sort((a, b) => (a.next_fire_at || "~").localeCompare(b.next_fire_at || "~"));
+    // Soonest first; unarmed tasks (no next fire) last. Plain comparison —
+    // RFC3339 strings order lexically, and localeCompare would sort the
+    // sentinel ahead of digits.
+    .sort((a, b) => {
+      const x = a.next_fire_at ?? "\uffff";
+      const y = b.next_fire_at ?? "\uffff";
+      return x < y ? -1 : x > y ? 1 : 0;
+    });
   const loops = visible.filter((task) => task.kind === "cron" && task.recurring);
   const schedules = visible.filter((task) => !(task.kind === "cron" && task.recurring));
   const finished = scheduledTasks.filter((task) => statusOf(task) === "done");

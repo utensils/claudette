@@ -219,7 +219,9 @@ export function SchedulerTaskRow({
 
       <div className={styles.rowMeta}>
         <span className={styles.metaSchedule}>{schedule}</span>
-        {!isWakeup && task.cron_expr && <code className={styles.cron}>{task.cron_expr}</code>}
+        {!isWakeup && task.cron_expr && task.cron_expr !== schedule && (
+          <code className={styles.cron}>{task.cron_expr}</code>
+        )}
         {!isWakeup && !task.recurring && <span>{t("mode_one_shot")}</span>}
         <span className={styles.metaSep}>·</span>
         <span className={styles.metaTarget}>

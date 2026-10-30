@@ -1,8 +1,6 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 
-#[cfg(doc)]
-use crate::scheduling::resume_fire_time;
 use crate::scheduling::{
     PAUSED_BY_USER_REASON, ScheduleTarget, ScheduledTask, ScheduledTaskKind, ScheduledTaskRun,
     next_cron_run_utc, utc_now_rfc3339,
@@ -424,7 +422,7 @@ impl Database {
     }
 
     /// Re-arm a paused or auto-disabled task at `next_fire_at` (see
-    /// [`resume_fire_time`]) and clear its failure streak.
+    /// [`crate::scheduling::resume_fire_time`]) and clear its failure streak.
     pub fn resume_agent_scheduled_task(
         &self,
         id: &str,
