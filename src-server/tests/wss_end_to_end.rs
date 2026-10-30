@@ -20,6 +20,7 @@ struct Fixture {
     handle: ServerHandle,
     pairing_token: String,
     repo: Repository,
+    state: Arc<ServerState>,
 }
 
 async fn setup() -> Fixture {
@@ -63,12 +64,13 @@ async fn setup() -> Fixture {
         .insert_repository(&repo)
         .unwrap();
 
+    let state = Arc::new(ServerState::new_with_plugins(
+        db_path,
+        worktree_base,
+        PluginRegistry::discover(state_dir.path()),
+    ));
     let host = Arc::new(StandaloneHost {
-        state: Arc::new(ServerState::new_with_plugins(
-            db_path,
-            worktree_base,
-            PluginRegistry::discover(state_dir.path()),
-        )),
+        state: Arc::clone(&state),
     });
 
     let config_dir = tempfile::tempdir().unwrap();
@@ -97,6 +99,7 @@ async fn setup() -> Fixture {
         handle,
         pairing_token,
         repo,
+        state,
     }
 }
 
@@ -257,4 +260,38 @@ async fn revoked_session_token_no_longer_authenticates() {
         .unwrap()
         .transport;
     assert!(again.authenticate_session(&token).await.is_err());
+}
+
+#[tokio::test]
+async fn a_disconnecting_clients_terminals_are_closed() {
+    let f = setup().await;
+    let t = WebSocketTransport::connect("127.0.0.1", f.handle.port, None)
+        .await
+        .unwrap()
+        .transport;
+    t.authenticate_pairing(&f.pairing_token, "x").await.unwrap();
+    let created = call(
+        &t,
+        "create_workspace",
+        json!({"repository_id": f.repo.id, "name": "pty-cleanup"}),
+    )
+    .await;
+    let ws = &created["workspace"];
+    call(
+        &t,
+        "spawn_pty",
+        json!({"workspace_id": ws["id"], "cwd": ws["worktree_path"]}),
+    )
+    .await;
+    assert_eq!(f.state.ptys.read().await.len(), 1);
+
+    t.close().await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !f.state.ptys.read().await.is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "terminal outlived its client"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }

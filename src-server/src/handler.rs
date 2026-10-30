@@ -126,7 +126,23 @@ pub async fn dispatch(
         "steer_queued_chat_message" => {
             let chat_session_id = param_chat_session_id(&params);
             let content = param_str(&params, "content");
-            handle_steer_queued_chat_message(state, &chat_session_id, &content).await
+            let message_id = params
+                .get("message_id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let mentioned_files: Vec<String> = params
+                .get("mentioned_files")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            handle_steer_queued_chat_message(
+                state,
+                &chat_session_id,
+                &content,
+                message_id,
+                mentioned_files,
+            )
+            .await
         }
         "submit_agent_answer" => {
             let chat_session_id = param_chat_session_id(&params);
@@ -348,6 +364,18 @@ pub async fn dispatch(
         }
         _ => Err(format!("Unknown method: {method}")),
     }
+}
+
+/// Whether a session's running CLI must be torn down because the
+/// env-provider output changed since it was spawned. Without a running
+/// process there is nothing stale to tear down.
+fn env_drift_requires_reset(
+    has_running_process: bool,
+    turn_count: u32,
+    spawned_env: &claudette::env_provider::types::EnvMap,
+    current_env: &claudette::env_provider::types::EnvMap,
+) -> bool {
+    has_running_process && turn_count > 0 && spawned_env != current_env
 }
 
 /// Fingerprint of the spawn-time agent flags; a change forces a respawn.
@@ -738,7 +766,16 @@ async fn handle_send_chat_message(
     // env. Dropping `persistent_session` here lets `Arc::drop` kill the
     // running `claude` subprocess; the next turn will start a fresh one
     // with `is_resume = false` so the new env is picked up cleanly.
-    if session.turn_count > 0 && session.session_resolved_env != resolved_env.vars {
+    // Only a *running* process has stale env baked in. A session restored
+    // from the DB (server restart) or left idle after a stop has no
+    // process, so the next spawn picks up the fresh env and resumes the
+    // conversation as-is.
+    if env_drift_requires_reset(
+        session.persistent_session.is_some(),
+        session.turn_count,
+        &session.session_resolved_env,
+        &resolved_env.vars,
+    ) {
         tracing::info!(
             target: "claudette::ws",
             workspace_id = %workspace_id,
@@ -1409,6 +1446,8 @@ pub async fn handle_steer_queued_chat_message(
     state: &ServerState,
     chat_session_id: &str,
     content: &str,
+    message_id: Option<String>,
+    mentioned_files: Vec<String>,
 ) -> Result<serde_json::Value, String> {
     if content.trim().is_empty() {
         return Err("Cannot steer an empty message".into());
@@ -1417,6 +1456,8 @@ pub async fn handle_steer_queued_chat_message(
     let session = agents.get_mut(chat_session_id).ok_or("Session not found")?;
     session.pending_message_queue.push_back(QueuedMessage {
         content: content.to_string(),
+        message_id,
+        mentioned_files,
     });
     Ok(json!({
         "queued": true,
@@ -1471,7 +1512,10 @@ async fn dispatch_queued_message(
 
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let user_msg = ChatMessage {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: queued
+            .message_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         workspace_id: workspace_id.clone(),
         chat_session_id: chat_session_id.clone(),
         role: ChatRole::User,
@@ -1488,7 +1532,14 @@ async fn dispatch_queued_message(
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;
 
-    let turn_handle = ps_arc.send_turn(&queued.content, &[]).await?;
+    // Expand @-mentions against the worktree, as an interactive send does.
+    let prompt = claudette::file_expand::expand_file_mentions(
+        std::path::Path::new(&worktree_path),
+        &queued.content,
+        &queued.mentioned_files,
+    )
+    .await;
+    let turn_handle = ps_arc.send_turn(&prompt, &[]).await?;
 
     {
         let mut agents = state.agents.write().await;
@@ -2046,6 +2097,19 @@ fn resolve_extra_claude_flags(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restored_session_without_a_process_is_not_reset_for_env_drift() {
+        let mut current = claudette::env_provider::types::EnvMap::default();
+        current.insert("PATH".into(), Some("/usr/bin".into()));
+        let empty = claudette::env_provider::types::EnvMap::default();
+        // After a server restart the entry is rebuilt from the DB with an
+        // empty env snapshot and no process: resume, don't reset.
+        assert!(!env_drift_requires_reset(false, 3, &empty, &current));
+        // A running process with stale env does need a respawn.
+        assert!(env_drift_requires_reset(true, 3, &empty, &current));
+        assert!(!env_drift_requires_reset(true, 3, &current, &current));
+    }
 
     #[test]
     fn agent_stream_payload_carries_both_session_keys() {

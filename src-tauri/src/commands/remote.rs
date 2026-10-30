@@ -375,8 +375,15 @@ pub async fn start_local_server(
 
 #[tauri::command]
 pub async fn stop_local_server(state: State<'_, AppState>) -> Result<(), String> {
-    // Dropping the state stops the listener and the event bridge.
-    state.local_server.write().await.take();
+    let previous = state.local_server.write().await.take();
+    #[cfg(feature = "server")]
+    if let Some(mut srv) = previous {
+        // Wait for the port to free up so sharing can restart right away;
+        // dropping `srv` then detaches the event bridge.
+        srv.handle.stop_and_wait().await;
+    }
+    #[cfg(not(feature = "server"))]
+    drop(previous);
     Ok(())
 }
 
@@ -396,7 +403,11 @@ pub async fn reset_local_server_pairing(
 
     #[cfg(feature = "server")]
     {
-        let was_running = state.local_server.write().await.take().is_some();
+        let previous = state.local_server.write().await.take();
+        let was_running = previous.is_some();
+        if let Some(mut srv) = previous {
+            srv.handle.stop_and_wait().await;
+        }
         let config_path = claudette_server::default_config_path();
         let mut config = claudette_server::auth::ServerConfig::load_or_create(&config_path)
             .map_err(|e| e.to_string())?;

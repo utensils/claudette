@@ -751,9 +751,32 @@ function App() {
       kind: "created" | "archived" | "restored" | "deleted" | "renamed";
       workspace_id: string;
       workspace: import("./types/workspace").Workspace | null;
+      /** Set by the Rust remote forwarder when the event came from a
+       *  paired server rather than this machine. */
+      remote_connection_id?: string;
     }>("workspaces-changed", (event) => {
-      const { kind, workspace_id, workspace } = event.payload;
+      const { kind, workspace_id, workspace, remote_connection_id } =
+        event.payload;
       const store = useAppStore.getState();
+      if (remote_connection_id) {
+        // A paired server's workspace changed (from this window or another
+        // client). Keep the row tagged with its connection — stamping it
+        // local would route every later call to this machine — and never
+        // fall back to a local reload, which only knows local rows.
+        if (!store.activeRemoteIds.includes(remote_connection_id)) return;
+        if (kind === "deleted") {
+          store.removeWorkspace(workspace_id);
+          if (store.selectedWorkspaceId === workspace_id) store.selectWorkspace(null);
+        } else if (workspace) {
+          store.addWorkspace({ ...workspace, remote_connection_id });
+        } else if (kind === "archived") {
+          store.updateWorkspace(workspace_id, {
+            status: "Archived",
+            agent_status: "Stopped",
+          });
+        }
+        return;
+      }
       if (kind === "deleted") {
         store.removeWorkspace(workspace_id);
         if (store.selectedWorkspaceId === workspace_id) store.selectWorkspace(null);
@@ -822,9 +845,8 @@ function App() {
       // The Rust `claudette::model::Workspace` doesn't include the
       // UI-only `remote_connection_id` field. Stamp it as `null` here so
       // downstream code that strict-checks `=== null` (rather than
-      // `!= null` or truthy) doesn't trip on `undefined`. All
-      // `workspaces-changed` events come from local ops by definition
-      // (the WS server doesn't emit them), so null is correct.
+      // `!= null` or truthy) doesn't trip on `undefined`. Remote events
+      // returned above, so this row is local.
       const stamped = { ...workspace, remote_connection_id: null };
 
       // Untangle the optimistic-create / optimistic-fork placeholder

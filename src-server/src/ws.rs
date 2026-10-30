@@ -109,6 +109,10 @@ pub struct PendingPermission {
 #[derive(Debug, Clone)]
 pub struct QueuedMessage {
     pub content: String,
+    /// Client's id for the message, so the persisted row matches its
+    /// optimistic copy.
+    pub message_id: Option<String>,
+    pub mentioned_files: Vec<String>,
 }
 
 pub struct PtyHandle {
@@ -177,6 +181,30 @@ pub async fn send_message(writer: &Writer, value: &serde_json::Value) {
     let text = serde_json::to_string(value).unwrap_or_default();
     let mut w = writer.lock().await;
     let _ = w.send(Message::Text(text.into())).await;
+}
+
+/// Record terminals a connection opens (`spawn_pty`) and closes
+/// (`close_pty`) so the rest can be closed when it disconnects.
+fn track_connection_ptys(
+    opened: &Mutex<std::collections::HashSet<u64>>,
+    method: &str,
+    closing_pty: Option<u64>,
+    result: &Result<serde_json::Value, String>,
+) {
+    let Ok(mut set) = opened.lock() else { return };
+    match (method, result) {
+        ("spawn_pty", Ok(value)) => {
+            if let Some(pty_id) = value.get("pty_id").and_then(|v| v.as_u64()) {
+                set.insert(pty_id);
+            }
+        }
+        ("close_pty", _) => {
+            if let Some(pty_id) = closing_pty {
+                set.remove(&pty_id);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Accept a TLS connection and upgrade it to WebSocket.
@@ -325,6 +353,9 @@ pub async fn handle_tls_connection(
     // Phase 2: Command loop. Subscribe before reading the first request so
     // no event emitted by that request can slip past this connection.
     let mut events = host.subscribe();
+    // Terminals opened by this connection, closed when it ends.
+    let opened_ptys: std::sync::Arc<Mutex<std::collections::HashSet<u64>>> =
+        std::sync::Arc::new(Mutex::new(std::collections::HashSet::new()));
     loop {
         let msg_result = tokio::select! {
             // Map to bool so the non-`Send` watch guard isn't held across
@@ -412,6 +443,7 @@ pub async fn handle_tls_connection(
 
         let host = std::sync::Arc::clone(&host);
         let writer = std::sync::Arc::clone(&writer);
+        let opened_ptys = std::sync::Arc::clone(&opened_ptys);
         tokio::spawn(async move {
             let id = request
                 .get("id")
@@ -419,9 +451,25 @@ pub async fn handle_tls_connection(
                 .unwrap_or(serde_json::Value::Null);
             let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
             let params = request.get("params").cloned().unwrap_or_default();
+            let closing_pty = (method == "close_pty")
+                .then(|| params.get("pty_id").and_then(|v| v.as_u64()))
+                .flatten();
             let result = host.dispatch(method, params).await;
+            track_connection_ptys(&opened_ptys, method, closing_pty, &result);
             send_message(&writer, &handler::rpc_envelope(id, result)).await;
         });
+    }
+
+    // Shells this client opened would otherwise outlive it: after a drop or
+    // reconnect the client has forgotten their IDs and can't close them.
+    let leftover: Vec<u64> = opened_ptys
+        .lock()
+        .map(|mut set| set.drain().collect())
+        .unwrap_or_default();
+    for pty_id in leftover {
+        let _ = host
+            .dispatch("close_pty", serde_json::json!({ "pty_id": pty_id }))
+            .await;
     }
 
     tracing::info!(target: "claudette::ws", peer = %addr, "disconnected");

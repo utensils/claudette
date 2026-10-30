@@ -75,6 +75,15 @@ impl ServerHandle {
         let _ = self.shutdown.send(true);
     }
 
+    /// [`Self::stop`], then wait until the listener is closed so its port
+    /// can be bound again right away.
+    pub async fn stop_and_wait(&mut self) {
+        self.stop();
+        if !self.task.is_finished() {
+            let _ = (&mut self.task).await;
+        }
+    }
+
     /// Wait for the accept loop to end (it only ends on [`Self::stop`] or a
     /// listener error).
     pub async fn wait(self) {
