@@ -1,58 +1,56 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Play, Trash2, RefreshCw, Plus, Repeat, CalendarClock } from "lucide-react";
+import {
+  RefreshCw,
+  Plus,
+  Repeat,
+  CalendarClock,
+  Activity,
+  AlertTriangle,
+  Timer,
+  Search,
+  Eraser,
+  History,
+} from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { PanelHeader } from "../shared/PanelHeader";
 import { PanelToggles } from "../shared/PanelToggles";
 import { BoundedScrollPane } from "../shared/BoundedScrollPane";
+import type { ChatSession } from "../../types/chat";
 import {
   type ScheduledTask,
   deleteScheduledRoutine,
+  getChatSession,
   listChatSessions,
+  pauseScheduledRoutine,
+  resumeScheduledRoutine,
   runScheduledRoutine,
 } from "../../services/tauri";
+import {
+  type StatusFilter,
+  type TaskStatus,
+  formatCountdown,
+  liveSessionId,
+  matchesFilter,
+  summarize,
+  taskStatus,
+} from "./schedulerModel";
+import { RunItem, SchedulerTaskRow } from "./SchedulerTaskRow";
 import styles from "./SchedulerPage.module.css";
 
-function formatLocalDateTime(value: string | null): string | null {
-  if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
-
-function formatCountdown(iso: string | null, now: number): string {
-  if (!iso) return "—";
-  const target = new Date(iso).getTime();
-  if (Number.isNaN(target)) return iso;
-  let delta = Math.round((target - now) / 1000);
-  // Return a duration ("0s") rather than a phrase, so callers that wrap this
-  // in t("next_in"/"fires_in") read "next in 0s" — not "next in due now".
-  if (delta <= 0) return "0s";
-  const d = Math.floor(delta / 86400);
-  delta -= d * 86400;
-  const h = Math.floor(delta / 3600);
-  delta -= h * 3600;
-  const m = Math.floor(delta / 60);
-  const s = delta - m * 60;
-  const parts: string[] = [];
-  if (d) parts.push(`${d}d`);
-  if (h) parts.push(`${h}h`);
-  if (m) parts.push(`${m}m`);
-  if (!d && !h && (s || parts.length === 0)) parts.push(`${s}s`);
-  return parts.slice(0, 2).join(" ");
-}
+const STATUS_FILTERS: StatusFilter[] = ["all", "active", "paused", "attention"];
 
 export function SchedulerPage() {
   const { t } = useTranslation("scheduler");
   const scheduledTasks = useAppStore((s) => s.scheduledTasks);
+  const recentRuns = useAppStore((s) => s.recentScheduledRuns);
   const loadScheduledTasks = useAppStore((s) => s.loadScheduledTasks);
   const openModal = useAppStore((s) => s.openModal);
   const workspaces = useAppStore((s) => s.workspaces);
+  const agentBackends = useAppStore((s) => s.agentBackends);
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
-  const sessionsLoadedByWorkspace = useAppStore((s) => s.sessionsLoadedByWorkspace);
-  const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
 
-  // 1s ticker for the countdown labels.
+  // 1s ticker for countdowns and progress bars.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
@@ -61,100 +59,172 @@ export function SchedulerPage() {
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<StatusFilter>("all");
+  const [query, setQuery] = useState("");
+  const [workspaceFilter, setWorkspaceFilter] = useState<string | null>(null);
 
+  // The list is kept live by the global `scheduled-tasks-changed` listener;
+  // this just guarantees fresh data when the page opens.
   useEffect(() => {
     void loadScheduledTasks();
   }, [loadScheduledTasks]);
 
-  // Load sessions for the workspaces of reuse-mode tasks so each row can name
-  // its target session (new-session tasks have none). Runs once per workspace.
+  // Session names (including archived ones, which past runs may point at),
+  // keyed by id. Kept page-local: pushing archived sessions into the store
+  // would surface them as tabs.
+  const [sessionInfo, setSessionInfo] = useState<Record<string, ChatSession>>({});
+  const taskWorkspaceIds = useMemo(
+    () => [...new Set(scheduledTasks.map((task) => task.workspace_id))].sort().join(","),
+    [scheduledTasks],
+  );
   useEffect(() => {
-    const pending = new Set<string>();
-    for (const task of scheduledTasks) {
-      if (
-        !task.create_new_session &&
-        task.chat_session_id &&
-        !sessionsLoadedByWorkspace[task.workspace_id]
-      ) {
-        pending.add(task.workspace_id);
-      }
-    }
-    if (pending.size === 0) return;
+    if (!taskWorkspaceIds) return;
     let cancelled = false;
-    for (const wsId of pending) {
-      listChatSessions(wsId)
+    for (const wsId of taskWorkspaceIds.split(",")) {
+      listChatSessions(wsId, true)
         .then((list) => {
-          if (!cancelled) setSessionsForWorkspace(wsId, list);
+          if (cancelled) return;
+          setSessionInfo((prev) => {
+            const next = { ...prev };
+            for (const session of list) next[session.id] = session;
+            return next;
+          });
         })
         .catch(() => {
-          // Row falls back to a short session id; not worth surfacing.
+          // Rows fall back to a short session id; not worth surfacing.
         });
     }
     return () => {
       cancelled = true;
     };
-  }, [scheduledTasks, sessionsLoadedByWorkspace, setSessionsForWorkspace]);
+    // Re-read when runs change too: a new-session fire creates a session.
+  }, [taskWorkspaceIds, recentRuns]);
 
-  const { loops, schedules } = useMemo(() => {
-    const sorted = [...scheduledTasks].sort((a, b) =>
-      (a.next_fire_at || "zzzz").localeCompare(b.next_fire_at || "zzzz"),
-    );
-    return {
-      loops: sorted.filter((t) => t.kind === "cron"),
-      schedules: sorted.filter((t) => t.kind === "wakeup"),
-    };
-  }, [scheduledTasks]);
+  const sessionName = (_workspaceId: string, sessionId: string): string =>
+    sessionInfo[sessionId]?.name || sessionId.slice(0, 8);
+
+  const isRunning = (task: ScheduledTask): boolean => {
+    const sid = liveSessionId(task);
+    if (!sid) return false;
+    const live = sessionsByWorkspace[task.workspace_id]?.find((s) => s.id === sid);
+    return (live ?? sessionInfo[sid])?.agent_status === "Running";
+  };
+
+  const statusById = new Map<string, TaskStatus>(
+    scheduledTasks.map((task) => [task.id, taskStatus(task, isRunning(task))]),
+  );
+  const statusOf = (task: ScheduledTask): TaskStatus => statusById.get(task.id) ?? "active";
+  const summary = summarize(scheduledTasks, statusOf);
+
+  const visible = scheduledTasks
+    .filter((task) => matchesFilter(task, statusOf(task), filter, query, workspaceFilter))
+    .sort((a, b) => (a.next_fire_at || "~").localeCompare(b.next_fire_at || "~"));
+  const loops = visible.filter((task) => task.kind === "cron" && task.recurring);
+  const schedules = visible.filter((task) => !(task.kind === "cron" && task.recurring));
+  const finished = scheduledTasks.filter((task) => statusOf(task) === "done");
 
   const workspaceLabel = (id: string): string => {
     const ws = workspaces.find((w) => w.id === id);
     return ws ? ws.branch_name : id.slice(0, 8);
   };
 
-  // Human label for where a task fires: the target session's name (reuse
-  // mode) or "new session each run". Falls back to a short id until the
-  // workspace's sessions resolve.
   const targetLabel = (task: ScheduledTask): string => {
     if (task.create_new_session) return t("target_new_session");
     if (!task.chat_session_id) return "—";
-    const session = sessionsByWorkspace[task.workspace_id]?.find(
-      (s) => s.id === task.chat_session_id,
-    );
-    return session?.name ?? task.chat_session_id.slice(0, 8);
+    return sessionName(task.workspace_id, task.chat_session_id);
   };
 
-  const runNow = async (id: string) => {
-    setBusyId(id);
+  const backendLabel = (task: ScheduledTask): string | null => {
+    if (!task.backend_id) return null;
+    return agentBackends.find((b) => b.id === task.backend_id)?.label ?? task.backend_id;
+  };
+
+  const taskTitle = (taskId: string): string => {
+    const task = scheduledTasks.find((x) => x.id === taskId);
+    if (!task) return t("deleted_task");
+    return task.name || task.prompt.split("\n")[0];
+  };
+
+  const openSession = async (workspaceId: string, sessionId: string) => {
+    setError(null);
+    const store = useAppStore.getState();
+    let session: ChatSession | undefined =
+      store.sessionsByWorkspace[workspaceId]?.find((s) => s.id === sessionId) ??
+      sessionInfo[sessionId];
+    if (!session) {
+      try {
+        session = await getChatSession(sessionId);
+      } catch (e) {
+        setError(String(e));
+        return;
+      }
+    }
+    if (session.status === "Archived") {
+      setError(t("session_archived"));
+      return;
+    }
+    if (!store.sessionsByWorkspace[workspaceId]?.some((s) => s.id === sessionId)) {
+      store.addChatSession(session);
+    }
+    store.selectWorkspace(workspaceId);
+    store.selectSession(workspaceId, sessionId);
+  };
+
+  // Every action resyncs through the backend's change event; the explicit
+  // reload in `finally` covers a dropped event.
+  const act = async (task: ScheduledTask, fn: (id: string) => Promise<unknown>) => {
+    setBusyId(task.id);
     setError(null);
     try {
-      await runScheduledRoutine(id);
+      await fn(task.id);
     } catch (e) {
       setError(String(e));
     } finally {
       setBusyId(null);
-      // Run-now updates last_fired_at / next_fire_at server-side; resync.
       void loadScheduledTasks();
     }
   };
 
-  const onDelete = async (id: string) => {
-    setBusyId(id);
+  const clearFinished = async () => {
     setError(null);
     try {
-      await deleteScheduledRoutine(id);
+      await Promise.all(finished.map((task) => deleteScheduledRoutine(task.id)));
     } catch (e) {
       setError(String(e));
     } finally {
-      setBusyId(null);
-      // Reload from the backend rather than filtering a render-time snapshot,
-      // so a concurrent refresh can't reintroduce the deleted row or drop a
-      // newly-loaded one.
       void loadScheduledTasks();
     }
   };
 
-  const onRefresh = () => {
-    void loadScheduledTasks();
-  };
+  const filterWorkspaces = workspaces.filter((w) =>
+    scheduledTasks.some((task) => task.workspace_id === w.id),
+  );
+  const hasAny = scheduledTasks.length > 0;
+
+  const renderRows = (tasks: ScheduledTask[]) => (
+    <ul className={styles.list}>
+      {tasks.map((task) => (
+        <SchedulerTaskRow
+          key={task.id}
+          task={task}
+          status={statusOf(task)}
+          now={now}
+          workspaceLabel={workspaceLabel(task.workspace_id)}
+          targetLabel={targetLabel(task)}
+          backendLabel={backendLabel(task)}
+          busy={busyId === task.id}
+          refreshKey={scheduledTasks}
+          sessionName={sessionName}
+          onOpenSession={(ws, sid) => void openSession(ws, sid)}
+          onRun={(x) => void act(x, runScheduledRoutine)}
+          onPause={(x) => void act(x, pauseScheduledRoutine)}
+          onResume={(x) => void act(x, resumeScheduledRoutine)}
+          onDelete={(x) => void act(x, deleteScheduledRoutine)}
+          t={t}
+        />
+      ))}
+    </ul>
+  );
 
   return (
     <div className={styles.page}>
@@ -163,29 +233,124 @@ export function SchedulerPage() {
         right={<PanelToggles />}
       />
       <BoundedScrollPane className={styles.body}>
-        <div className={styles.topBar}>
-          <button
-            type="button"
-            className={styles.primaryBtn}
-            onClick={() => openModal("createScheduledTask")}
-          >
-            <Plus size={13} />
-            {t("new_btn")}
-          </button>
-          <button
-            type="button"
-            className={styles.btn}
-            onClick={onRefresh}
-            title={t("refresh")}
-            aria-label={t("refresh")}
-          >
-            <RefreshCw size={13} />
-          </button>
+        <div className={styles.summary}>
+          <SummaryTile
+            icon={<Repeat size={13} />}
+            value={summary.looping}
+            label={t("summary_looping")}
+          />
+          <SummaryTile
+            icon={<CalendarClock size={13} />}
+            value={summary.scheduled}
+            label={t("summary_scheduled")}
+          />
+          <SummaryTile
+            icon={<Activity size={13} />}
+            value={summary.running}
+            label={t("summary_running")}
+            tone={summary.running > 0 ? "running" : undefined}
+          />
+          <SummaryTile
+            icon={<AlertTriangle size={13} />}
+            value={summary.attention}
+            label={t("summary_attention")}
+            tone={summary.attention > 0 ? "attention" : undefined}
+            onClick={summary.attention > 0 ? () => setFilter("attention") : undefined}
+          />
+          <div className={styles.nextUp}>
+            <Timer size={13} />
+            {summary.nextUp ? (
+              <span>
+                {t("summary_next_up", {
+                  title: summary.nextUp.name || summary.nextUp.prompt.split("\n")[0],
+                  time: formatCountdown(summary.nextUp.next_fire_at, now),
+                })}
+              </span>
+            ) : (
+              <span className={styles.faint}>{t("summary_nothing_armed")}</span>
+            )}
+          </div>
+        </div>
+
+        <div className={styles.toolbar}>
+          <div className={styles.filterChips} role="group" aria-label={t("filter_label")}>
+            {STATUS_FILTERS.map((f) => (
+              <button
+                key={f}
+                type="button"
+                className={filter === f ? styles.chipActive : styles.chip}
+                aria-pressed={filter === f}
+                onClick={() => setFilter(f)}
+              >
+                {t(`filter_${f}`)}
+                {f === "attention" && summary.attention > 0 && (
+                  <span className={styles.chipCount}>{summary.attention}</span>
+                )}
+                {f === "paused" && summary.paused > 0 && (
+                  <span className={styles.chipCount}>{summary.paused}</span>
+                )}
+              </button>
+            ))}
+          </div>
+          {filterWorkspaces.length > 1 && (
+            <select
+              className={styles.select}
+              value={workspaceFilter ?? ""}
+              onChange={(e) => setWorkspaceFilter(e.target.value || null)}
+              aria-label={t("filter_workspace")}
+            >
+              <option value="">{t("filter_all_workspaces")}</option>
+              {filterWorkspaces.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.branch_name}
+                </option>
+              ))}
+            </select>
+          )}
+          <label className={styles.search}>
+            <Search size={12} />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("search_placeholder")}
+              aria-label={t("search_placeholder")}
+            />
+          </label>
+          <div className={styles.toolbarRight}>
+            {finished.length > 0 && (
+              <button
+                type="button"
+                className={styles.btn}
+                onClick={() => void clearFinished()}
+                title={t("clear_finished_title")}
+              >
+                <Eraser size={13} />
+                {t("clear_finished", { n: finished.length })}
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.btn}
+              onClick={() => void loadScheduledTasks()}
+              title={t("refresh")}
+              aria-label={t("refresh")}
+            >
+              <RefreshCw size={13} />
+            </button>
+            <button
+              type="button"
+              className={styles.primaryBtn}
+              onClick={() => openModal("createScheduledTask")}
+            >
+              <Plus size={13} />
+              {t("new_btn")}
+            </button>
+          </div>
         </div>
 
         {error && <div className={styles.error}>{error}</div>}
 
-        {/* Loops (cron routines) */}
         <section className={styles.section}>
           <div className={styles.sectionHeader}>
             <Repeat size={12} />
@@ -193,27 +358,12 @@ export function SchedulerPage() {
             <span className={styles.count}>{loops.length}</span>
           </div>
           {loops.length === 0 ? (
-            <p className={styles.empty}>{t("loops_empty")}</p>
+            <p className={styles.empty}>{hasAny ? t("filtered_empty") : t("loops_empty")}</p>
           ) : (
-            <ul className={styles.list}>
-              {loops.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  now={now}
-                  workspaceLabel={workspaceLabel}
-                  targetLabel={targetLabel}
-                  busyId={busyId}
-                  onRun={runNow}
-                  onDelete={onDelete}
-                  t={t}
-                />
-              ))}
-            </ul>
+            renderRows(loops)
           )}
         </section>
 
-        {/* Schedules (wakeups) */}
         <section className={styles.section}>
           <div className={styles.sectionHeader}>
             <CalendarClock size={12} />
@@ -221,22 +371,39 @@ export function SchedulerPage() {
             <span className={styles.count}>{schedules.length}</span>
           </div>
           {schedules.length === 0 ? (
-            <p className={styles.empty}>{t("schedules_empty")}</p>
+            <p className={styles.empty}>
+              {hasAny ? t("filtered_empty") : t("schedules_empty")}
+            </p>
           ) : (
-            <ul className={styles.list}>
-              {schedules.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  now={now}
-                  workspaceLabel={workspaceLabel}
-                  targetLabel={targetLabel}
-                  busyId={busyId}
-                  onRun={runNow}
-                  onDelete={onDelete}
-                  t={t}
-                />
-              ))}
+            renderRows(schedules)
+          )}
+        </section>
+
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <History size={12} />
+            <span>{t("activity_heading")}</span>
+            <span className={styles.count}>{recentRuns.length}</span>
+          </div>
+          {recentRuns.length === 0 ? (
+            <p className={styles.empty}>{t("activity_empty")}</p>
+          ) : (
+            <ul className={styles.runList}>
+              {recentRuns.map((run) => {
+                const task = scheduledTasks.find((x) => x.id === run.task_id);
+                return (
+                  <RunItem
+                    key={run.id}
+                    run={run}
+                    workspaceId={task?.workspace_id ?? ""}
+                    now={now}
+                    title={taskTitle(run.task_id)}
+                    sessionName={sessionName}
+                    onOpenSession={(ws, sid) => void openSession(ws, sid)}
+                    t={t}
+                  />
+                );
+              })}
             </ul>
           )}
         </section>
@@ -245,78 +412,32 @@ export function SchedulerPage() {
   );
 }
 
-interface TaskRowProps {
-  task: ScheduledTask;
-  now: number;
-  workspaceLabel: (id: string) => string;
-  targetLabel: (task: ScheduledTask) => string;
-  busyId: string | null;
-  onRun: (id: string) => void;
-  onDelete: (id: string) => void;
-  t: ReturnType<typeof useTranslation<"scheduler">>["t"];
-}
-
-function TaskRow({
-  task,
-  now,
-  workspaceLabel,
-  targetLabel,
-  busyId,
-  onRun,
-  onDelete,
-  t,
-}: TaskRowProps) {
-  const isWakeup = task.kind === "wakeup";
-  const schedule = isWakeup
-    ? formatLocalDateTime(task.fire_at) ?? t("fire_at_unknown")
-    : task.human_schedule || task.cron_expr || t("schedule_unknown");
-  const next = task.next_fire_at
-    ? `${t("next_in", { time: formatCountdown(task.next_fire_at, now) })}`
-    : t("not_scheduled");
-  const last = task.last_fired_at
-    ? `· ${t("last_fired", { time: formatLocalDateTime(task.last_fired_at) ?? "" })}`
-    : "";
-  const mode = !isWakeup
-    ? task.recurring
-      ? t("mode_recurring")
-      : t("mode_one_shot")
-    : null;
-  const isBusy = busyId === task.id;
-
-  return (
-    <li className={`${styles.row} ${task.enabled ? "" : styles.rowMuted}`}>
-      <div className={styles.rowMain}>
-        <div className={styles.rowTitle}>{task.name || task.prompt}</div>
-        <div className={styles.rowMeta}>
-          {schedule}
-          {mode ? ` · ${mode}` : ""} · {next} {last} ·{" "}
-          {workspaceLabel(task.workspace_id)} · {targetLabel(task)}
-        </div>
-        {task.name && <div className={styles.rowPrompt}>{task.prompt}</div>}
-        {task.reason && <div className={styles.rowReason}>{task.reason}</div>}
-      </div>
-      <div className={styles.rowActions}>
-        <button
-          type="button"
-          className={styles.btn}
-          onClick={() => onRun(task.id)}
-          disabled={isBusy}
-          title={t("run_now")}
-          aria-label={t("run_now")}
-        >
-          <Play size={13} />
-        </button>
-        <button
-          type="button"
-          className={styles.btnDanger}
-          onClick={() => onDelete(task.id)}
-          disabled={isBusy}
-          title={t("delete")}
-          aria-label={t("delete")}
-        >
-          <Trash2 size={13} />
-        </button>
-      </div>
-    </li>
+function SummaryTile({
+  icon,
+  value,
+  label,
+  tone,
+  onClick,
+}: {
+  icon: ReactNode;
+  value: number;
+  label: string;
+  tone?: "running" | "attention";
+  onClick?: () => void;
+}) {
+  const className = `${styles.tile} ${tone ? styles[`tile_${tone}`] : ""}`;
+  const body = (
+    <>
+      <span className={styles.tileIcon}>{icon}</span>
+      <span className={styles.tileValue}>{value}</span>
+      <span className={styles.tileLabel}>{label}</span>
+    </>
+  );
+  return onClick ? (
+    <button type="button" className={className} onClick={onClick}>
+      {body}
+    </button>
+  ) : (
+    <div className={className}>{body}</div>
   );
 }

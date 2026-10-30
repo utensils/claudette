@@ -2,6 +2,23 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ScheduledTaskKind = "wakeup" | "cron";
 
+/** One recorded fire of a scheduled task (scheduled or "Run now"). */
+export interface ScheduledTaskRun {
+  id: string;
+  task_id: string;
+  /** Session the prompt landed in — a fresh one per fire for new-session
+   *  tasks. `null` when the fire failed before a session took it. */
+  chat_session_id: string | null;
+  source: "scheduled" | "manual";
+  fired_at: string;
+  /** Dispatch error when the fire didn't start a turn. */
+  error: string | null;
+}
+
+/** Tauri event emitted whenever any scheduled task changes (created,
+ *  deleted, fired, failed, paused/resumed). Payload-less. */
+export const SCHEDULED_TASKS_CHANGED_EVENT = "scheduled-tasks-changed";
+
 export interface ScheduledTask {
   id: string;
   /** Target session for reuse-mode tasks; `null` when `create_new_session`
@@ -36,6 +53,8 @@ export interface ScheduledTask {
    *  backend's default model at fire time. */
   model: string | null;
   human_schedule: string | null;
+  /** Most recent fire, or `null` if the task never fired. */
+  last_run: ScheduledTaskRun | null;
 }
 
 export function listScheduledRoutines(): Promise<ScheduledTask[]> {
@@ -48,6 +67,28 @@ export function deleteScheduledRoutine(id: string): Promise<{ deleted: number }>
 
 export function runScheduledRoutine(id: string): Promise<{ ok: boolean }> {
   return invoke("run_scheduled_routine", { id });
+}
+
+/** Stop a task from firing until it's resumed. */
+export function pauseScheduledRoutine(id: string): Promise<ScheduledTask> {
+  return invoke("pause_scheduled_routine", { id });
+}
+
+/** Re-arm a paused or auto-disabled task (clears its failure streak).
+ *  Rejects for a wakeup that already fired. */
+export function resumeScheduledRoutine(id: string): Promise<ScheduledTask> {
+  return invoke("resume_scheduled_routine", { id });
+}
+
+/** Newest-first fire history for one task, or across all tasks. */
+export function listScheduledTaskRuns(
+  taskId?: string,
+  limit?: number,
+): Promise<ScheduledTaskRun[]> {
+  return invoke("list_scheduled_task_runs", {
+    taskId: taskId ?? null,
+    limit: limit ?? null,
+  });
 }
 
 /** Schedule a one-shot wakeup. Either `delaySeconds` or `fireAt` (RFC3339)

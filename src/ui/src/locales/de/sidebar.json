@@ -92,5 +92,6 @@
   "remote_action_failed": "Remote-Aktion fehlgeschlagen: {{error}}",
   "remote_needs_repair": "{{name}} akzeptiert dieses Gerät nicht mehr – mit dem Token erneut koppeln",
   "remote_cancel_reconnect": "Neu verbinden abbrechen",
-  "remote_revoke_failed": "{{name}} entfernt, aber der Zugriff dort konnte nicht widerrufen werden ({{error}}). Nutze dort „{{reset}}“, um ihn zu widerrufen."
+  "remote_revoke_failed": "{{name}} entfernt, aber der Zugriff dort konnte nicht widerrufen werden ({{error}}). Nutze dort „{{reset}}“, um ihn zu widerrufen.",
+  "scheduler_status": "{{looping}} in Schleife · {{scheduled}} geplant · {{attention}} brauchen Aufmerksamkeit"
 }

@@ -90,5 +90,6 @@
   "remote_action_failed": "A ação remota falhou: {{error}}",
   "remote_needs_repair": "{{name}} não aceita mais este dispositivo — emparelhe novamente com o token",
   "remote_cancel_reconnect": "Parar de reconectar",
-  "remote_revoke_failed": "{{name}} foi removido, mas não foi possível revogar o acesso lá ({{error}}). Use \"{{reset}}\" nessa máquina para revogá-lo."
+  "remote_revoke_failed": "{{name}} foi removido, mas não foi possível revogar o acesso lá ({{error}}). Use \"{{reset}}\" nessa máquina para revogá-lo.",
+  "scheduler_status": "{{looping}} em loop · {{scheduled}} agendadas · {{attention}} precisam de atenção"
 }
