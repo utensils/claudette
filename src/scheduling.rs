@@ -81,6 +81,51 @@ pub struct ScheduledTask {
     pub model: Option<String>,
 }
 
+/// One recorded fire of a [`ScheduledTask`] — scheduled or manual ("Run
+/// now"). `chat_session_id` is the session the prompt landed in (a fresh one
+/// for new-session tasks); `None` when the fire failed before a session
+/// could take it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledTaskRun {
+    pub id: String,
+    pub task_id: String,
+    pub chat_session_id: Option<String>,
+    /// `"scheduled"` or `"manual"`.
+    pub source: String,
+    pub fired_at: String,
+    /// Dispatch error, when the fire didn't start a turn.
+    pub error: Option<String>,
+}
+
+/// `disabled_reason` written when a user pauses a task, so the UI can tell a
+/// deliberate pause apart from an automatic one (failure, archived workspace).
+pub const PAUSED_BY_USER_REASON: &str = "paused";
+
+/// When a paused or auto-disabled task should fire once resumed. Crons get
+/// their next match after `now`; a wakeup keeps its original fire time,
+/// firing right away if that passed while it was paused. A wakeup that
+/// already fired can't be resumed — "Run now" fires it again instead.
+pub fn resume_fire_time(task: &ScheduledTask, now: DateTime<Utc>) -> Result<DateTime<Utc>, String> {
+    match task.kind {
+        ScheduledTaskKind::Cron => task
+            .cron_expr
+            .as_deref()
+            .and_then(|expr| next_cron_run_utc(expr, now))
+            .ok_or_else(|| "cron expression has no upcoming fire time".to_string()),
+        ScheduledTaskKind::Wakeup => {
+            if task.last_fired_at.is_some() && task.disabled_reason.is_none() {
+                return Err("wakeup already fired; use Run now to fire it again".to_string());
+            }
+            Ok(task
+                .fire_at
+                .as_deref()
+                .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
+                .map(|dt| dt.with_timezone(&Utc).max(now))
+                .unwrap_or(now))
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CronFields {
     minute: Vec<u32>,

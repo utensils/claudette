@@ -6,9 +6,24 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::db::Database;
 use claudette::model::{ChatMessage, ChatRole};
-use claudette::scheduling::{ScheduleTarget, ScheduledTask, ScheduledTaskKind, cron_to_human};
+use claudette::scheduling::{
+    ScheduleTarget, ScheduledTask, ScheduledTaskKind, ScheduledTaskRun, cron_to_human,
+    resume_fire_time,
+};
 
 use crate::state::AppState;
+
+/// Frontend event fired whenever the set of scheduled tasks — or any task's
+/// state (next fire, last run, failure, pause) — changes. Payload-less: the
+/// listener re-reads `list_scheduled_routines`.
+pub const SCHEDULED_TASKS_CHANGED_EVENT: &str = "scheduled-tasks-changed";
+
+/// Wake the scheduler loop (so it re-reads the next fire time) and tell the
+/// frontend to refresh. Call after every mutation of `agent_scheduled_tasks`.
+pub(crate) fn notify_schedules_changed(app: &AppHandle) {
+    app.state::<AppState>().scheduler_notify.notify_waiters();
+    let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
+}
 
 /// Resolve the GUI/IPC command arguments into a [`ScheduleTarget`].
 ///
@@ -46,6 +61,9 @@ pub struct ScheduledTaskView {
     #[serde(flatten)]
     pub task: ScheduledTask,
     pub human_schedule: Option<String>,
+    /// Most recent fire, if any — lets the UI jump to the session the last
+    /// run landed in (a different one each fire for new-session tasks).
+    pub last_run: Option<ScheduledTaskRun>,
 }
 
 impl From<ScheduledTask> for ScheduledTaskView {
@@ -54,6 +72,20 @@ impl From<ScheduledTask> for ScheduledTaskView {
         Self {
             task,
             human_schedule,
+            last_run: None,
+        }
+    }
+}
+
+impl ScheduledTaskView {
+    fn with_last_run(task: ScheduledTask, db: &Database) -> Self {
+        let last_run = db
+            .list_agent_scheduled_task_runs(Some(&task.id), 1)
+            .ok()
+            .and_then(|runs| runs.into_iter().next());
+        Self {
+            last_run,
+            ..task.into()
         }
     }
 }
@@ -89,7 +121,7 @@ pub async fn schedule_wakeup(
             model.as_deref(),
         )
         .map_err(|e| e.to_string())?;
-    state.scheduler_notify.notify_waiters();
+    notify_schedules_changed(&app);
     post_creation_note(
         &app,
         &state.db_path,
@@ -135,7 +167,7 @@ pub async fn create_cron_routine(
             model.as_deref(),
         )
         .map_err(|e| e.to_string())?;
-    state.scheduler_notify.notify_waiters();
+    notify_schedules_changed(&app);
     post_creation_note(
         &app,
         &state.db_path,
@@ -155,20 +187,75 @@ pub async fn list_scheduled_routines(
 ) -> Result<Vec<ScheduledTaskView>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let rows = db.list_agent_scheduled_tasks().map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().map(Into::into).collect())
+    Ok(rows
+        .into_iter()
+        .map(|task| ScheduledTaskView::with_last_run(task, &db))
+        .collect())
 }
 
 #[tauri::command]
 pub async fn delete_scheduled_routine(
     id: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let deleted = db
         .delete_agent_scheduled_task(&id)
         .map_err(|e| e.to_string())?;
-    state.scheduler_notify.notify_waiters();
+    notify_schedules_changed(&app);
     Ok(serde_json::json!({ "deleted": deleted }))
+}
+
+/// Stop a task from firing until it's resumed. Accepts an id or name.
+#[tauri::command]
+pub async fn pause_scheduled_routine(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ScheduledTaskView, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let task = db
+        .pause_agent_scheduled_task(&id, Utc::now())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("scheduled routine not found: {id}"))?;
+    notify_schedules_changed(&app);
+    Ok(ScheduledTaskView::with_last_run(task, &db))
+}
+
+/// Re-arm a paused or auto-disabled task (clears its failure streak).
+#[tauri::command]
+pub async fn resume_scheduled_routine(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ScheduledTaskView, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let task = db
+        .find_agent_scheduled_task(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("scheduled routine not found: {id}"))?;
+    let now = Utc::now();
+    let next = resume_fire_time(&task, now)?;
+    let task = db
+        .resume_agent_scheduled_task(&task.id, next, now)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("scheduled routine not found: {id}"))?;
+    notify_schedules_changed(&app);
+    Ok(ScheduledTaskView::with_last_run(task, &db))
+}
+
+/// Newest-first fire history for one task, or across every task when
+/// `task_id` is omitted.
+#[tauri::command]
+pub async fn list_scheduled_task_runs(
+    task_id: Option<String>,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ScheduledTaskRun>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.list_agent_scheduled_task_runs(task_id.as_deref(), limit.unwrap_or(50).min(500) as usize)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -185,7 +272,10 @@ pub async fn run_scheduled_routine(
             .find(|task| task.id == id || task.name.as_deref() == Some(id.as_str()))
             .ok_or_else(|| format!("scheduled routine not found: {id}"))?
     };
-    dispatch_task_prompt(app, task, "manual").await?;
+    let result = dispatch_task_prompt(app.clone(), task, "manual").await;
+    // The run was recorded either way; refresh the "last run" column.
+    let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
+    result?;
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -224,6 +314,7 @@ async fn run_due_tasks_once(app: AppHandle) -> Duration {
                     count,
                     "paused scheduled tasks for unavailable workspaces"
                 );
+                let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
             }
             Ok(_) => {}
             Err(err) => {
@@ -274,7 +365,11 @@ async fn mark_and_dispatch_due_task(
             return Ok(());
         }
     }
-    match dispatch_task_prompt(app.clone(), task.clone(), "scheduled").await {
+    let result = dispatch_task_prompt(app.clone(), task.clone(), "scheduled").await;
+    // Covers both outcomes: the fire advanced next/last fire times, and a
+    // failure below adds to the streak (or disables the task).
+    let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
+    match result {
         Ok(()) => Ok(()),
         Err(err) => {
             let state = app.state::<AppState>();
@@ -308,16 +403,47 @@ pub async fn dispatch_task_prompt(
     task: ScheduledTask,
     source: &str,
 ) -> Result<(), String> {
+    let task_id = task.id.clone();
+    let (session_id, result) = dispatch_task_prompt_inner(app.clone(), task, source).await;
+    let recorded = Database::open(&app.state::<AppState>().db_path).and_then(|db| {
+        db.record_agent_scheduled_task_run(
+            &task_id,
+            session_id.as_deref(),
+            source,
+            Utc::now(),
+            result.as_ref().err().map(String::as_str),
+        )
+    });
+    if let Err(err) = recorded {
+        tracing::warn!(
+            target: "claudette::scheduling",
+            task_id = %task_id,
+            error = %err,
+            "failed to record scheduled task run"
+        );
+    }
+    result
+}
+
+/// Fire a task and report which session took the prompt (`None` when the
+/// fire failed before a session accepted it).
+async fn dispatch_task_prompt_inner(
+    app: AppHandle,
+    task: ScheduledTask,
+    source: &str,
+) -> (Option<String>, Result<(), String>) {
     let prompt = build_dispatch_prompt(&task, source);
     // Resolve where this fire lands. `create_new_session` rows make a fresh
     // session in the target workspace on every fire (so a recurring cron gets
     // a clean session per run); reuse rows dispatch into their stored session.
     if task.create_new_session {
         let state = app.state::<AppState>();
-        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-        let session = db
-            .create_chat_session(&task.workspace_id)
-            .map_err(|e| e.to_string())?;
+        let session = match Database::open(&state.db_path)
+            .and_then(|db| db.create_chat_session(&task.workspace_id))
+        {
+            Ok(session) => session,
+            Err(err) => return (None, Err(err.to_string())),
+        };
         let session_id = session.id.clone();
         let result = dispatch_prompt_to_session_inner(
             app.clone(),
@@ -337,26 +463,30 @@ pub async fn dispatch_task_prompt(
             // The fire never started — roll back the empty session we made so
             // a persistently-failing cron doesn't accrete blank tabs.
             let _ = db.archive_chat_session(&session_id);
+            return (None, result);
         }
-        result
+        (Some(session_id), result)
     } else {
-        let session_id = task
-            .chat_session_id
-            .clone()
-            .ok_or("scheduled task has no target session")?;
+        let Some(session_id) = task.chat_session_id.clone() else {
+            return (
+                None,
+                Err("scheduled task has no target session".to_string()),
+            );
+        };
         // Forward the row's pinned backend / model so a cron created from a
         // Codex chat fires on the same runtime it was scheduled under.
         // Either being `None` keeps the existing global-default fallback.
-        dispatch_prompt_to_session_inner(
+        let result = dispatch_prompt_to_session_inner(
             app,
-            session_id,
+            session_id.clone(),
             prompt,
             task.backend_id,
             task.model,
             Some(task.id),
             None,
         )
-        .await
+        .await;
+        (Some(session_id), result)
     }
 }
 

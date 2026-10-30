@@ -529,7 +529,7 @@ fn schedule_wakeup(
         None,
     ) {
         Ok(task) => {
-            app.state::<AppState>().scheduler_notify.notify_waiters();
+            crate::commands::scheduling::notify_schedules_changed(&app);
             BridgeResponse::data(
                 format!("Scheduled wakeup {} for {}.", task.id, fire_at.to_rfc3339()),
                 serde_json::to_value(task).unwrap_or(serde_json::Value::Null),
@@ -562,7 +562,7 @@ fn create_cron(
         None,
     ) {
         Ok(task) => {
-            app.state::<AppState>().scheduler_notify.notify_waiters();
+            crate::commands::scheduling::notify_schedules_changed(&app);
             BridgeResponse::data(
                 format!(
                     "Scheduled routine {} ({}).",
@@ -610,7 +610,7 @@ fn delete_cron(
     match db.delete_agent_scheduled_task_for_chat_session(&chat_session_id, &id) {
         Ok(0) => BridgeResponse::err(format!("No scheduled routine named {id:?}")),
         Ok(n) => {
-            app.state::<AppState>().scheduler_notify.notify_waiters();
+            crate::commands::scheduling::notify_schedules_changed(&app);
             BridgeResponse::message(format!("Deleted {n} scheduled routine(s)."))
         }
         Err(err) => BridgeResponse::err(format!("delete routine: {err}")),

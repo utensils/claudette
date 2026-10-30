@@ -1269,6 +1269,9 @@ fn main() {
             commands::scheduling::list_scheduled_routines,
             commands::scheduling::delete_scheduled_routine,
             commands::scheduling::run_scheduled_routine,
+            commands::scheduling::pause_scheduled_routine,
+            commands::scheduling::resume_scheduled_routine,
+            commands::scheduling::list_scheduled_task_runs,
             // PTY
             pty::spawn_pty,
             pty::write_pty,

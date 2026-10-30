@@ -1,9 +1,15 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 
+#[cfg(doc)]
+use crate::scheduling::resume_fire_time;
 use crate::scheduling::{
-    ScheduleTarget, ScheduledTask, ScheduledTaskKind, next_cron_run_utc, utc_now_rfc3339,
+    PAUSED_BY_USER_REASON, ScheduleTarget, ScheduledTask, ScheduledTaskKind, ScheduledTaskRun,
+    next_cron_run_utc, utc_now_rfc3339,
 };
+
+/// Runs kept per task; older history is pruned on insert.
+const MAX_RUNS_PER_TASK: i64 = 50;
 
 use super::Database;
 
@@ -374,6 +380,142 @@ impl Database {
         )
     }
 
+    /// Look a task up by id, falling back to its unique name — the same
+    /// lookup `delete_agent_scheduled_task` and `routine run` accept.
+    pub fn find_agent_scheduled_task(
+        &self,
+        id_or_name: &str,
+    ) -> Result<Option<ScheduledTask>, rusqlite::Error> {
+        if let Some(task) = self.get_agent_scheduled_task(id_or_name)? {
+            return Ok(Some(task));
+        }
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM agent_scheduled_tasks WHERE name = ?1",
+                params![id_or_name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match id {
+            Some(id) => self.get_agent_scheduled_task(&id),
+            None => Ok(None),
+        }
+    }
+
+    /// Pause a task: it stops firing until resumed. Marked with
+    /// [`PAUSED_BY_USER_REASON`] so it reads differently from an automatic
+    /// disable. Returns the updated row, or `None` if no task matched.
+    pub fn pause_agent_scheduled_task(
+        &self,
+        id_or_name: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<ScheduledTask>, rusqlite::Error> {
+        let Some(task) = self.find_agent_scheduled_task(id_or_name)? else {
+            return Ok(None);
+        };
+        self.conn.execute(
+            "UPDATE agent_scheduled_tasks
+             SET enabled = 0, next_fire_at = NULL, disabled_reason = ?2, updated_at = ?3
+             WHERE id = ?1",
+            params![task.id, PAUSED_BY_USER_REASON, now.to_rfc3339()],
+        )?;
+        self.get_agent_scheduled_task(&task.id)
+    }
+
+    /// Re-arm a paused or auto-disabled task at `next_fire_at` (see
+    /// [`resume_fire_time`]) and clear its failure streak.
+    pub fn resume_agent_scheduled_task(
+        &self,
+        id: &str,
+        next_fire_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<Option<ScheduledTask>, rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE agent_scheduled_tasks
+             SET enabled = 1,
+                 next_fire_at = ?2,
+                 disabled_reason = NULL,
+                 last_error = NULL,
+                 failure_count = 0,
+                 updated_at = ?3
+             WHERE id = ?1",
+            params![id, next_fire_at.to_rfc3339(), now.to_rfc3339()],
+        )?;
+        self.get_agent_scheduled_task(id)
+    }
+
+    /// Record one fire of a task and prune its history to the newest
+    /// [`MAX_RUNS_PER_TASK`] rows.
+    pub fn record_agent_scheduled_task_run(
+        &self,
+        task_id: &str,
+        chat_session_id: Option<&str>,
+        source: &str,
+        fired_at: DateTime<Utc>,
+        error: Option<&str>,
+    ) -> Result<ScheduledTaskRun, rusqlite::Error> {
+        let run = ScheduledTaskRun {
+            id: uuid::Uuid::new_v4().to_string(),
+            task_id: task_id.to_string(),
+            chat_session_id: chat_session_id.map(str::to_string),
+            source: source.to_string(),
+            fired_at: fired_at.to_rfc3339(),
+            error: error.map(str::to_string),
+        };
+        self.conn.execute(
+            "INSERT INTO agent_scheduled_task_runs
+                (id, task_id, chat_session_id, source, fired_at, error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                run.id,
+                run.task_id,
+                run.chat_session_id,
+                run.source,
+                run.fired_at,
+                run.error
+            ],
+        )?;
+        self.conn.execute(
+            "DELETE FROM agent_scheduled_task_runs
+             WHERE task_id = ?1
+               AND id NOT IN (
+                   SELECT id FROM agent_scheduled_task_runs
+                   WHERE task_id = ?1
+                   ORDER BY fired_at DESC
+                   LIMIT ?2
+               )",
+            params![task_id, MAX_RUNS_PER_TASK],
+        )?;
+        Ok(run)
+    }
+
+    /// Newest-first fire history, for one task or (with `None`) across all.
+    pub fn list_agent_scheduled_task_runs(
+        &self,
+        task_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ScheduledTaskRun>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, chat_session_id, source, fired_at, error
+             FROM agent_scheduled_task_runs
+             WHERE ?1 IS NULL OR task_id = ?1
+             ORDER BY fired_at DESC
+             LIMIT ?2",
+        )?;
+        stmt.query_map(params![task_id, limit as i64], |row| {
+            Ok(ScheduledTaskRun {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                chat_session_id: row.get(2)?,
+                source: row.get(3)?,
+                fired_at: row.get(4)?,
+                error: row.get(5)?,
+            })
+        })?
+        .collect()
+    }
+
     fn workspace_id_for_chat_session(
         &self,
         chat_session_id: &str,
@@ -422,6 +564,152 @@ mod tests {
     use super::*;
     use crate::db::test_support::{make_repo, make_workspace};
     use crate::model::ChatSession;
+    use crate::scheduling::resume_fire_time;
+
+    fn db_with_session() -> (Database, ChatSession) {
+        let db = Database::open_in_memory().unwrap();
+        let repo = make_repo("repo", "/tmp/repo", "repo");
+        db.insert_repository(&repo).unwrap();
+        let ws = make_workspace("ws", &repo.id, "work");
+        db.insert_workspace(&ws).unwrap();
+        let session = db.create_chat_session(&ws.id).unwrap();
+        (db, session)
+    }
+
+    #[test]
+    fn pause_and_resume_cron_by_name() {
+        let (db, session) = db_with_session();
+        db.create_agent_cron_task(
+            &ScheduleTarget::Session(session.id.clone()),
+            Some("hourly"),
+            "0 * * * *",
+            "check",
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        db.record_agent_scheduled_task_failure(
+            &db.find_agent_scheduled_task("hourly").unwrap().unwrap().id,
+            Utc::now(),
+            "boom",
+        )
+        .unwrap();
+
+        let paused = db
+            .pause_agent_scheduled_task("hourly", Utc::now())
+            .unwrap()
+            .unwrap();
+        assert!(!paused.enabled);
+        assert!(paused.next_fire_at.is_none());
+        assert_eq!(
+            paused.disabled_reason.as_deref(),
+            Some(PAUSED_BY_USER_REASON)
+        );
+
+        let now = Utc::now();
+        let next = resume_fire_time(&paused, now).unwrap();
+        let resumed = db
+            .resume_agent_scheduled_task(&paused.id, next, now)
+            .unwrap()
+            .unwrap();
+        assert!(resumed.enabled);
+        assert!(resumed.next_fire_at.is_some());
+        assert!(resumed.disabled_reason.is_none());
+        assert!(resumed.last_error.is_none());
+        assert_eq!(resumed.failure_count, 0);
+
+        assert!(
+            db.pause_agent_scheduled_task("missing", Utc::now())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn resume_wakeup_keeps_future_fire_time_and_refuses_after_fire() {
+        let (db, session) = db_with_session();
+        let fire_at = Utc::now() + chrono::Duration::hours(2);
+        let task = db
+            .create_agent_wakeup(
+                &ScheduleTarget::Session(session.id.clone()),
+                fire_at,
+                "later",
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let paused = db
+            .pause_agent_scheduled_task(&task.id, Utc::now())
+            .unwrap()
+            .unwrap();
+        let now = Utc::now();
+        let next = resume_fire_time(&paused, now).unwrap();
+        let resumed = db
+            .resume_agent_scheduled_task(&task.id, next, now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed.next_fire_at, task.next_fire_at);
+
+        // Fire it, then resuming must be refused.
+        db.mark_agent_scheduled_task_fired(&resumed, fire_at + chrono::Duration::seconds(1))
+            .unwrap();
+        let fired = db.get_agent_scheduled_task(&task.id).unwrap().unwrap();
+        assert!(resume_fire_time(&fired, Utc::now()).is_err());
+    }
+
+    #[test]
+    fn records_runs_newest_first_and_prunes() {
+        let (db, session) = db_with_session();
+        let task = db
+            .create_agent_cron_task(
+                &ScheduleTarget::Session(session.id.clone()),
+                None,
+                "0 * * * *",
+                "check",
+                true,
+                None,
+                None,
+            )
+            .unwrap();
+        let start = Utc::now();
+        for i in 0..(MAX_RUNS_PER_TASK + 5) {
+            db.record_agent_scheduled_task_run(
+                &task.id,
+                Some(&session.id),
+                "scheduled",
+                start + chrono::Duration::seconds(i),
+                None,
+            )
+            .unwrap();
+        }
+        db.record_agent_scheduled_task_run(
+            &task.id,
+            None,
+            "manual",
+            start + chrono::Duration::hours(1),
+            Some("nope"),
+        )
+        .unwrap();
+
+        let runs = db
+            .list_agent_scheduled_task_runs(Some(&task.id), 500)
+            .unwrap();
+        assert_eq!(runs.len() as i64, MAX_RUNS_PER_TASK);
+        assert_eq!(runs[0].source, "manual");
+        assert_eq!(runs[0].error.as_deref(), Some("nope"));
+        assert!(runs[0].chat_session_id.is_none());
+        assert_eq!(db.list_agent_scheduled_task_runs(None, 3).unwrap().len(), 3);
+
+        // Runs go with their task.
+        db.delete_agent_scheduled_task(&task.id).unwrap();
+        assert!(
+            db.list_agent_scheduled_task_runs(None, 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn creates_and_lists_wakeup() {

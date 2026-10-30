@@ -35,6 +35,16 @@ pub enum Action {
         /// Routine id or name.
         id: String,
     },
+    /// Pause a routine or wakeup so it stops firing until resumed.
+    Pause {
+        /// Routine id or name.
+        id: String,
+    },
+    /// Resume a paused or auto-disabled routine or wakeup.
+    Resume {
+        /// Routine id or name.
+        id: String,
+    },
 }
 
 pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
@@ -88,6 +98,26 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
                 output::print_json(&value)?;
             } else {
                 println!("ok");
+            }
+        }
+        Action::Pause { id } => {
+            let value = ipc::call(&info, "routine.pause", serde_json::json!({ "id": id })).await?;
+            if json {
+                output::print_json(&value)?;
+            } else {
+                println!("paused");
+            }
+        }
+        Action::Resume { id } => {
+            let value = ipc::call(&info, "routine.resume", serde_json::json!({ "id": id })).await?;
+            if json {
+                output::print_json(&value)?;
+            } else {
+                let next = value
+                    .get("next_fire_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unscheduled>");
+                println!("resumed; next fire {next}");
             }
         }
     }

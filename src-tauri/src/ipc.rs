@@ -88,6 +88,8 @@ const METHODS: &[&str] = &[
     "routine.list",
     "routine.delete",
     "routine.run",
+    "routine.pause",
+    "routine.resume",
     "plugin.list",
     "plugin.invoke",
     "scm.detect_provider",
@@ -443,6 +445,8 @@ pub(crate) async fn dispatch_method(
         "routine.list" => handle_routine_list(app).await,
         "routine.delete" => handle_routine_delete(app, params).await,
         "routine.run" => handle_routine_run(app, params).await,
+        "routine.pause" => handle_routine_pause(app, params).await,
+        "routine.resume" => handle_routine_resume(app, params).await,
         "plugin.list" => handle_plugin_list(app).await,
         "plugin.invoke" => handle_plugin_invoke(app, params).await,
         "scm.detect_provider" => handle_scm_detect_provider(app, params).await,
@@ -1065,7 +1069,29 @@ async fn handle_routine_delete(
 ) -> Result<serde_json::Value, String> {
     let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
     let state = app_state(app)?;
-    crate::commands::scheduling::delete_scheduled_routine(id, state).await
+    crate::commands::scheduling::delete_scheduled_routine(id, app.clone(), state).await
+}
+
+async fn handle_routine_pause(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
+    let state = app_state(app)?;
+    let value =
+        crate::commands::scheduling::pause_scheduled_routine(id, app.clone(), state).await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+async fn handle_routine_resume(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
+    let state = app_state(app)?;
+    let value =
+        crate::commands::scheduling::resume_scheduled_routine(id, app.clone(), state).await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
 }
 
 async fn handle_routine_run(

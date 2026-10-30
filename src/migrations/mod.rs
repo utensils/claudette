@@ -299,4 +299,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20261030150002_chat_message_scheduled_task.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20261030150003_agent_scheduled_task_runs",
+        sql: include_str!("20261030150003_agent_scheduled_task_runs.sql"),
+        legacy_version: None,
+    },
 ];
