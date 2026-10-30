@@ -14,6 +14,7 @@ use crate::process::sanitize_claude_subprocess_env;
 use super::AgentSettings;
 use super::args::{
     build_settings_json, build_stdin_message_with_uuid, build_steering_stdin_message,
+    native_scheduling_disallow,
 };
 use super::binary::resolve_claude_path;
 use super::environment::{apply_teammate_command_override, build_agent_command};
@@ -633,6 +634,10 @@ fn build_persistent_args(
         args.push("--mcp-config".to_string());
         args.push(mcp_json.clone());
     }
+    if let Some(disallow) = native_scheduling_disallow(settings.mcp_config.as_deref()) {
+        args.push("--disallowedTools".to_string());
+        args.push(disallow);
+    }
 
     if settings.plan_mode {
         args.push("--permission-mode".to_string());
@@ -689,6 +694,32 @@ fn build_persistent_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persistent_args_hide_native_scheduling_only_with_claudette_server() {
+        let with_server = AgentSettings {
+            mcp_config: Some(
+                r#"{"mcpServers":{"claudette":{"type":"stdio","command":"x"}}}"#.to_string(),
+            ),
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &with_server);
+        let idx = args
+            .iter()
+            .position(|a| a == "--disallowedTools")
+            .expect("native scheduling tools hidden");
+        assert_eq!(
+            args[idx + 1],
+            "ScheduleWakeup,CronCreate,CronList,CronDelete"
+        );
+
+        let without = AgentSettings {
+            mcp_config: Some(r#"{"mcpServers":{"s":{"type":"stdio","command":"x"}}}"#.to_string()),
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &without);
+        assert!(!args.contains(&"--disallowedTools".to_string()));
+    }
 
     #[test]
     fn test_build_persistent_args_includes_input_format() {
