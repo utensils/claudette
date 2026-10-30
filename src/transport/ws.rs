@@ -57,9 +57,9 @@ impl WebSocketTransport {
         // We do our own fingerprint verification (TOFU).
         let tls_config = rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(FingerprintCapturingVerifier {
-                fingerprint: Arc::clone(&fingerprint_slot),
-            }))
+            .with_custom_certificate_verifier(Arc::new(FingerprintCapturingVerifier::new(
+                Arc::clone(&fingerprint_slot),
+            )))
             .with_no_client_auth();
 
         let connector = tokio_tungstenite::Connector::Rustls(Arc::new(tls_config));
@@ -289,11 +289,29 @@ impl Transport for WebSocketTransport {
     }
 }
 
-/// TLS certificate verifier that accepts all certificates but captures the
-/// server's certificate fingerprint (SHA-256) for TOFU verification.
+/// TLS certificate verifier that accepts any certificate (servers are
+/// self-signed) but captures its SHA-256 fingerprint for TOFU pinning.
+///
+/// Handshake signatures are still verified against the presented
+/// certificate's public key. Without that, a peer could present a copy of
+/// the pinned certificate while holding a different private key and the
+/// fingerprint check would pass.
 #[derive(Debug)]
 struct FingerprintCapturingVerifier {
     fingerprint: Arc<std::sync::Mutex<Option<String>>>,
+    /// Explicit rather than `CryptoProvider::get_default()`: clients never
+    /// install a process default (only the embedded server does).
+    algorithms: rustls::crypto::WebPkiSupportedAlgorithms,
+}
+
+impl FingerprintCapturingVerifier {
+    fn new(fingerprint: Arc<std::sync::Mutex<Option<String>>>) -> Self {
+        Self {
+            fingerprint,
+            algorithms: rustls::crypto::aws_lc_rs::default_provider()
+                .signature_verification_algorithms,
+        }
+    }
 }
 
 impl rustls::client::danger::ServerCertVerifier for FingerprintCapturingVerifier {
@@ -316,35 +334,23 @@ impl rustls::client::danger::ServerCertVerifier for FingerprintCapturingVerifier
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::RSA_PSS_SHA384,
-            rustls::SignatureScheme::RSA_PSS_SHA512,
-            rustls::SignatureScheme::ED25519,
-            rustls::SignatureScheme::ED448,
-        ]
+        self.algorithms.supported_schemes()
     }
 }
