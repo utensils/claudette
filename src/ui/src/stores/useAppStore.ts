@@ -56,6 +56,7 @@ import {
   createPendingChatPromptsSlice,
   type PendingChatPromptsSlice,
 } from "./slices/pendingChatPromptsSlice";
+import {
   createSchedulingSlice,
   type SchedulingSlice,
 } from "./slices/schedulingSlice";

@@ -28,7 +28,7 @@ export interface ScheduledTask {
   last_error: string | null;
   disabled_reason: string | null;
   /** Backend the task was scheduled under. The scheduler forwards this to
-   *  `send_chat_message` on fire so a cron created from a Codex / Pi chat
+   *  `send_chat_message` on fire so a cron created from a Codex chat
    *  runs on the same runtime it was scheduled under. `null` falls back
    *  to the global default backend at fire time. */
   backend_id: string | null;

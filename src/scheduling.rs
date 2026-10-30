@@ -70,7 +70,7 @@ pub struct ScheduledTask {
     pub last_error: Option<String>,
     pub disabled_reason: Option<String>,
     /// Backend the task was scheduled under. The scheduler passes this
-    /// through to `send_chat_message` so a Codex- or Pi-chat cron fires
+    /// through to `send_chat_message` so a Codex-chat cron fires
     /// on its own backend instead of falling through to the global
     /// `default_agent_backend` app setting. `None` for legacy rows and
     /// for agent-callable scheduling that chose not to pin a backend —

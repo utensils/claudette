@@ -345,7 +345,7 @@ pub async fn dispatch_task_prompt(
             .clone()
             .ok_or("scheduled task has no target session")?;
         // Forward the row's pinned backend / model so a cron created from a
-        // Codex or Pi chat fires on the same runtime it was scheduled under.
+        // Codex chat fires on the same runtime it was scheduled under.
         // Either being `None` keeps the existing global-default fallback.
         dispatch_prompt_to_session_inner(
             app,
