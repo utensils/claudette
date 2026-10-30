@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { addRemoteConnection } from "../../services/tauri";
+import { adoptPairResult } from "../sidebar/remoteConnectionActions";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
@@ -9,9 +10,6 @@ export function AddRemoteModal() {
   const { t } = useTranslation("modals");
   const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
-  const addRemote = useAppStore((s) => s.addRemoteConnection);
-  const addActiveId = useAppStore((s) => s.addActiveRemoteId);
-  const mergeRemoteData = useAppStore((s) => s.mergeRemoteData);
   const [connectionString, setConnectionString] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -22,11 +20,7 @@ export function AddRemoteModal() {
     setError(null);
     try {
       const result = await addRemoteConnection(connectionString.trim());
-      addRemote(result.connection);
-      addActiveId(result.connection.id);
-      if (result.initial_data) {
-        mergeRemoteData(result.connection.id, result.initial_data);
-      }
+      adoptPairResult(result);
       closeModal();
     } catch (e) {
       setError(String(e));

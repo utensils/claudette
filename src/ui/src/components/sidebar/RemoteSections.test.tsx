@@ -15,6 +15,9 @@ interface RemoteSectionsStore {
   remoteConnections: RemoteConnectionInfo[];
   removeActiveRemoteId: ReturnType<typeof vi.fn>;
   removeRemoteConnection: ReturnType<typeof vi.fn>;
+  reconnectingRemoteIds: string[];
+  openModal: ReturnType<typeof vi.fn>;
+  addToast: ReturnType<typeof vi.fn>;
 }
 
 const remoteServices = vi.hoisted(() => ({
@@ -47,6 +50,9 @@ const store = vi.hoisted(
     remoteConnections: [],
     removeActiveRemoteId: vi.fn(),
     removeRemoteConnection: vi.fn(),
+    reconnectingRemoteIds: [],
+    openModal: vi.fn(),
+    addToast: vi.fn(),
   }),
 );
 
@@ -91,7 +97,7 @@ vi.mock("../../hooks/useTabDragReorder", () => ({
   }),
 }));
 
-import { RemoteSections } from "./Sidebar";
+import { RemoteSections } from "./RemoteSections";
 
 const discoveredServer = {
   name: "Studio Mac",
@@ -150,5 +156,25 @@ describe("RemoteSections", () => {
     expect(document.body.textContent).toContain("nearby_section");
     expect(document.body.textContent).toContain("Studio Mac");
     expect(document.body.textContent).toContain("studio-mac.local");
+  });
+
+  it("opens the pairing modal with the advertised fingerprint", async () => {
+    store.discoveredServers = [discoveredServer];
+    store.openModal.mockReset();
+
+    await renderRemoteSections();
+    const button = [...document.querySelectorAll("button")].find(
+      (b) => b.textContent === "workspace_connect",
+    );
+    await act(async () => {
+      button?.click();
+    });
+
+    expect(store.openModal).toHaveBeenCalledWith("pairRemote", {
+      host: "studio-mac.local",
+      port: 7683,
+      name: "Studio Mac",
+      fingerprintPrefix: "feed1234",
+    });
   });
 });

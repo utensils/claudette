@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { findPendingPlaceholderForCreatedWorkspace } from "./stores/slices/workspacesSlice";
-import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, bootOk, reportBootStage, getClaudeAuthStatus } from "./services/tauri";
+import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, bootOk, reportBootStage, getClaudeAuthStatus } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -60,7 +60,6 @@ function App() {
   const hydrateWorkspaceScmLinks = useAppStore(
     (s) => s.hydrateWorkspaceScmLinks,
   );
-  const setRemoteConnections = useAppStore((s) => s.setRemoteConnections);
   const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
   const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
@@ -326,9 +325,8 @@ function App() {
     // the Rust side — components consult this to hide Browse
     // buttons rather than gambling on a crash.
     useAppStore.getState().fetchFileDialogCapability();
-    listRemoteConnections()
-      .then(setRemoteConnections)
-      .catch((err) => console.error("Failed to load remote connections:", err));
+    // Saved remote connections load in useRemoteConnectionLifecycle, which
+    // also resyncs live ones and auto-connects.
     // Poll discovered servers every 5s so the Nearby list stays current.
     const refreshDiscoveredServers = () => {
       listDiscoveredServers()
@@ -955,7 +953,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteMcpEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteMcpEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

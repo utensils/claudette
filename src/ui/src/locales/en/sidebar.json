@@ -85,5 +85,8 @@
   "no_workspaces": "No workspaces yet.",
   "no_workspaces_repo_filter": "No workspaces match this repo filter.",
   "nothing_to_show": "Nothing to show.",
-  "remote_connection_lost": "Lost connection to {{name}}"
+  "remote_connection_lost": "Lost connection to {{name}}",
+  "remote_reconnected": "Reconnected to {{name}}",
+  "remote_certificate_changed": "{{name}} has a new certificate — pair again with its token",
+  "remote_action_failed": "Remote action failed: {{error}}"
 }

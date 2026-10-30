@@ -13,6 +13,9 @@ export interface RemoteSlice {
   remoteConnections: RemoteConnectionInfo[];
   discoveredServers: DiscoveredServer[];
   activeRemoteIds: string[];
+  /** Saved connections with an automatic (re)connect attempt pending. */
+  reconnectingRemoteIds: string[];
+  setRemoteReconnecting: (id: string, reconnecting: boolean) => void;
   setRemoteConnections: (conns: RemoteConnectionInfo[]) => void;
   addRemoteConnection: (conn: RemoteConnectionInfo) => void;
   removeRemoteConnection: (id: string) => void;
@@ -48,6 +51,17 @@ export const createRemoteSlice: StateCreator<
   remoteConnections: [],
   discoveredServers: [],
   activeRemoteIds: [],
+  reconnectingRemoteIds: [],
+  setRemoteReconnecting: (id, reconnecting) =>
+    set((s) => {
+      const has = s.reconnectingRemoteIds.includes(id);
+      if (has === reconnecting) return s;
+      return {
+        reconnectingRemoteIds: reconnecting
+          ? [...s.reconnectingRemoteIds, id]
+          : s.reconnectingRemoteIds.filter((rid) => rid !== id),
+      };
+    }),
   setRemoteConnections: (conns) => set({ remoteConnections: conns }),
   addRemoteConnection: (conn) =>
     set((s) => ({ remoteConnections: [...s.remoteConnections, conn] })),
@@ -55,6 +69,7 @@ export const createRemoteSlice: StateCreator<
     set((s) => ({
       remoteConnections: s.remoteConnections.filter((c) => c.id !== id),
       activeRemoteIds: s.activeRemoteIds.filter((rid) => rid !== id),
+      reconnectingRemoteIds: s.reconnectingRemoteIds.filter((rid) => rid !== id),
     })),
   setDiscoveredServers: (servers) => set({ discoveredServers: servers }),
   setActiveRemoteIds: (ids) => set({ activeRemoteIds: ids }),

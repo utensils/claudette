@@ -1,40 +1,142 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
-import { forgetRemotePtys } from "../services/tauri";
+import type { TFunction } from "i18next";
+import {
+  listActiveRemoteConnections,
+  listRemoteConnections,
+} from "../services/tauri";
 import { useAppStore } from "../stores/useAppStore";
+import {
+  connectRemoteConnection,
+  dropConnectionState,
+  isCertificateMismatch,
+  resyncActiveConnection,
+  wasDisconnectedByUser,
+} from "../components/sidebar/remoteConnectionActions";
 
 /** Payload of the Rust-side `remote-connection-lost` event. */
 interface RemoteConnectionLostPayload {
   connection_id: string;
 }
 
+/** Backoff between automatic connect attempts; the last value repeats. */
+export const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+
+const pending = new Map<string, ReturnType<typeof setTimeout>>();
+
+function connectionName(id: string): string {
+  return (
+    useAppStore.getState().remoteConnections.find((c) => c.id === id)?.name ??
+    id
+  );
+}
+
+function stopReconnecting(id: string): void {
+  const timer = pending.get(id);
+  if (timer) clearTimeout(timer);
+  pending.delete(id);
+  useAppStore.getState().setRemoteReconnecting(id, false);
+}
+
 /**
- * Keeps the store in sync with the Rust `RemoteConnectionManager` when a
- * remote connection drops unexpectedly (server restart, network loss).
- * Explicit disconnects don't emit this event — the caller already cleaned
- * up the store.
+ * Keep trying to connect `id` with backoff until it succeeds, the user
+ * disconnects or removes it, or the server's certificate changes (which
+ * needs the user to re-pair).
+ */
+export function scheduleReconnect(
+  id: string,
+  t: TFunction<"sidebar">,
+  { announce, attempt = 0 }: { announce: boolean; attempt?: number },
+): void {
+  if (pending.has(id)) return;
+  useAppStore.getState().setRemoteReconnecting(id, true);
+  const delay =
+    RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)];
+  pending.set(
+    id,
+    setTimeout(async () => {
+      pending.delete(id);
+      const state = useAppStore.getState();
+      const stillSaved = state.remoteConnections.some((c) => c.id === id);
+      if (
+        !stillSaved ||
+        wasDisconnectedByUser(id) ||
+        state.activeRemoteIds.includes(id)
+      ) {
+        stopReconnecting(id);
+        return;
+      }
+      try {
+        await connectRemoteConnection(id);
+        stopReconnecting(id);
+        if (announce) {
+          state.addToast(t("remote_reconnected", { name: connectionName(id) }));
+        }
+      } catch (e) {
+        if (isCertificateMismatch(e)) {
+          stopReconnecting(id);
+          state.addToast(
+            t("remote_certificate_changed", { name: connectionName(id) }),
+          );
+          return;
+        }
+        scheduleReconnect(id, t, { announce, attempt: attempt + 1 });
+      }
+    }, delay),
+  );
+}
+
+/**
+ * App-level remote connection lifecycle:
+ * - on launch (or webview reload), re-adopt connections the Rust side
+ *   still holds and auto-connect saved servers marked `auto_connect`;
+ * - when a connection drops unexpectedly, clear its live state and keep
+ *   reconnecting in the background.
  */
 export function useRemoteConnectionLifecycle() {
   const { t } = useTranslation("sidebar");
 
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [saved, active] = await Promise.all([
+          listRemoteConnections(),
+          listActiveRemoteConnections(),
+        ]);
+        if (cancelled) return;
+        useAppStore.getState().setRemoteConnections(saved);
+        for (const id of active) {
+          resyncActiveConnection(id).catch((e) =>
+            console.error("Failed to resync remote connection:", e),
+          );
+        }
+        for (const conn of saved) {
+          if (conn.auto_connect && !active.includes(conn.id)) {
+            scheduleReconnect(conn.id, t, { announce: false });
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load remote connections:", e);
+      }
+    })();
+
     const unlisten = listen<RemoteConnectionLostPayload>(
       "remote-connection-lost",
       (event) => {
         const id = event.payload.connection_id;
         const state = useAppStore.getState();
         if (!state.activeRemoteIds.includes(id)) return;
-        const name =
-          state.remoteConnections.find((c) => c.id === id)?.name ?? id;
-        state.removeActiveRemoteId(id);
-        state.clearRemoteData(id);
-        forgetRemotePtys(id);
-        state.addToast(t("remote_connection_lost", { name }));
+        dropConnectionState(id);
+        state.addToast(t("remote_connection_lost", { name: connectionName(id) }));
+        scheduleReconnect(id, t, { announce: true });
       },
     );
     return () => {
+      cancelled = true;
       void unlisten.then((fn) => fn());
+      for (const id of [...pending.keys()]) stopReconnecting(id);
     };
   }, [t]);
 }

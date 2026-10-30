@@ -83,5 +83,8 @@
   "no_workspaces": "Ainda não há workspaces.",
   "no_workspaces_repo_filter": "Nenhum workspace corresponde a este filtro de repositório.",
   "nothing_to_show": "Nada para mostrar.",
-  "remote_connection_lost": "Conexão com {{name}} perdida"
+  "remote_connection_lost": "Conexão com {{name}} perdida",
+  "remote_reconnected": "Reconectado a {{name}}",
+  "remote_certificate_changed": "{{name}} tem um novo certificado — emparelhe novamente com o token",
+  "remote_action_failed": "A ação remota falhou: {{error}}"
 }

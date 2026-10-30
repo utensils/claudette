@@ -3,7 +3,6 @@
   "delete_workspace_warning": "Willst du <strong>{{name}}</strong> wirklich löschen? Der Branch und nicht-gemergede Commits gehen dauerhaft verloren.",
   "delete_workspace_deleting": "Lösche…",
   "delete_workspace_confirm": "Löschen",
-
   "add_repo_title": "Repository hinzufügen",
   "add_repo_tab_open": "Vorhandenes öffnen",
   "add_repo_tab_create": "Neues erstellen",
@@ -17,33 +16,28 @@
   "add_repo_create_name_placeholder": "mein-projekt",
   "add_repo_creating": "Erstelle…",
   "add_repo_create_confirm": "Erstellen",
-
   "add_remote_title": "Remote-Server hinzufügen",
   "add_remote_conn_label": "Verbindungsstring",
   "add_remote_conn_placeholder": "claudette://hostname:7683/pairing-token",
   "add_remote_conn_hint": "Füge den Verbindungsstring ein, den claudette-server auf der Remote-Maschine anzeigt.",
   "add_remote_connecting": "Verbinde…",
   "add_remote_confirm": "Verbinden",
-
   "rollback_title": "Konversation zurücksetzen",
   "rollback_clear_all": "Komplette Konversation löschen und neu beginnen?",
   "rollback_to_before": "Auf den Stand vor dieser Nachricht zurücksetzen? Alle Nachrichten danach werden entfernt.",
   "rollback_restore_files": "Dateien auch auf diesen Checkpoint zurücksetzen",
   "rollback_rolling_back": "Setze zurück…",
   "rollback_confirm": "Zurücksetzen",
-
   "nightly_title": "Auf Nightly-Channel wechseln?",
   "nightly_warning": "Nightly-Builds sind ungetestete Vorab-Releases vom aktuellen <strong>main</strong>-Branch. Sie können Bugs enthalten oder Features brechen. Du kannst jederzeit zurück auf Stable wechseln.",
   "nightly_switching": "Wechsle…",
   "nightly_confirm": "Auf Nightly wechseln",
-
   "relink_title": "Repository neu verknüpfen",
   "relink_warning": "Pfad für <strong>{{name}}</strong> ist nicht mehr gültig. Gib den neuen Ort an.",
   "relink_new_path_label": "Neuer Pfad",
   "relink_new_path_placeholder": "/neuer/pfad/zum/repository",
   "relink_relinking": "Verknüpfe neu…",
   "relink_confirm": "Neu verknüpfen",
-
   "remove_repo_title": "Repository entfernen",
   "remove_repo_warning": "Willst du <strong>{{name}}</strong> wirklich entfernen? Das Repository wird nicht von der Festplatte gelöscht, nur abgemeldet.",
   "remove_repo_will_destroy_pre": "Wird unwiderruflich gelöscht:",
@@ -53,7 +47,6 @@
   "remove_repo_workspaces": "Workspaces",
   "remove_repo_removing": "Entferne…",
   "remove_repo_confirm": "Entfernen",
-
   "share_title": "Diese Maschine teilen",
   "share_conn_label": "Verbindungsstring",
   "share_conn_hint": "Teil diesen String mit anderen, damit sie sich aus ihrer Claudette-App mit deinen Workspaces verbinden können.",
@@ -62,7 +55,6 @@
   "share_qr_alt": "QR-Code mit dem Verbindungsstring",
   "share_stop": "Teilen beenden",
   "share_done": "Fertig",
-
   "setup_script_title": "Setup-Skript prüfen",
   "setup_script_warning": "Dieser Workspace hat ein Setup-Skript aus <strong>{{source}}</strong>, das ausgeführt wird. Bitte vorher prüfen.",
   "setup_script_source_repo_settings": "Repo-Einstellungen",
@@ -71,7 +63,6 @@
   "setup_script_skip": "Überspringen",
   "setup_script_running": "Läuft…",
   "setup_script_confirm": "Skript ausführen",
-
   "archive_script_title": "Archiv-Skript prüfen",
   "archive_script_warning": "Dieser Workspace hat ein Archiv-Skript aus <strong>{{source}}</strong>, das vor dem Entfernen des Worktrees ausgeführt wird. Bitte vorher prüfen.",
   "archive_script_label": "Skript",
@@ -79,7 +70,6 @@
   "archive_script_skip": "Archivieren ohne Ausführung",
   "archive_script_running": "Läuft…",
   "archive_script_confirm": "Ausführen & archivieren",
-
   "import_worktrees_title": "Worktrees importieren",
   "import_worktrees_scanning": "Suche nach existierenden Worktrees…",
   "import_worktrees_none_found": "Keine existierenden Worktrees für dieses Repository gefunden.",
@@ -92,7 +82,6 @@
   "import_worktrees_delete_confirm": "Diesen Worktree und alle Dateien dauerhaft löschen?\n\n{{path}}",
   "import_worktrees_delete_confirm_button": "Von Festplatte löschen",
   "import_worktrees_deleting": "Lösche…",
-
   "mcp_servers_title": "MCP-Server",
   "mcp_servers_detecting": "Suche nach MCP-Servern…",
   "mcp_servers_none_found": "Keine nicht-portablen MCP-Server für dieses Repository erkannt.",
@@ -100,13 +89,11 @@
   "mcp_servers_detected_desc": "Diese MCP-Server sind für dieses Projekt konfiguriert, aber nicht automatisch in Workspaces verfügbar. Wähl aus, welche eingebunden werden sollen:",
   "mcp_servers_saving": "Speichere…",
   "mcp_servers_confirm": "Auswahl speichern",
-
   "missing_cli_title": "{{name}} nicht installiert",
   "missing_cli_platform_pre": "Erkannte Plattform:",
   "missing_cli_no_guidance": "Keine Installations-Anleitung für dieses Tool verfügbar — bitte in dessen Dokumentation nachschlagen.",
   "missing_cli_copy": "Kopieren",
   "missing_cli_copied": "Kopiert",
-
   "env_trust_title": "Environment-Vertrauen nötig",
   "env_trust_intro": "Ein oder mehrere Env-Provider-Plugins brauchen deine Erlaubnis bevor sie für dieses Projekt laufen können. Bis du entscheidest, startet der Agent ohne ihre Tools und Variablen.",
   "env_trust_repo_label": "Projekt",
@@ -129,7 +116,6 @@
   "env_trust_details_hide": "Rohen Fehler verbergen",
   "env_trust_cancel": "Später entscheiden",
   "env_trust_done": "Schließen",
-
   "bulk_cleanup_title": "Archivierte Workspaces in {{repo}} aufräumen",
   "bulk_cleanup_title_all": "Archivierte Workspaces über alle Repositories aufräumen",
   "bulk_cleanup_title_fallback_repo": "diesem Projekt",
@@ -163,5 +149,9 @@
   "bulk_cleanup_row_deleted": "Gelöscht",
   "bulk_cleanup_row_failed": "Fehlgeschlagen",
   "bulk_cleanup_row_cancelled": "Übersprungen",
-  "bulk_cleanup_pending_archive": "Wird noch archiviert — wählbar in einem Moment"
+  "bulk_cleanup_pending_archive": "Wird noch archiviert — wählbar in einem Moment",
+  "pair_remote_title": "Mit {{name}} koppeln",
+  "pair_remote_token_label": "Kopplungstoken",
+  "pair_remote_hint": "Das Token ist der letzte Teil der Verbindungszeichenfolge, die „Diesen Rechner teilen“ (oder claudette-server) auf {{host}} anzeigt.",
+  "pair_remote_confirm": "Koppeln"
 }

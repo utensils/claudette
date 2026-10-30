@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { ContextMenuItem } from "../shared/ContextMenu";
+import type { TFunction } from "i18next";
 import type { WorkspaceStatus } from "../../types/workspace";
 
 export interface WorkspaceContextMenuLabels {
@@ -129,4 +130,18 @@ export function buildWorkspaceContextMenuItems(
           } satisfies ContextMenuItem,
         ]),
   ];
+}
+
+export function workspaceContextMenuLabels(t: TFunction<"sidebar">): WorkspaceContextMenuLabels {
+  return {
+    renameWorkspace: t("context_rename_workspace"),
+    markAsUnread: t("context_mark_as_unread"),
+    openInFileManager: t("context_open_in_file_manager"),
+    openInTerminal: t("context_open_in_terminal"),
+    copyWorkingDirectory: t("context_copy_working_directory"),
+    copyClaudeSessionId: t("context_copy_claude_session_id"),
+    archiveWorkspace: t("archive_workspace"),
+    restoreWorkspace: t("restore_workspace"),
+    deleteWorkspace: t("delete_workspace"),
+  };
 }

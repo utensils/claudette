@@ -1,6 +1,7 @@
 import { useAppStore } from "../../stores/useAppStore";
 import { AddRepoModal } from "./AddRepoModal";
 import { AddRemoteModal } from "./AddRemoteModal";
+import { PairRemoteModal } from "./PairRemoteModal";
 import { BulkCleanupArchivedModal } from "./BulkCleanupArchivedModal";
 import { DeleteWorkspaceModal } from "./DeleteWorkspaceModal";
 import { RemoveRepoModal } from "./RemoveRepoModal";
@@ -25,6 +26,8 @@ export function ModalRouter() {
       return <AddRepoModal />;
     case "addRemote":
       return <AddRemoteModal />;
+    case "pairRemote":
+      return <PairRemoteModal />;
     case "deleteWorkspace":
       return <DeleteWorkspaceModal />;
     case "bulkCleanupArchived":

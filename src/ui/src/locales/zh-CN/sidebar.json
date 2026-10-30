@@ -83,5 +83,8 @@
   "no_workspaces": "尚无工作区。",
   "no_workspaces_repo_filter": "没有工作区匹配此仓库筛选。",
   "nothing_to_show": "无内容可显示。",
-  "remote_connection_lost": "与 {{name}} 的连接已断开"
+  "remote_connection_lost": "与 {{name}} 的连接已断开",
+  "remote_reconnected": "已重新连接到 {{name}}",
+  "remote_certificate_changed": "{{name}} 的证书已更改，请使用令牌重新配对",
+  "remote_action_failed": "远程操作失败：{{error}}"
 }

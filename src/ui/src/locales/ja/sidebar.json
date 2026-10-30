@@ -83,5 +83,8 @@
   "no_workspaces": "ワークスペースがまだありません。",
   "no_workspaces_repo_filter": "このリポジトリフィルターに一致するワークスペースはありません。",
   "nothing_to_show": "表示する項目がありません。",
-  "remote_connection_lost": "{{name}} との接続が切れました"
+  "remote_connection_lost": "{{name}} との接続が切れました",
+  "remote_reconnected": "{{name}} に再接続しました",
+  "remote_certificate_changed": "{{name}} の証明書が変わりました。トークンで再ペアリングしてください",
+  "remote_action_failed": "リモート操作に失敗しました: {{error}}"
 }
