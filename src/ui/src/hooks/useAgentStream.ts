@@ -40,6 +40,7 @@ import {
   clearBlockToolsForSession,
 } from "./blockToolMap";
 import { debugChat } from "../utils/chatDebug";
+import { StreamDeltaBuffer } from "./streamDeltaBuffer";
 import { makeChatMessage } from "../utils/chatMessage";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
@@ -289,6 +290,19 @@ function persistBackgroundAgentActivity(
   });
 }
 
+/** `content_block_delta` stream events — the only ones the delta buffer
+ *  absorbs. Everything else flushes it first. */
+function isContentDeltaEvent(agentEvent: AgentStreamPayload["event"]): boolean {
+  if (!("Stream" in agentEvent)) return false;
+  const streamEvent = agentEvent.Stream;
+  return (
+    "type" in streamEvent &&
+    streamEvent.type === "stream_event" &&
+    "type" in streamEvent.event &&
+    streamEvent.event.type === "content_block_delta"
+  );
+}
+
 function isCodexApprovalTool(toolName: string): boolean {
   return (
     toolName === CODEX_COMMAND_APPROVAL_TOOL ||
@@ -413,18 +427,13 @@ interface AgentHookEventPayload {
 }
 
 export function useAgentStream() {
-  const appendStreamingContent = useAppStore((s) => s.appendStreamingContent);
   const setStreamingContent = useAppStore((s) => s.setStreamingContent);
   const setPendingTypewriter = useAppStore((s) => s.setPendingTypewriter);
-  const appendStreamingThinking = useAppStore((s) => s.appendStreamingThinking);
   const clearStreamingThinking = useAppStore((s) => s.clearStreamingThinking);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const addToolActivity = useAppStore((s) => s.addToolActivity);
   const updateToolActivity = useAppStore((s) => s.updateToolActivity);
   const upsertAgentToolCall = useAppStore((s) => s.upsertAgentToolCall);
-  const appendToolActivityInput = useAppStore(
-    (s) => s.appendToolActivityInput
-  );
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const updateChatSession = useAppStore((s) => s.updateChatSession);
   const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
@@ -432,6 +441,19 @@ export function useAgentStream() {
   const setAgentApproval = useAppStore((s) => s.setAgentApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
   const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
+
+  // Frame-coalesced text / thinking / tool-input deltas. Flushed before every
+  // non-delta event (see `StreamDeltaBuffer` for the ordering contract).
+  const deltaBufferRef = useRef<StreamDeltaBuffer | null>(null);
+  deltaBufferRef.current ??= new StreamDeltaBuffer({
+    appendText: (sessionId, text) =>
+      useAppStore.getState().appendStreamingContent(sessionId, text),
+    appendThinking: (sessionId, text) =>
+      useAppStore.getState().appendStreamingThinking(sessionId, text),
+    appendToolInput: (sessionId, toolUseId, json) =>
+      useAppStore.getState().appendToolActivityInput(sessionId, toolUseId, json),
+  });
+  const deltaBuffer = deltaBufferRef.current;
 
   // Per-session map: sessionId → (content-block index → tool entry). Two
   // concurrent sessions routinely reuse the same Anthropic content-block
@@ -475,6 +497,10 @@ export function useAgentStream() {
       if (!active) return;
       const { workspace_id: wsId, chat_session_id: sessionId, event: agentEvent } =
         event.payload;
+
+      // Anything other than a content delta may read (or snapshot) the
+      // fields the buffer accumulates, so land them first.
+      if (!isContentDeltaEvent(agentEvent)) deltaBuffer.flush();
 
       if ("ProcessExited" in agentEvent) {
         debugChat("stream", "ProcessExited", {
@@ -774,7 +800,7 @@ export function useAgentStream() {
                 case "content_block_delta": {
                   const delta = inner.delta;
                   if ("type" in delta && delta.type === "text_delta") {
-                    appendStreamingContent(sessionId, delta.text);
+                    deltaBuffer.appendText(sessionId, delta.text);
                   }
                   if (
                     "type" in delta &&
@@ -787,10 +813,10 @@ export function useAgentStream() {
                       inner.index,
                     );
                     if (entry) {
-                      appendToolActivityInput(
+                      deltaBuffer.appendToolInput(
                         sessionId,
                         entry.toolUseId,
-                        delta.partial_json
+                        delta.partial_json,
                       );
                     }
                   }
@@ -805,10 +831,10 @@ export function useAgentStream() {
                       inner.index,
                     );
                     if (entry) {
-                      appendToolActivityInput(
+                      deltaBuffer.appendToolInput(
                         sessionId,
                         entry.toolUseId,
-                        delta.partial_json
+                        delta.partial_json,
                       );
                     }
                   }
@@ -818,7 +844,7 @@ export function useAgentStream() {
                     "thinking" in delta &&
                     delta.thinking
                   ) {
-                    appendStreamingThinking(sessionId, delta.thinking);
+                    deltaBuffer.appendThinking(sessionId, delta.thinking);
                   }
                   break;
                 }
@@ -1038,18 +1064,17 @@ export function useAgentStream() {
 
     return () => {
       active = false;
+      deltaBuffer.flush();
       unlisten.then((fn) => fn());
     };
   }, [
-    appendStreamingContent,
+    deltaBuffer,
     setStreamingContent,
-    appendStreamingThinking,
     clearStreamingThinking,
     addChatMessage,
     setPendingTypewriter,
     addToolActivity,
     updateToolActivity,
-    appendToolActivityInput,
     updateWorkspace,
     setAgentQuestion,
     setPlanApproval,
@@ -1063,6 +1088,7 @@ export function useAgentStream() {
     let active = true;
     const unlisten = listen<AgentHookEventPayload>("agent-hook-event", (event) => {
       if (!active) return;
+      deltaBuffer.flush();
       const { chat_session_id: sessionId, input } = event.payload;
       const agentId = input.agent_id;
       const hookName = input.hook_event_name;
@@ -1154,7 +1180,7 @@ export function useAgentStream() {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [upsertAgentToolCall, updateToolActivity]);
+  }, [deltaBuffer, upsertAgentToolCall, updateToolActivity]);
 
   // Listen for `agent-permission-prompt` — emitted by the Rust bridge the
   // moment a CLI `control_request: can_use_tool` is captured for
@@ -1172,6 +1198,7 @@ export function useAgentStream() {
       input: unknown;
     }>("agent-permission-prompt", (event) => {
       if (!active) return;
+      deltaBuffer.flush();
       const {
         chat_session_id: sessionId,
         tool_use_id: toolUseId,
@@ -1282,7 +1309,13 @@ export function useAgentStream() {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [setAgentApproval, setAgentQuestion, setPlanApproval, updateChatSession]);
+  }, [
+    deltaBuffer,
+    setAgentApproval,
+    setAgentQuestion,
+    setPlanApproval,
+    updateChatSession,
+  ]);
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
@@ -1295,6 +1328,9 @@ export function useAgentStream() {
       checkpoint: ConversationCheckpoint;
     }>("checkpoint-created", (event) => {
       if (!active) return;
+      // The turn's tool activities are snapshotted below; their input JSON
+      // must be complete.
+      deltaBuffer.flush();
       const { chat_session_id: sessionId, checkpoint } = event.payload;
       addCheckpoint(sessionId, checkpoint);
       turnCheckpointIdRef.current[sessionId] = checkpoint.id;
@@ -1395,7 +1431,7 @@ export function useAgentStream() {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [addCheckpoint, setChatMessages]);
+  }, [addCheckpoint, deltaBuffer, setChatMessages]);
 
   // Listen for workspace-renamed events (auto-rename after first prompt).
   useEffect(() => {
