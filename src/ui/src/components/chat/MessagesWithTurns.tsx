@@ -1,23 +1,13 @@
 import React, { memo, useCallback, useEffect, useMemo } from "react";
-import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
-import { loadAttachmentData } from "../../services/tauri";
 import type { AgentConclusion, ChatMessage, ChatAttachment } from "../../types/chat";
-import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
-import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
-import { HighlightedPlainText } from "./HighlightedPlainText";
-import { ThinkingBlock } from "./ThinkingBlock";
 import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
 import { CompactionDivider } from "./CompactionDivider";
 import { SyntheticContinuationMessage } from "./SyntheticContinuationMessage";
 import { SetupScriptBanner } from "./SetupScriptBanner";
-import { MessageAttachment, isTextDataMediaType } from "./MessageAttachment";
-import {
-  type DownloadableAttachment,
-  openAttachmentWithDefaultApp,
-} from "../../utils/attachmentDownload";
+import type { DownloadableAttachment } from "../../utils/attachmentDownload";
 import {
   checkpointHasFileChanges,
   clearAllHasFileChanges,
@@ -33,35 +23,25 @@ import {
   parseSyntheticSummarySentinel,
 } from "../../utils/compactionSentinel";
 import { parseSetupScriptMessage } from "../../utils/setupScriptMessage";
-import { renderUltrathinkText } from "./ultrathink";
-import {
-  processActivities,
-  turnHasTaskActivity,
-} from "../../hooks/useTaskTracker";
-import type {
-  TaskTrackerResult,
-  TrackedTask,
-} from "../../hooks/useTaskTracker";
+import { deriveTaskProgressByTurn } from "../../hooks/useTaskTracker";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
-import { TurnSummary } from "./TurnSummary";
+import { CompletedTurnGroup } from "./CompletedTurnGroup";
+import { ChatMessageBubble } from "./ChatMessageBubble";
+import { buildTurnAssistantRouter } from "./turnAssistantRouting";
 import { ToolActivityRow } from "./ToolActivityRow";
 import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { TurnFooter } from "./TurnFooter";
 import { TurnEditSummaryCard } from "./EditChangeSummary";
 import { summarizeTurnEdits } from "./editActivitySummary";
-import { PdfThumbnail } from "./PdfThumbnail";
-import { MessageCopyButton } from "./MessageCopyButton";
 import {
   groupToolActivitiesForDisplay,
   type ToolActivityDisplayGroup,
 } from "./toolActivityGroups";
-import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
-import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
+import { isClaudeAuthError } from "../auth/claudeAuth";
 import { monacoFileLinkTarget } from "./chatFileLinks";
 import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import { useWorkspaceFileIndex } from "./useWorkspaceFileIndex";
-import { detectFileReferences } from "../../utils/filePathLinks";
 import {
   EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
@@ -133,18 +113,15 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   streamingMessageNode?: React.ReactNode;
   onOpenFileLink?: () => void;
 }) {
-  const { t } = useTranslation("chat");
   const completedTurns = useAppStore(
     (s) => s.completedTurns[sessionId] ?? EMPTY_COMPLETED_TURNS,
   );
   // Retained for the rare path where every group of a turn shares the
   // same id and a per-turn toggle is what we want; today's
   // chronological-split rendering uses the per-group setter below.
-  const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
   const collapsedToolGroups = useAppStore(
     (s) => s.collapsedToolGroupsBySession[sessionId],
   );
-  const setCollapsedToolGroup = useAppStore((s) => s.setCollapsedToolGroup);
   const checkpoints = useAppStore(
     (s) => s.checkpoints[sessionId] ?? EMPTY_CHECKPOINTS,
   );
@@ -200,53 +177,15 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   // Assistant message after the FK anchor in chronological order. This
   // re-route happens here so the storage shape can stay simple.
   const attachmentsByMessage = useMemo(() => {
-    // Single reverse pass: each User message maps to the most recent
-    // Assistant message that follows it. O(n) instead of O(n²).
-    const userToNextAssistant = new Map<string, string>();
-    const loadedMessageIds = new Set<string>();
-    let nextAssistantId: string | null = null;
-    let firstAssistantInWindow: string | null = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      loadedMessageIds.add(m.id);
-      if (m.role === "Assistant") {
-        nextAssistantId = m.id;
-        firstAssistantInWindow = m.id;
-      } else if (m.role === "User" && nextAssistantId) {
-        userToNextAssistant.set(m.id, nextAssistantId);
-      }
-    }
-    // Detect a mid-turn page start: the first non-System row at the top of
-    // the window is an Assistant. Pages can begin with a System sentinel
-    // (e.g. compaction marker) before the carry-over assistant, so we can't
-    // just check messages[0].role.
-    const firstNonSystem = messages.find((m) => m.role !== "System");
-    const startsMidTurn = firstNonSystem?.role === "Assistant";
+    const route = buildTurnAssistantRouter(messages);
     const map = new Map<string, ChatAttachment[]>();
     for (const att of chatAttachments) {
-      let targetId: string;
-      if (att.origin === "agent") {
-        // Anchor user is in the loaded window: route to the assistant of
-        // that turn. Anchor user is NOT loaded but the page begins mid-turn:
-        // the orphan agent rows belong to the carry-over assistant — i.e.
-        // the first Assistant message at the top of the loaded window.
-        // Otherwise fall back to the raw anchor (which won't render — that's
-        // intentional for stale attachments whose turn is fully out-of-view).
-        const routed = userToNextAssistant.get(att.message_id);
-        if (routed) {
-          targetId = routed;
-        } else if (
-          !loadedMessageIds.has(att.message_id) &&
-          firstAssistantInWindow !== null &&
-          startsMidTurn
-        ) {
-          targetId = firstAssistantInWindow;
-        } else {
-          targetId = att.message_id;
-        }
-      } else {
-        targetId = att.message_id;
-      }
+      // Agent-origin attachments follow their turn's assistant message;
+      // user-attached ones stay on the message they were sent with.
+      const targetId =
+        att.origin === "agent"
+          ? (route(att.message_id) ?? att.message_id)
+          : att.message_id;
       const list = map.get(targetId);
       if (list) list.push(att);
       else map.set(targetId, [att]);
@@ -262,40 +201,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const conclusionsByMessage = useMemo(() => {
     if (!claudetteMcpEnabled || chatConclusions.length === 0)
       return new Map<string, AgentConclusion[]>();
-    const userToNextAssistant = new Map<string, string>();
-    const loadedMessageIds = new Set<string>();
-    let nextAssistantId: string | null = null;
-    let firstAssistantInWindow: string | null = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      loadedMessageIds.add(m.id);
-      if (m.role === "Assistant") {
-        nextAssistantId = m.id;
-        firstAssistantInWindow = m.id;
-      } else if (m.role === "User" && nextAssistantId) {
-        userToNextAssistant.set(m.id, nextAssistantId);
-      }
-    }
-    const firstNonSystem = messages.find((m) => m.role !== "System");
-    const startsMidTurn = firstNonSystem?.role === "Assistant";
+    const route = buildTurnAssistantRouter(messages);
     const map = new Map<string, AgentConclusion[]>();
     for (const c of chatConclusions) {
-      // A null anchor (no in-flight turn when presented) or an anchor whose
-      // turn is fully out of view won't route; fall back to the carry-over
-      // assistant on a mid-turn page, else skip (matches attachment behavior).
-      const anchor = c.message_id;
-      let targetId: string | null = null;
-      if (anchor && userToNextAssistant.has(anchor)) {
-        targetId = userToNextAssistant.get(anchor)!;
-      } else if (
-        (!anchor || !loadedMessageIds.has(anchor)) &&
-        firstAssistantInWindow !== null &&
-        startsMidTurn
-      ) {
-        targetId = firstAssistantInWindow;
-      } else if (anchor) {
-        targetId = anchor;
-      }
+      // A null anchor (no in-flight turn when presented) or one whose turn is
+      // fully out of view routes to nothing and is skipped.
+      const targetId = route(c.message_id);
       if (targetId === null) continue;
       const list = map.get(targetId);
       if (list) list.push(c);
@@ -641,48 +552,11 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     );
   };
 
-  // Compute cumulative task progress at each turn index in a single O(n) pass.
-  // Carries taskMap/todoMap forward across iterations instead of re-slicing.
-  const taskProgressByTurn = useMemo(() => {
-    const map = new Map<number, TaskTrackerResult>();
-    const taskMap = new Map<string, TrackedTask>();
-    const todoMap = new Map<string, TrackedTask>();
-    const planMap = new Map<string, TrackedTask>();
-    const planMeta: { explanation?: string } = {};
-    const nextSyntheticId = { value: 1 };
-    let anyTasksSoFar = false;
-
-    for (let i = 0; i < completedTurns.length; i++) {
-      processActivities(
-        completedTurns[i].activities,
-        taskMap,
-        todoMap,
-        nextSyntheticId,
-        planMap,
-        planMeta,
-      );
-      if (turnHasTaskActivity(completedTurns[i])) {
-        anyTasksSoFar = true;
-      }
-      if (anyTasksSoFar) {
-        const tasks = [
-          ...taskMap.values(),
-          ...todoMap.values(),
-          ...planMap.values(),
-        ];
-        const completedCount = tasks.filter(
-          (task) => task.status === "completed",
-        ).length;
-        map.set(i, {
-          tasks,
-          completedCount,
-          totalCount: tasks.length,
-          explanation: planMeta.explanation,
-        });
-      }
-    }
-    return map;
-  }, [completedTurns]);
+  // Cumulative task progress at each completed turn (single O(n) pass).
+  const taskProgressByTurn = useMemo(
+    () => deriveTaskProgressByTurn(completedTurns),
+    [completedTurns],
+  );
 
   useEffect(() => {
     debugChat("MessagesWithTurns", "layout", {
@@ -725,95 +599,47 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             }
             // A single turn can produce multiple display groups when
             // chronologically-interleaved messages split its activities;
-            // each group needs its own collapse state so clicking one
-            // chevron doesn't drag every sibling group's expansion with
-            // it.
+            // each group has its own collapse state so clicking one chevron
+            // doesn't drag every sibling group's expansion with it.
             //
             // The key intentionally drops `turn.id` and matches the live
-            // `GroupedToolActivityRows` key format — see
-            // `collapsedToolGroupKey` for the rationale: the same
-            // activity moves from `toolActivities[sessionId]` into
-            // `completedTurns[sessionId][N].activities` when the turn
-            // ends, but its `toolUseId` is preserved verbatim. Sharing
-            // the key across both surfaces means a user-toggled
-            // expand/collapse choice made while running survives the
-            // turn-end transition.
-            //
-            // When no override has been set yet, fall back to
-            // `turn.collapsed` so the turn-level persisted state still
-            // seeds the initial view of replayed-from-DB completed turns.
+            // `ToolActivitiesSection` key format (see `collapsedToolGroupKey`):
+            // the same activity moves from `toolActivities[sessionId]` into
+            // `completedTurns[sessionId][N].activities` when the turn ends with
+            // its `toolUseId` preserved, so a choice made while running
+            // survives the turn-end transition. Without an override,
+            // `turn.collapsed` seeds the initial view of replayed turns.
             const groupKey =
               collapsedToolGroupKey(activities, kind) ??
               // Synthetic fallback for the (impossible-in-practice)
               // empty-activities case — keep keys session-unique without
               // accidentally colliding with a real tool group.
               `tools:__empty__:${turn.id}`;
-            const userOverride = collapsedToolGroups?.[groupKey];
-            // Workflows default to expanded on both sides of the turn
-            // boundary. `turn.collapsed` defaults to true, which would fold
-            // an untouched workflow card the instant its turn ended —
-            // reversing what the user was just watching, and for the one
-            // group kind whose whole point is the phase/agent tree (see
-            // `GroupedWorkflowActivity` for the same default while live).
-            // Agent rollups get the same expanded default (their member
-            // agents are individually collapsed, so the rollup stays compact),
-            // matching `GroupedAgentRollup` on the live side.
-            const isWorkflowGroup = kind === "workflow" || kind === "agents";
-            const collapsed =
-              userOverride ?? (isWorkflowGroup ? false : turn.collapsed);
-            // Single-group turns also flip the legacy `turn.collapsed`
-            // flag so persistence-aware code (Cmd-A "collapse all" etc.)
-            // sees the same state without needing to consult the override
-            // map. Multi-group turns only mutate the per-group override —
-            // touching `turn.collapsed` there would re-create the original
-            // bug.
             const isSingleGroupTurn =
               (chronologicalTurnLayout.groupsByPosition[position] ?? []).filter(
                 (g) => g.globalIdx === globalIdx,
               ).length === 1;
-            const onToggle = () => {
-              const next = !collapsed;
-              setCollapsedToolGroup(sessionId, groupKey, next);
-              // Workflow groups read the override against their own `false`
-              // default and never consult `turn.collapsed`, so syncing the
-              // legacy flag here would drift it away from what the card
-              // actually shows.
-              if (
-                !isWorkflowGroup &&
-                isSingleGroupTurn &&
-                next !== turn.collapsed
-              ) {
-                toggleCompletedTurn(sessionId, globalIdx);
-              }
-            };
             return (
-              <TurnSummary
+              <CompletedTurnGroup
                 key={`${turn.id}:${position}:${label}:${activities[0]?.toolUseId ?? "empty"}`}
+                sessionId={sessionId}
                 turn={turn}
+                globalIdx={globalIdx}
+                groupKey={groupKey}
+                userOverride={collapsedToolGroups?.[groupKey]}
+                isSingleGroupTurn={isSingleGroupTurn}
                 activities={activities}
                 label={label}
-                inline={toolDisplayMode === "inline"}
-                mcp={kind === "mcp"}
                 kind={kind}
-                sessionId={sessionId}
                 showFooter={showFooter}
-                collapsed={collapsed}
-                onToggle={onToggle}
-                taskProgress={
-                  showFooter ? taskProgressByTurn.get(globalIdx) : undefined
-                }
-                assistantText={
-                  showFooter ? (assistantTextByTurnId.get(turn.id) ?? "") : ""
-                }
-                onFork={
-                  showFooter && onForkTurn
-                    ? () => onForkTurn(turn.id)
-                    : undefined
-                }
-                onRollback={showFooter ? buildOnRollback(turn.id) : undefined}
+                toolDisplayMode={toolDisplayMode}
                 searchQuery={searchQuery}
                 worktreePath={worktreePath}
-                onOpenEditFile={showFooter ? openFileInMonaco : undefined}
+                taskProgress={taskProgressByTurn.get(globalIdx)}
+                assistantText={assistantTextByTurnId.get(turn.id) ?? ""}
+                rollbackData={isRunning ? undefined : rollbackByTurnId.get(turn.id)}
+                onForkTurn={onForkTurn}
+                onOpenEditFile={openFileInMonaco}
               />
             );
           },
@@ -927,9 +753,6 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             );
           }
         }
-        const isAuthFailureMessage =
-          (msg.role === "Assistant" || msg.role === "System") &&
-          isClaudeAuthError(msg.content);
 
         // Default rendering for User, Assistant, and non-sentinel System messages.
         return (
@@ -939,178 +762,19 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             {msg.id === pendingMessageId ? (
               streamingMessageNode
             ) : (
-              <div
-                className={`${styles.message} ${styles[
-                  roleClassKey(msg.role, msg.content, {
-                    forceSystemBlock: isAuthFailureMessage,
-                  })
-                ]}${
-                  msg.role === "Assistant" && msg.thinking && showThinkingBlocks
-                    ? ` ${styles.messageLeadingThinking}`
-                    : ""
-                }`}
-              >
-                {msg.role === "User" && (
-                  <div className={styles.roleLabel}>{t("you_label")}</div>
-                )}
-                {msg.role === "User" && msg.content.length > 0 && (
-                  <MessageCopyButton
-                    text={msg.content}
-                    className={styles.userMessageCopyButton}
-                  />
-                )}
-                {msg.role === "Assistant" &&
-                  msg.thinking &&
-                  showThinkingBlocks && (
-                    <ThinkingBlock
-                      content={msg.thinking}
-                      isStreaming={false}
-                      inline={toolDisplayMode === "inline"}
-                      searchQuery={searchQuery}
-                    />
-                  )}
-                <div className={styles.content}>
-                  {attachmentsByMessage.has(msg.id) && (
-                    <div className={styles.messageImages}>
-                      {attachmentsByMessage.get(msg.id)!.map((att) => {
-                        if (att.media_type === "application/pdf") {
-                          return (
-                            <PdfThumbnail
-                              key={att.id}
-                              dataBase64={att.data_base64 || undefined}
-                              attachmentId={att.id}
-                              filename={att.filename}
-                              className={styles.messageImage}
-                              onClick={() => {
-                                (async () => {
-                                  // Persisted attachments strip data_base64 on first
-                                  // load to avoid IPC bloat — fetch on demand.
-                                  let b64 = att.data_base64;
-                                  if (!b64) {
-                                    b64 = await loadAttachmentData(att.id);
-                                  }
-                                  await openAttachmentWithDefaultApp({
-                                    filename: att.filename,
-                                    media_type: att.media_type,
-                                    data_base64: b64,
-                                  });
-                                })().catch((err) =>
-                                  console.error("Failed to open PDF:", err),
-                                );
-                              }}
-                              onContextMenu={(e) =>
-                                onAttachmentContextMenu?.(
-                                  e,
-                                  {
-                                    filename: att.filename,
-                                    media_type: att.media_type,
-                                    data_base64: att.data_base64,
-                                  },
-                                  att.id,
-                                )
-                              }
-                            />
-                          );
-                        }
-                        if (isTextDataMediaType(att.media_type)) {
-                          return (
-                            <MessageAttachment
-                              key={att.id}
-                              attachment={att}
-                              handlers={{
-                                onContextMenu: onAttachmentContextMenu,
-                              }}
-                            />
-                          );
-                        }
-                        return (
-                          <img
-                            key={att.id}
-                            src={`data:${att.media_type};base64,${att.data_base64}`}
-                            alt={att.filename}
-                            className={styles.messageImage}
-                            onClick={(e) =>
-                              onAttachmentClick?.(e, {
-                                filename: att.filename,
-                                media_type: att.media_type,
-                                data_base64: att.data_base64,
-                              })
-                            }
-                            onContextMenu={(e) =>
-                              onAttachmentContextMenu?.(
-                                e,
-                                {
-                                  filename: att.filename,
-                                  media_type: att.media_type,
-                                  data_base64: att.data_base64,
-                                },
-                                att.id,
-                              )
-                            }
-                          />
-                        );
-                      })}
-                    </div>
-                  )}
-                  {isAuthFailureMessage &&
-                  msg.id === lastAuthFailureMessageId &&
-                  msg.id !== resolvedClaudeAuthFailureMessageId ? (
-                    <ChatAuthFailureCallout
-                      error={msg.content}
-                      messageId={msg.id}
-                    />
-                  ) : isAuthFailureMessage ? (
-                    <div
-                      className={
-                        msg.id === resolvedClaudeAuthFailureMessageId
-                          ? styles.authFailureResolvedText
-                          : styles.authFailureText
-                      }
-                    >
-                      {msg.id === resolvedClaudeAuthFailureMessageId && (
-                        <>
-                          <span className={styles.authResolvedLabel}>
-                            {t("auth_resolved_label")}
-                          </span>
-                          {t("auth_resolved_message")}
-                        </>
-                      )}
-                      {msg.id !== resolvedClaudeAuthFailureMessageId &&
-                        cleanClaudeAuthError(msg.content)}
-                    </div>
-                  ) : shouldRenderAsMarkdown(msg.role) ? (
-                    // Assistant + System: run through Markdown so plan-mode dumps,
-                    // setup-script output, and other multi-line system notes
-                    // preserve headings, lists, and code blocks instead of
-                    // collapsing newlines into a single paragraph.
-                    <HighlightedMessageMarkdown
-                      content={msg.content}
-                      query={searchQuery}
-                      onOpenFile={openFileInMonaco}
-                      resolveFilePath={fileIndex.resolve}
-                    />
-                  ) : searchQuery ? (
-                    // While the search bar is open, render user messages as plain
-                    // highlighted text so matches inside them get marked. The
-                    // ultrathink rainbow animation is suppressed in this mode —
-                    // searchability wins over the easter egg.
-                    <HighlightedPlainText
-                      text={msg.content}
-                      query={searchQuery}
-                    />
-                  ) : (
-                    renderFileLinkedPlainText(msg.content, {
-                      animated: false,
-                      styles: {
-                        ultrathinkChar: styles.ultrathinkChar,
-                        ultrathinkCharAnimated: styles.ultrathinkCharAnimated,
-                      },
-                      resolveFilePath: fileIndex.resolve,
-                      openFile: openFileInMonaco,
-                    })
-                  )}
-                </div>
-              </div>
+              <ChatMessageBubble
+                msg={msg}
+                attachments={attachmentsByMessage.get(msg.id)}
+                showThinkingBlocks={showThinkingBlocks}
+                toolDisplayMode={toolDisplayMode}
+                searchQuery={searchQuery}
+                isLatestAuthFailure={msg.id === lastAuthFailureMessageId}
+                isResolvedAuthFailure={msg.id === resolvedClaudeAuthFailureMessageId}
+                resolveFilePath={fileIndex.resolve}
+                openFile={openFileInMonaco}
+                onAttachmentClick={onAttachmentClick}
+                onAttachmentContextMenu={onAttachmentContextMenu}
+              />
             )}
             {conclusionsByMessage.has(msg.id) &&
               conclusionsByMessage
@@ -1134,54 +798,3 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     </>
   );
 });
-
-function renderFileLinkedPlainText(
-  text: string,
-  options: {
-    animated: boolean;
-    styles: Parameters<typeof renderUltrathinkText>[1]["styles"];
-    resolveFilePath: (path: string) => string | null;
-    openFile: (path: string) => boolean;
-  },
-): React.ReactNode {
-  const matches = detectFileReferences(text).flatMap((match) => {
-    const resolvedPath = options.resolveFilePath(match.path);
-    return resolvedPath ? [{ ...match, resolvedPath }] : [];
-  });
-  if (matches.length === 0) {
-    return renderUltrathinkText(text, options);
-  }
-
-  const nodes: React.ReactNode[] = [];
-  let cursor = 0;
-  for (const match of matches) {
-    if (match.start > cursor) {
-      nodes.push(
-        <React.Fragment key={`text-${cursor}`}>
-          {renderUltrathinkText(text.slice(cursor, match.start), options)}
-        </React.Fragment>,
-      );
-    }
-    const label = match.text ?? match.path;
-    nodes.push(
-      <button
-        type="button"
-        className="cc-file-path-link"
-        title={match.resolvedPath}
-        key={`file-${match.start}-${match.end}`}
-        onClick={() => options.openFile(match.resolvedPath)}
-      >
-        {label}
-      </button>,
-    );
-    cursor = match.end;
-  }
-  if (cursor < text.length) {
-    nodes.push(
-      <React.Fragment key={`text-${cursor}`}>
-        {renderUltrathinkText(text.slice(cursor), options)}
-      </React.Fragment>,
-    );
-  }
-  return nodes;
-}

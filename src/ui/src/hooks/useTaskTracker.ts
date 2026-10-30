@@ -923,33 +923,57 @@ export function deriveTasks(
   completedTurns: CompletedTurn[],
   toolActivities: ToolActivity[],
 ): TaskTrackerResult {
+  const acc = createTaskAccumulator();
+  for (const turn of completedTurns) acc.add(turn.activities);
+  acc.add(toolActivities);
+  return acc.result();
+}
+
+/**
+ * Cumulative task state after each completed turn, keyed by turn index, in
+ * one O(n) pass. Turns before the first task-touching turn get no entry, so
+ * the transcript only shows a progress bar once tasks exist.
+ */
+export function deriveTaskProgressByTurn(
+  completedTurns: readonly CompletedTurn[],
+): Map<number, TaskTrackerResult> {
+  const byTurn = new Map<number, TaskTrackerResult>();
+  const acc = createTaskAccumulator();
+  let anyTasksSoFar = false;
+  completedTurns.forEach((turn, i) => {
+    acc.add(turn.activities);
+    anyTasksSoFar ||= turnHasTaskActivity(turn);
+    if (anyTasksSoFar) byTurn.set(i, acc.result());
+  });
+  return byTurn;
+}
+
+/** Task/todo/plan state folded forward across activity batches — the shared
+ *  core of `deriveTasks` and `deriveTaskProgressByTurn`. */
+function createTaskAccumulator() {
   const taskMap = new Map<string, TrackedTask>();
   const todoMap = new Map<string, TrackedTask>();
   const planMap = new Map<string, TrackedTask>();
   const nextSyntheticId = { value: 1 };
   const planMeta: { explanation?: string } = {};
-
-  for (const turn of completedTurns) {
-    processActivities(
-      turn.activities,
-      taskMap,
-      todoMap,
-      nextSyntheticId,
-      planMap,
-      planMeta,
-    );
-  }
-  processActivities(
-    toolActivities,
-    taskMap,
-    todoMap,
-    nextSyntheticId,
-    planMap,
-    planMeta,
-  );
-
-  const tasks = [...taskMap.values(), ...todoMap.values(), ...planMap.values()];
-  return taskResult(tasks, planMeta.explanation);
+  return {
+    add(activities: readonly ToolActivity[]) {
+      processActivities(
+        activities as ToolActivity[],
+        taskMap,
+        todoMap,
+        nextSyntheticId,
+        planMap,
+        planMeta,
+      );
+    },
+    result(): TaskTrackerResult {
+      return taskResult(
+        [...taskMap.values(), ...todoMap.values(), ...planMap.values()],
+        planMeta.explanation,
+      );
+    },
+  };
 }
 
 /**
