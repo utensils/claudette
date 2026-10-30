@@ -470,6 +470,10 @@ mod tests {
             "--debug",
             "--add-dir",
             "--effort",
+            // Emitted (as `--disallowedTools=<list>`) to hide the native
+            // scheduling tools, but deliberately NOT reserved so users can
+            // still pass their own `--disallowedTools` from Settings.
+            "--disallowedTools",
             // REDACTED_VALUE_FLAGS — recognized for display-redaction only,
             // NOT emitted by Claudette. Users may pass these through; we
             // redact their values in the chat-tab CLI banner.

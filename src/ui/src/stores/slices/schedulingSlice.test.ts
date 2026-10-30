@@ -56,6 +56,14 @@ describe("schedulingSlice.loadScheduledTasks", () => {
     expect(useAppStore.getState().scheduledTasks).toEqual([{ id: "kept" }]);
   });
 
+  it("stores empty lists when the backend returns a non-array payload", async () => {
+    mocks.listScheduledRoutines.mockResolvedValueOnce(null);
+    mocks.listScheduledTaskRuns.mockResolvedValueOnce(null);
+    await useAppStore.getState().loadScheduledTasks();
+    expect(useAppStore.getState().scheduledTasks).toEqual([]);
+    expect(useAppStore.getState().recentScheduledRuns).toEqual([]);
+  });
+
   it("preloads sessions for task workspaces that aren't loaded yet", async () => {
     useAppStore.setState({ sessionsLoadedByWorkspace: { wsOpen: true } });
     mocks.listScheduledRoutines.mockResolvedValueOnce([

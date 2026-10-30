@@ -76,7 +76,11 @@ export const createSchedulingSlice: StateCreator<
       listScheduledRoutines(),
       listScheduledTaskRuns(undefined, RECENT_RUNS_LIMIT),
     ])
-      .then(([tasks, runs]) => {
+      .then(([rawTasks, rawRuns]) => {
+        // Normalize: views iterate these unconditionally (the sidebar badge
+        // renders at boot), so a missing/odd payload must not crash the app.
+        const tasks = Array.isArray(rawTasks) ? rawTasks : [];
+        const runs = Array.isArray(rawRuns) ? rawRuns : [];
         get().setScheduledTasks(tasks);
         set({ recentScheduledRuns: runs });
         preloadTaskSessions(get, tasks);
