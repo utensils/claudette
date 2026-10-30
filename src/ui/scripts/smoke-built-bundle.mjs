@@ -131,6 +131,7 @@ try {
         case "list_agent_backends":
           return { backends: [], default_backend_id: "anthropic" };
         case "list_remote_connections":
+        case "list_active_remote_connections":
         case "list_discovered_servers":
         case "detect_installed_apps":
         case "list_system_fonts":

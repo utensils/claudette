@@ -14,6 +14,9 @@ use crate::ws::ServerState;
 
 /// Serves JSON-RPC requests and publishes server-pushed events for the WSS
 /// transport.
+// `async_trait` adds `#[must_use]` to the boxed futures it generates, which
+// newer clippy flags as `double_must_use`; nothing to fix in our code.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait RpcHost: Send + Sync + 'static {
     /// Handle one request. `Err` becomes a JSON-RPC error response.
