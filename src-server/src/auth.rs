@@ -92,6 +92,13 @@ impl ServerConfig {
         Some(session_token)
     }
 
+    /// Forget a session token. Returns whether it existed.
+    pub fn revoke_session(&mut self, session_token: &str) -> bool {
+        let before = self.sessions.len();
+        self.sessions.retain(|s| s.token != session_token);
+        self.sessions.len() != before
+    }
+
     /// Validate an existing session token. Returns true and updates last_seen if valid.
     pub fn validate_session(&mut self, session_token: &str) -> bool {
         if let Some(session) = self.sessions.iter_mut().find(|s| s.token == session_token) {

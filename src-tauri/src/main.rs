@@ -572,15 +572,6 @@ fn main() {
         }
     };
 
-    // Load saved certificate fingerprints for mDNS pairing detection.
-    let saved_fingerprints: Vec<String> = Database::open(&db_path)
-        .ok()
-        .and_then(|db| db.list_remote_connections().ok())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|c| c.cert_fingerprint)
-        .collect();
-
     // Initialize plugin registry: seed bundled plugins, then discover.
     let plugin_dir = claudette::path::claudette_home().join("plugins");
     let _ = std::fs::create_dir_all(&plugin_dir);
@@ -779,7 +770,7 @@ fn main() {
             boot_probation::start_monitor(app.handle().clone(), boot_state, data_dir.clone());
 
             // Start mDNS browser to discover nearby claudette-server instances.
-            if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
+            if let Err(e) = mdns::start_mdns_browser(app.handle()) {
                 tracing::warn!(target: "claudette::mdns", error = %e, "failed to start browser");
             }
 
@@ -1376,6 +1367,8 @@ fn main() {
             commands::remote::list_discovered_servers,
             commands::remote::add_remote_connection,
             commands::remote::send_remote_command,
+            commands::remote::list_active_remote_connections,
+            commands::remote::set_remote_auto_connect,
             // Usage
             commands::usage::get_claude_code_usage,
             commands::usage::get_session_usage,

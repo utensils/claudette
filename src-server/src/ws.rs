@@ -205,6 +205,9 @@ pub async fn handle_tls_connection(
     let mut auth_attempts = 0;
     let max_attempts = 3;
     let mut authenticated = false;
+    // The session token this connection authenticated as (or was issued),
+    // so `revoke_session` knows what to forget.
+    let mut connection_session: Option<String> = None;
 
     while auth_attempts < max_attempts {
         let msg = match read.next().await {
@@ -260,6 +263,7 @@ pub async fn handle_tls_connection(
                 });
                 send_message(&writer, &resp).await;
                 authenticated = true;
+                connection_session = Some(session_token.to_string());
                 break;
             }
             drop(cfg);
@@ -286,6 +290,7 @@ pub async fn handle_tls_connection(
                 });
                 send_message(&writer, &resp).await;
                 authenticated = true;
+                connection_session = Some(session_token);
                 break;
             }
             drop(cfg);
@@ -379,6 +384,31 @@ pub async fn handle_tls_connection(
                 continue;
             }
         };
+
+        // Connection-level: a client un-pairing itself. Handled here because
+        // it touches auth state, not the host.
+        if request.get("method").and_then(|m| m.as_str()) == Some("revoke_session") {
+            let id = request
+                .get("id")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let revoked = match connection_session.as_deref() {
+                Some(token) => {
+                    let mut cfg = config.lock().await;
+                    let revoked = cfg.revoke_session(token);
+                    let _ = cfg.save(&config_path);
+                    revoked
+                }
+                None => false,
+            };
+            send_message(
+                &writer,
+                &handler::rpc_envelope(id, Ok(serde_json::json!({ "revoked": revoked }))),
+            )
+            .await;
+            tracing::info!(target: "claudette::ws", peer = %addr, "client revoked its session");
+            break;
+        }
 
         let host = std::sync::Arc::clone(&host);
         let writer = std::sync::Arc::clone(&writer);

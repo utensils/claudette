@@ -236,3 +236,25 @@ async fn stopping_the_server_disconnects_established_clients() {
     assert!(!t.is_connected());
     assert!(t.send(json!({"method": "x"})).await.is_err());
 }
+
+#[tokio::test]
+async fn revoked_session_token_no_longer_authenticates() {
+    let f = setup().await;
+    let t = WebSocketTransport::connect("127.0.0.1", f.handle.port, None)
+        .await
+        .unwrap()
+        .transport;
+    let token = t
+        .authenticate_pairing(&f.pairing_token, "x")
+        .await
+        .unwrap()
+        .session_token
+        .unwrap();
+    assert_eq!(call(&t, "revoke_session", json!({})).await["revoked"], true);
+
+    let again = WebSocketTransport::connect("127.0.0.1", f.handle.port, None)
+        .await
+        .unwrap()
+        .transport;
+    assert!(again.authenticate_session(&token).await.is_err());
+}

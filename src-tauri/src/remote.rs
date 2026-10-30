@@ -163,8 +163,7 @@ impl RemoteConnectionManager {
         Ok(())
     }
 
-    /// List all active connection IDs.
-    #[allow(dead_code)]
+    /// List all active connections.
     pub async fn list_active(&self) -> Vec<RemoteConnectionInfo> {
         let connections = self.connections.read().await;
         connections.iter().map(|c| c.info.clone()).collect()
@@ -194,6 +193,12 @@ pub fn rpc_result(response: serde_json::Value) -> Result<serde_json::Value, Stri
         .get("result")
         .cloned()
         .unwrap_or(serde_json::Value::Null))
+}
+
+/// Whether an mDNS-advertised fingerprint prefix belongs to a saved
+/// connection. An empty prefix (server advertised none) matches nothing.
+pub fn fingerprint_matches_any(prefix: &str, saved: &[String]) -> bool {
+    !prefix.is_empty() && saved.iter().any(|fp| fp.starts_with(prefix))
 }
 
 /// Event emitted on the local bus when a remote connection drops
@@ -282,6 +287,14 @@ pub struct DiscoveredServer {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn empty_advertised_fingerprint_never_counts_as_paired() {
+        let saved = vec!["abcdef".to_string()];
+        assert!(fingerprint_matches_any("abc", &saved));
+        assert!(!fingerprint_matches_any("", &saved));
+        assert!(!fingerprint_matches_any("zzz", &saved));
+    }
 
     #[test]
     fn rpc_result_returns_result_value() {
