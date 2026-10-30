@@ -19,6 +19,7 @@ mod pty_tracker;
 mod remote;
 #[cfg(feature = "server")]
 mod remote_host;
+mod remote_pty;
 mod state;
 mod subprocess_cleanup;
 mod tail_backoff;

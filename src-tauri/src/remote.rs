@@ -7,6 +7,8 @@ use tokio::sync::{RwLock, broadcast};
 use claudette::transport::Transport;
 use claudette::transport::ws::WebSocketTransport;
 
+use crate::remote_pty::PtyAliases;
+
 /// Persisted remote connection configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteConnectionInfo {
@@ -30,13 +32,24 @@ pub struct RemoteConnection {
 /// Manages all active remote connections.
 pub struct RemoteConnectionManager {
     pub connections: RwLock<Vec<RemoteConnection>>,
+    /// Local aliases for terminals opened on remote servers.
+    pty_aliases: std::sync::Mutex<PtyAliases>,
 }
 
 impl RemoteConnectionManager {
     pub fn new() -> Self {
         Self {
             connections: RwLock::new(Vec::new()),
+            pty_aliases: std::sync::Mutex::new(PtyAliases::default()),
         }
+    }
+
+    fn with_pty_aliases<R>(&self, f: impl FnOnce(&mut PtyAliases) -> R) -> R {
+        let mut aliases = self
+            .pty_aliases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        f(&mut aliases)
     }
 
     /// Add an active connection and start forwarding its events to the Tauri event bus.
@@ -94,19 +107,27 @@ impl RemoteConnectionManager {
 
     /// Like [`Self::send`], but unwraps the JSON-RPC envelope: returns the
     /// `result` value, or the server's `error.message` as `Err`.
+    ///
+    /// Terminal IDs are translated between local aliases and the server's
+    /// own IDs (see [`crate::remote_pty`]).
     pub async fn call(
         &self,
         connection_id: &str,
         method: &str,
-        params: serde_json::Value,
+        mut params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        let alias_in_request = params.get("pty_id").and_then(|v| v.as_u64());
+        self.with_pty_aliases(|a| a.translate_request(connection_id, method, &mut params))?;
         let response = self
             .send(
                 connection_id,
                 serde_json::json!({ "method": method, "params": params }),
             )
             .await?;
-        rpc_result(response)
+        let result = rpc_result(response)?;
+        Ok(self.with_pty_aliases(|a| {
+            a.translate_response(connection_id, method, alias_in_request, result)
+        }))
     }
 
     /// Drop `connection_id` only if it still refers to `transport`. A
@@ -137,6 +158,8 @@ impl RemoteConnectionManager {
             let conn = connections.remove(idx);
             let _ = conn.transport.close().await;
         }
+        drop(connections);
+        self.with_pty_aliases(|a| a.drop_connection(connection_id));
         Ok(())
     }
 
@@ -197,7 +220,13 @@ async fn forward_remote_events(
         tokio::select! {
             received = event_rx.recv() => match received {
                 Ok(event) => {
-                    let payload = tag_remote_payload(event.payload, &connection_id);
+                    let manager = app.state::<RemoteConnectionManager>();
+                    let Some(payload) = manager.with_pty_aliases(|a| {
+                        a.translate_event(&connection_id, &event.event, event.payload)
+                    }) else {
+                        continue;
+                    };
+                    let payload = tag_remote_payload(payload, &connection_id);
                     let _ = app.emit(&event.event, payload);
                 }
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
@@ -223,6 +252,7 @@ async fn forward_remote_events(
     // closing the socket, so only an unexpected drop finds it still here.
     let manager = app.state::<RemoteConnectionManager>();
     if manager.remove_if_same(&connection_id, &transport).await {
+        manager.with_pty_aliases(|a| a.drop_connection(&connection_id));
         let _ = app.emit(
             REMOTE_CONNECTION_LOST_EVENT,
             serde_json::json!({ "connection_id": connection_id }),

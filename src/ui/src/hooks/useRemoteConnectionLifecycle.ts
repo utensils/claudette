@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
+import { forgetRemotePtys } from "../services/tauri";
 import { useAppStore } from "../stores/useAppStore";
 
 /** Payload of the Rust-side `remote-connection-lost` event. */
@@ -28,6 +29,7 @@ export function useRemoteConnectionLifecycle() {
           state.remoteConnections.find((c) => c.id === id)?.name ?? id;
         state.removeActiveRemoteId(id);
         state.clearRemoteData(id);
+        forgetRemotePtys(id);
         state.addToast(t("remote_connection_lost", { name }));
       },
     );
