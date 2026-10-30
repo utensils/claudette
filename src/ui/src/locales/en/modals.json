@@ -49,7 +49,7 @@
   "remove_repo_confirm": "Remove",
   "share_title": "Share this machine",
   "share_conn_label": "Connection string",
-  "share_conn_hint": "Share this string with others so they can connect to your workspaces from their Claudette app.",
+  "share_conn_hint": "Paste this into Claudette on your other devices to work in this machine's workspaces. Anyone with it can run agents here under your account — share it only with your own devices.",
   "share_qr_label": "Pair with iPhone",
   "share_qr_hint": "Scan this QR code in the Claudette iOS app to pair your phone with this machine. The encoded value is the same connection string above.",
   "share_qr_alt": "QR code encoding the connection string",
@@ -153,5 +153,8 @@
   "pair_remote_title": "Pair with {{name}}",
   "pair_remote_token_label": "Pairing token",
   "pair_remote_hint": "The token is the last part of the connection string shown by Share this machine (or claudette-server) on {{host}}.",
-  "pair_remote_confirm": "Pair"
+  "pair_remote_confirm": "Pair",
+  "share_reset": "Reset pairing",
+  "share_reset_hint": "Reset pairing issues a new connection string and disconnects every paired device; each must pair again.",
+  "share_reset_done": "Pairing reset — paired devices were disconnected"
 }

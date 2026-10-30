@@ -20,12 +20,12 @@ The mobile app is being built incrementally. The iOS foundation — pair, browse
 
 ### Option A — Pair with the desktop GUI
 
-1. On the desktop, click **Share this machine** in the sidebar. The embedded server spawns as a subprocess and prints a connection string of the form `claudette://hostname:7683/<pairing-token>`.
+1. On the desktop, click **Share this machine** in the sidebar. The desktop starts serving on port 7683 (inside the app itself, so the phone drives the same sessions you see on the desktop) and shows a connection string of the form `claudette://hostname:7683/<pairing-token>`.
 2. The same modal now shows that string as a QR code.
 3. On the iPhone, open **Claudette**, tap **Scan to pair**, and point the camera at the QR. The app reads the host, port, and one-time pairing token, opens a WSS connection, exchanges the pairing token for a long-lived session token, and persists the session token in the app's sandboxed data directory (iOS Data Protection encrypts the sandbox at rest). Migrating to the iOS Keychain via a custom Swift plugin is on the follow-up list — see [What the iOS app cannot do today](#what-the-ios-app-cannot-do-today).
 4. The phone navigates to the workspace list. Tap a workspace to open it; tap a chat session to start sending prompts.
 
-The pairing token is consumed on first use — pair a second device by regenerating the token (`claudette-server regenerate-token` for standalone, or use **Stop sharing** / **Share this machine** again on the desktop).
+The pairing token stays valid until it is regenerated, so the same QR pairs additional devices. To stop new devices from pairing (and revoke every paired device), regenerate it with `claudette-server regenerate-token`.
 
 ### Option B — Pair with a headless server
 

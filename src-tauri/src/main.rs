@@ -1438,6 +1438,7 @@ fn main() {
             // Local server
             commands::remote::start_local_server,
             commands::remote::stop_local_server,
+            commands::remote::reset_local_server_pairing,
             commands::remote::get_local_server_status,
             // Debug (dev builds only — cfg-gated in commands/debug.rs)
             #[cfg(debug_assertions)]

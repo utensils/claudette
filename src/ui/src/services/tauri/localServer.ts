@@ -16,3 +16,8 @@ export function stopLocalServer(): Promise<void> {
 export function getLocalServerStatus(): Promise<LocalServerInfo> {
   return invoke("get_local_server_status");
 }
+
+/** New pairing token; revokes every paired device (restarts sharing if on). */
+export function resetLocalServerPairing(): Promise<LocalServerInfo> {
+  return invoke("reset_local_server_pairing");
+}

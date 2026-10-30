@@ -49,7 +49,7 @@
   "remove_repo_confirm": "Entfernen",
   "share_title": "Diese Maschine teilen",
   "share_conn_label": "Verbindungsstring",
-  "share_conn_hint": "Teil diesen String mit anderen, damit sie sich aus ihrer Claudette-App mit deinen Workspaces verbinden können.",
+  "share_conn_hint": "Füge dies in Claudette auf deinen anderen Geräten ein, um in den Arbeitsbereichen dieses Rechners zu arbeiten. Wer diese Zeichenfolge hat, kann hier Agents unter deinem Konto ausführen – teile sie nur mit deinen eigenen Geräten.",
   "share_qr_label": "Mit iPhone koppeln",
   "share_qr_hint": "Scanne diesen QR-Code in der Claudette-iOS-App, um dein iPhone mit dieser Maschine zu koppeln. Der kodierte Wert ist derselbe Verbindungsstring oben.",
   "share_qr_alt": "QR-Code mit dem Verbindungsstring",
@@ -153,5 +153,8 @@
   "pair_remote_title": "Mit {{name}} koppeln",
   "pair_remote_token_label": "Kopplungstoken",
   "pair_remote_hint": "Das Token ist der letzte Teil der Verbindungszeichenfolge, die „Diesen Rechner teilen“ (oder claudette-server) auf {{host}} anzeigt.",
-  "pair_remote_confirm": "Koppeln"
+  "pair_remote_confirm": "Koppeln",
+  "share_reset": "Kopplung zurücksetzen",
+  "share_reset_hint": "„Kopplung zurücksetzen“ erzeugt eine neue Verbindungszeichenfolge und trennt alle gekoppelten Geräte; jedes muss neu gekoppelt werden.",
+  "share_reset_done": "Kopplung zurückgesetzt – gekoppelte Geräte wurden getrennt"
 }

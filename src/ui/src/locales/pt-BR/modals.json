@@ -49,7 +49,7 @@
   "remove_repo_confirm": "Remover",
   "share_title": "Compartilhar esta máquina",
   "share_conn_label": "String de conexão",
-  "share_conn_hint": "Compartilhe esta string com outras pessoas para que elas se conectem aos seus workspaces a partir do app Claudette delas.",
+  "share_conn_hint": "Cole isto no Claudette nos seus outros dispositivos para trabalhar nos workspaces desta máquina. Quem tiver esta string pode executar agentes aqui com a sua conta — compartilhe apenas com seus próprios dispositivos.",
   "share_stop": "Parar de compartilhar",
   "share_done": "Concluído",
   "setup_script_title": "Revisar script de configuração",
@@ -94,5 +94,8 @@
   "pair_remote_title": "Emparelhar com {{name}}",
   "pair_remote_token_label": "Token de emparelhamento",
   "pair_remote_hint": "O token é a última parte da string de conexão exibida por Compartilhar esta máquina (ou claudette-server) em {{host}}.",
-  "pair_remote_confirm": "Emparelhar"
+  "pair_remote_confirm": "Emparelhar",
+  "share_reset": "Redefinir emparelhamento",
+  "share_reset_hint": "Redefinir emparelhamento gera uma nova string de conexão e desconecta todos os dispositivos emparelhados; cada um precisa emparelhar de novo.",
+  "share_reset_done": "Emparelhamento redefinido — os dispositivos emparelhados foram desconectados"
 }

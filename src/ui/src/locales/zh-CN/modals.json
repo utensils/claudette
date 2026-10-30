@@ -49,7 +49,7 @@
   "remove_repo_confirm": "移除",
   "share_title": "共享此设备",
   "share_conn_label": "连接字符串",
-  "share_conn_hint": "将此字符串分享给他人，让他们可以从自己的 Claudette 应用连接到你的工作区。",
+  "share_conn_hint": "将其粘贴到你其他设备上的 Claudette 中，即可在此计算机的工作区中工作。任何拥有它的人都能以你的账户在此运行代理——只与你自己的设备共享。",
   "share_stop": "停止共享",
   "share_done": "完成",
   "setup_script_title": "审查安装脚本",
@@ -94,5 +94,8 @@
   "pair_remote_title": "与 {{name}} 配对",
   "pair_remote_token_label": "配对令牌",
   "pair_remote_hint": "令牌是 {{host}} 上“共享此计算机”（或 claudette-server）显示的连接字符串的最后一部分。",
-  "pair_remote_confirm": "配对"
+  "pair_remote_confirm": "配对",
+  "share_reset": "重置配对",
+  "share_reset_hint": "重置配对会生成新的连接字符串并断开所有已配对设备；每台设备都需要重新配对。",
+  "share_reset_done": "配对已重置——已断开所有已配对设备"
 }

@@ -49,7 +49,7 @@
   "remove_repo_confirm": "Quitar",
   "share_title": "Compartir esta máquina",
   "share_conn_label": "Cadena de conexión",
-  "share_conn_hint": "Comparte esta cadena con otros para que puedan conectarse a tus espacios de trabajo desde su app de Claudette.",
+  "share_conn_hint": "Pégala en Claudette en tus otros dispositivos para trabajar en los espacios de trabajo de este equipo. Quien la tenga puede ejecutar agentes aquí con tu cuenta: compártela solo con tus propios dispositivos.",
   "share_stop": "Dejar de compartir",
   "share_done": "Listo",
   "setup_script_title": "Revisar script de configuración",
@@ -94,5 +94,8 @@
   "pair_remote_title": "Emparejar con {{name}}",
   "pair_remote_token_label": "Token de emparejamiento",
   "pair_remote_hint": "El token es la última parte de la cadena de conexión que muestra Compartir este equipo (o claudette-server) en {{host}}.",
-  "pair_remote_confirm": "Emparejar"
+  "pair_remote_confirm": "Emparejar",
+  "share_reset": "Restablecer emparejamiento",
+  "share_reset_hint": "Restablecer emparejamiento genera una cadena de conexión nueva y desconecta todos los dispositivos emparejados; cada uno debe volver a emparejarse.",
+  "share_reset_done": "Emparejamiento restablecido: se desconectaron los dispositivos emparejados"
 }

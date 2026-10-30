@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import QRCode from "qrcode";
 import { useAppStore } from "../../stores/useAppStore";
-import { stopLocalServer } from "../../services/tauri";
+import { resetLocalServerPairing, stopLocalServer } from "../../services/tauri";
 import { Modal } from "./Modal";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import shared from "./shared.module.css";
@@ -34,6 +34,8 @@ export function ShareModal() {
     });
   }, [connectionString]);
 
+  const addToast = useAppStore((s) => s.addToast);
+
   const handleStop = async () => {
     try {
       await stopLocalServer();
@@ -41,7 +43,18 @@ export function ShareModal() {
       setConnectionString(null);
       closeModal();
     } catch (e) {
-      console.error("Failed to stop server:", e);
+      addToast(String(e));
+    }
+  };
+
+  const handleResetPairing = async () => {
+    try {
+      const info = await resetLocalServerPairing();
+      setRunning(info.running);
+      setConnectionString(info.connection_string);
+      addToast(t("share_reset_done"));
+    } catch (e) {
+      addToast(String(e));
     }
   };
 
@@ -78,7 +91,13 @@ export function ShareModal() {
           <div className={shared.smallHint}>{t("share_qr_hint")}</div>
         </div>
       ) : null}
+      <div className={shared.field}>
+        <div className={shared.smallHint}>{t("share_reset_hint")}</div>
+      </div>
       <div className={shared.actions}>
+        <button className={shared.btn} onClick={handleResetPairing}>
+          {t("share_reset")}
+        </button>
         <button className={shared.btn} onClick={handleStop}>
           {t("share_stop")}
         </button>

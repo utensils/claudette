@@ -49,7 +49,7 @@
   "remove_repo_confirm": "削除",
   "share_title": "このマシンを共有",
   "share_conn_label": "接続文字列",
-  "share_conn_hint": "この文字列を他のユーザーと共有すると、Claudette アプリからあなたのワークスペースに接続できます。",
+  "share_conn_hint": "他のデバイスの Claudette に貼り付けると、このマシンのワークスペースで作業できます。これを持つ人は誰でもあなたのアカウントでここでエージェントを実行できます。自分のデバイスとだけ共有してください。",
   "share_stop": "共有を停止",
   "share_done": "完了",
   "setup_script_title": "セットアップスクリプトを確認",
@@ -94,5 +94,8 @@
   "pair_remote_title": "{{name}} とペアリング",
   "pair_remote_token_label": "ペアリングトークン",
   "pair_remote_hint": "トークンは、{{host}} の「このマシンを共有」(または claudette-server) が表示する接続文字列の最後の部分です。",
-  "pair_remote_confirm": "ペアリング"
+  "pair_remote_confirm": "ペアリング",
+  "share_reset": "ペアリングをリセット",
+  "share_reset_hint": "ペアリングをリセットすると新しい接続文字列が発行され、ペアリング済みのすべてのデバイスが切断されます。各デバイスで再ペアリングが必要です。",
+  "share_reset_done": "ペアリングをリセットしました。ペアリング済みのデバイスは切断されました"
 }

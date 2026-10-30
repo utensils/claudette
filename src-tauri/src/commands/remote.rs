@@ -380,6 +380,39 @@ pub async fn stop_local_server(state: State<'_, AppState>) -> Result<(), String>
     Ok(())
 }
 
+/// Issue a new pairing token and revoke every paired device. When sharing
+/// is on, the server restarts with the new token (dropping connected
+/// clients); the returned info carries the new connection string.
+#[tauri::command]
+pub async fn reset_local_server_pairing(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LocalServerInfo, String> {
+    #[cfg(not(feature = "server"))]
+    {
+        let _ = (&app, &state);
+        Err("Server not available: built without the 'server' feature".to_string())
+    }
+
+    #[cfg(feature = "server")]
+    {
+        let was_running = state.local_server.write().await.take().is_some();
+        let config_path = claudette_server::default_config_path();
+        let mut config = claudette_server::auth::ServerConfig::load_or_create(&config_path)
+            .map_err(|e| e.to_string())?;
+        config.regenerate_token();
+        config.save(&config_path).map_err(|e| e.to_string())?;
+        if was_running {
+            start_local_server(app, state).await
+        } else {
+            Ok(LocalServerInfo {
+                running: false,
+                connection_string: None,
+            })
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn get_local_server_status(
     state: State<'_, AppState>,
