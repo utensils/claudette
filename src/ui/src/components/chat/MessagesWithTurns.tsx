@@ -743,7 +743,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             // `turn.collapsed` so the turn-level persisted state still
             // seeds the initial view of replayed-from-DB completed turns.
             const groupKey =
-              collapsedToolGroupKey(activities) ??
+              collapsedToolGroupKey(activities, kind) ??
               // Synthetic fallback for the (impossible-in-practice)
               // empty-activities case — keep keys session-unique without
               // accidentally colliding with a real tool group.
@@ -755,7 +755,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             // reversing what the user was just watching, and for the one
             // group kind whose whole point is the phase/agent tree (see
             // `GroupedWorkflowActivity` for the same default while live).
-            const isWorkflowGroup = kind === "workflow";
+            // Agent rollups get the same expanded default (their member
+            // agents are individually collapsed, so the rollup stays compact),
+            // matching `GroupedAgentRollup` on the live side.
+            const isWorkflowGroup = kind === "workflow" || kind === "agents";
             const collapsed =
               userOverride ?? (isWorkflowGroup ? false : turn.collapsed);
             // Single-group turns also flip the legacy `turn.collapsed`
@@ -791,6 +794,8 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                 label={label}
                 inline={toolDisplayMode === "inline"}
                 mcp={kind === "mcp"}
+                kind={kind}
+                sessionId={sessionId}
                 showFooter={showFooter}
                 collapsed={collapsed}
                 onToggle={onToggle}

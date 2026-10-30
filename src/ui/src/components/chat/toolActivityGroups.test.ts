@@ -4,6 +4,7 @@ import {
   groupHasRunningActivity,
   groupToolActivitiesForDisplay,
   skillActivationName,
+  toolBreakdown,
 } from "./toolActivityGroups";
 
 function activity(
@@ -205,5 +206,61 @@ describe("toolActivityGroups", () => {
     expect(skillActivationName(activity("Skill", { inputJson: "not json", summary: "" }))).toBe(
       "Skill",
     );
+  });
+
+  it("rolls consecutive Agent calls into one agents group", () => {
+    const groups = groupToolActivitiesForDisplay([
+      activity("Read"),
+      activity("Agent", { agentDescription: "a" }),
+      activity("Agent", { agentDescription: "b" }),
+      activity("Agent", { agentDescription: "c" }),
+      activity("Bash"),
+    ]);
+    expect(groups.map((group) => [group.kind, group.label])).toEqual([
+      ["tools", "1 tool call"],
+      ["agents", "3 agents"],
+      ["tools", "1 tool call"],
+    ]);
+    expect(groups[1].activities).toHaveLength(3);
+  });
+
+  it("keeps agents separate in inline mode", () => {
+    const groups = groupToolActivitiesForDisplay(
+      [activity("Agent"), activity("Agent")],
+      "inline",
+    );
+    expect(groups.map((group) => group.kind)).toEqual(["agent", "agent"]);
+  });
+});
+
+describe("toolBreakdown", () => {
+  it("counts repeats in first-seen order", () => {
+    expect(
+      toolBreakdown([
+        activity("Read"),
+        activity("Edit"),
+        activity("Read"),
+        activity("Bash"),
+        activity("Read"),
+      ]),
+    ).toBe("Read ×3 · Edit · Bash");
+  });
+
+  it("is empty for a single call and caps distinct names", () => {
+    expect(toolBreakdown([activity("Read")])).toBe("");
+    expect(
+      toolBreakdown(
+        ["A", "B", "C", "D", "E", "F"].map((name) => activity(name)),
+      ),
+    ).toBe("A · B · C · D · +2");
+  });
+
+  it("strips the MCP server prefix", () => {
+    expect(
+      toolBreakdown([
+        activity("mcp__datadog__search"),
+        activity("mcp__datadog__search"),
+      ]),
+    ).toBe("search ×2");
   });
 });

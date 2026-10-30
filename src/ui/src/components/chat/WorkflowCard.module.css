@@ -157,22 +157,6 @@
   line-height: 1;
 }
 
-.stateQueued {
-  color: var(--text-faint);
-}
-
-.stateProgress {
-  color: var(--accent-primary);
-}
-
-.stateDone {
-  color: var(--accent-success);
-}
-
-.stateError {
-  color: var(--accent-error);
-}
-
 .agentLabel {
   color: var(--text-primary);
   font-family: var(--font-mono);

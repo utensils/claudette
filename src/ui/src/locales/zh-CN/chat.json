@@ -214,5 +214,16 @@
   "auth_resolved_label": "已解决",
   "auth_resolved_message": "此聊天的 Claude Code 登录已恢复。",
 
-  "terminal_failed_to_start": "启动 shell 失败"
+  "terminal_failed_to_start": "启动 shell 失败",
+
+  "agent_tokens": "{{tokens}} 个 token",
+  "agent_show_all_calls": "显示全部 {{count}} 次工具调用",
+  "agent_show_fewer_calls": "收起",
+  "agent_result_show_more": "显示完整结果",
+  "agent_result_show_less": "收起",
+  "agents_running": "{{count}} 个运行中",
+  "agents_done": "{{count}} 个已完成",
+  "agents_failed": "{{count}} 个失败",
+  "agents_stopped": "{{count}} 个已停止",
+  "agents_queued": "{{count}} 个排队中"
 }

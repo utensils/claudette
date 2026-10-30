@@ -214,5 +214,16 @@
   "auth_resolved_label": "解決済み",
   "auth_resolved_message": "このチャットの Claude Code サインインが復元されました。",
 
-  "terminal_failed_to_start": "シェルの起動に失敗しました"
+  "terminal_failed_to_start": "シェルの起動に失敗しました",
+
+  "agent_tokens": "{{tokens}} トークン",
+  "agent_show_all_calls": "{{count}} 件のツール呼び出しをすべて表示",
+  "agent_show_fewer_calls": "表示を減らす",
+  "agent_result_show_more": "結果をすべて表示",
+  "agent_result_show_less": "表示を減らす",
+  "agents_running": "{{count}} 件実行中",
+  "agents_done": "{{count}} 件完了",
+  "agents_failed": "{{count}} 件失敗",
+  "agents_stopped": "{{count}} 件停止",
+  "agents_queued": "{{count}} 件待機中"
 }

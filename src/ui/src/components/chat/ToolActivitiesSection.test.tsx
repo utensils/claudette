@@ -49,6 +49,13 @@ function completedTurn(activities: ToolActivity[]): CompletedTurn {
   };
 }
 
+/** Tool rows actually mounted. Collapsed group headers now show a tool-name
+ *  breakdown ("Bash · Read"), so "rows hidden" is asserted on the row
+ *  elements rather than on the container's text. */
+function renderedToolRows(container: HTMLElement): number {
+  return container.querySelectorAll(`.${styles.toolActivity}`).length;
+}
+
 async function render(node: React.ReactNode): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -297,8 +304,7 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).toContain("2 tool calls");
     expect(container.textContent).toContain("commit-changes");
     expect(container.textContent).toContain("activated");
-    expect(container.textContent).not.toContain("Bash");
-    expect(container.textContent).not.toContain("Read");
+    expect(renderedToolRows(container)).toBe(0);
     // No collapsible wrapper around the skill marker itself.
     expect(container.querySelector(`.${styles.skillActivation}`)).toBeTruthy();
   });
@@ -330,7 +336,7 @@ describe("ToolActivitiesSection", () => {
     ) as HTMLElement;
     expect(header.getAttribute("aria-expanded")).toBe("false");
     // Tool rows hidden while collapsed.
-    expect(container.textContent).not.toContain("load_datadog_skill");
+    expect(renderedToolRows(container)).toBe(0);
 
     await act(async () => {
       header.click();
@@ -363,8 +369,7 @@ describe("ToolActivitiesSection", () => {
     );
 
     expect(container.textContent).toContain("2 tool calls");
-    expect(container.textContent).not.toContain("Bash");
-    expect(container.textContent).not.toContain("Read");
+    expect(renderedToolRows(container)).toBe(0);
 
     // After the group finishes, it must still be collapsed (no flicker).
     await act(async () => {
@@ -382,8 +387,7 @@ describe("ToolActivitiesSection", () => {
     });
 
     expect(container.textContent).toContain("2 tool calls");
-    expect(container.textContent).not.toContain("Bash");
-    expect(container.textContent).not.toContain("Read");
+    expect(renderedToolRows(container)).toBe(0);
   });
 
   it("renders a chevron + clickable header on grouped running activities", async () => {
@@ -430,8 +434,7 @@ describe("ToolActivitiesSection", () => {
     );
 
     // Sanity: starts collapsed, child activities not in the DOM.
-    expect(container.textContent).not.toContain("Bash");
-    expect(container.textContent).not.toContain("Read");
+    expect(renderedToolRows(container)).toBe(0);
 
     const header = container.querySelector(
       '[role="button"][aria-expanded]',
@@ -466,7 +469,7 @@ describe("ToolActivitiesSection", () => {
 
     // Sanity: the "2 tool calls" header is visible but children aren't.
     expect(container.textContent).toContain("2 tool calls");
-    expect(container.textContent).not.toContain("Bash");
+    expect(renderedToolRows(container)).toBe(0);
 
     const header = container.querySelector(
       '[role="button"][aria-expanded]',
@@ -1260,8 +1263,11 @@ describe("TurnSummary", () => {
     });
     expect(onToggle).not.toHaveBeenCalled();
 
+    // The completed Agent owns its header (no outer TurnSummary chevron),
+    // matching the live rendering.
+    expect(container.querySelector(`.${styles.turnHeader}`)).toBeNull();
     const header = container.querySelector(
-      `.${styles.turnHeader}[role="button"]`,
+      `.${styles.agentToolGroupHeader}[role="button"]`,
     ) as HTMLElement;
     expect(header.getAttribute("aria-expanded")).toBe("true");
     expect(header.getAttribute("aria-controls")).toBeTruthy();

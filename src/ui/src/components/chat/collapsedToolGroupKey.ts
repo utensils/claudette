@@ -28,9 +28,14 @@ import { isMcpToolName } from "./mcpToolName";
  */
 export function collapsedToolGroupKey(
   activities: readonly ToolActivity[],
+  /** Display-group kind. Only needed to tell an `agents` rollup (several
+   *  Agent calls) apart from its first member's own `agent:` key — both
+   *  start with the same activity, and each needs its own collapse state. */
+  groupKind?: string,
 ): string | null {
   const first = activities[0];
   if (!first) return null;
+  if (groupKind === "agents") return `agents:${first.toolUseId}`;
   // Match the discriminator `groupToolActivitiesForDisplay` uses for
   // its own React `key` (`agent:` for Agent tool, `workflow:` for the
   // Workflow tool, `mcp:` for an MCP tool, `tools:` otherwise) so the

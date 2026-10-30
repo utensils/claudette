@@ -10,7 +10,14 @@ import { toolColor } from "./chatHelpers";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
 import { WorkflowCard } from "./WorkflowCard";
 import { ToolActivityRow } from "./ToolActivityRow";
-import { isAgentActivity, isWorkflowActivity } from "./toolActivityGroups";
+import {
+  isAgentActivity,
+  isWorkflowActivity,
+  toolBreakdown,
+  type ToolActivityDisplayGroup,
+} from "./toolActivityGroups";
+import { AgentRollupGroup } from "./AgentActivityGroups";
+import { DisclosureHeader } from "./DisclosureHeader";
 import { TurnEditSummaryCard } from "./EditChangeSummary";
 import {
   type EditPreviewLine,
@@ -62,6 +69,8 @@ export function TurnSummary({
   label,
   inline = false,
   mcp = false,
+  kind,
+  sessionId,
   editSummaryFallback,
   onLoadEditPreview,
   onOpenEditFile,
@@ -90,6 +99,13 @@ export function TurnSummary({
   /** MCP group: prefix the header with the Plug2 icon and render the
    *  contained rows with their `mcp__<server>__` prefix stripped. */
   mcp?: boolean;
+  /** Display-group kind from `groupToolActivitiesForDisplay`. Agent and
+   *  agent-rollup groups own their header, so this card forwards its
+   *  collapse state to them instead of wrapping them in a second chevron. */
+  kind?: ToolActivityDisplayGroup["kind"];
+  /** Needed by agent rollups, whose member agents persist their own
+   *  collapse state per session. */
+  sessionId?: string;
   /** Rescue summary used only when activity-derived edits return null —
    *  typically the workspace-diff summary for the latest turn, where the
    *  agent's tools couldn't be parsed (Bash heredoc, MCP write tool, etc.).
@@ -133,6 +149,10 @@ export function TurnSummary({
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
   const isExpanded = inline || !collapsed || queryHasMatch;
+  const breakdown = useMemo(
+    () => toolBreakdown(visibleActivities),
+    [visibleActivities],
+  );
 
   // In grouped mode a workflow is always a group of exactly one activity
   // (`groupToolActivitiesForDisplay` gives it its own group), and the card it
@@ -155,6 +175,17 @@ export function TurnSummary({
     !inline && soleActivity && isWorkflowActivity(soleActivity)
       ? soleActivity
       : null;
+  // Same reasoning for Agent groups. Wrapping one in a TurnSummary chevron
+  // made a completed agent look different from the live one: collapsed, it
+  // lost its status/count/usage row (only the outer label survived), and
+  // expanded it showed two stacked headers. Forwarding keeps "collapse"
+  // meaning "hide the nested transcript, keep the header and progress".
+  const agentCollapseOwner =
+    !inline && soleActivity && isAgentActivity(soleActivity) && kind !== "agents"
+      ? soleActivity
+      : null;
+  const agentRollupOwner =
+    !inline && kind === "agents" && sessionId ? visibleActivities : null;
 
   const renderedActivities = visibleActivities.map((act: ToolActivity) => {
     if (isWorkflowActivity(act)) {
@@ -198,25 +229,33 @@ export function TurnSummary({
             onToggle={onToggle}
           />
         </div>
+      ) : agentCollapseOwner ? (
+        <AgentToolCallGroup
+          activity={agentCollapseOwner}
+          searchQuery={searchQuery}
+          worktreePath={worktreePath}
+          collapsed={!isExpanded}
+          onToggle={onToggle}
+        />
+      ) : agentRollupOwner && sessionId ? (
+        <AgentRollupGroup
+          sessionId={sessionId}
+          activities={agentRollupOwner}
+          collapsed={collapsed}
+          onToggle={onToggle}
+          searchQuery={searchQuery}
+          worktreePath={worktreePath}
+        />
       ) : inline ? (
         <div className={styles.inlineTurnActivities}>{renderedActivities}</div>
       ) : (
         <div className={styles.turnSummary}>
-          <div
+          <DisclosureHeader
             className={styles.turnHeader}
-            role="button"
-            tabIndex={0}
-            aria-expanded={isExpanded}
-            aria-controls={activitiesId}
-            onClick={onToggle}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onToggle();
-              }
-            }}
+            expanded={isExpanded}
+            onToggle={onToggle}
+            ariaControls={activitiesId}
           >
-            <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
             {mcp && (
               <Plug2
                 size={13}
@@ -235,7 +274,10 @@ export function TurnSummary({
               {showFooter && turn.messageCount > 0 &&
                 `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
             </span>
-          </div>
+            {label == null || kind === "tools" || kind === "mcp" ? (
+              breakdown && <span className={styles.turnBreakdown}>{breakdown}</span>
+            ) : null}
+          </DisclosureHeader>
           {isExpanded && (
             <div id={activitiesId} className={styles.turnActivities}>
               {renderedActivities}
