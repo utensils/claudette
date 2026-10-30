@@ -227,5 +227,6 @@
   "agents_done": "{{count}} concluídos",
   "agents_failed": "{{count}} com falha",
   "agents_stopped": "{{count}} parados",
-  "agents_queued": "{{count}} na fila"
+  "agents_queued": "{{count}} na fila",
+  "task_progress_count": "{{completed}}/{{total}} tarefas"
 }

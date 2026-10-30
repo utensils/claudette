@@ -1,7 +1,9 @@
 import { useMemo } from "react";
 
-import { AttachmentCardShell } from "./AttachmentCardShell";
-import { useAttachmentText } from "./useAttachmentText";
+import {
+  TextDataAttachmentCard,
+  type TextDataAttachmentProps,
+} from "./TextDataAttachmentCard";
 import styles from "./MessageAttachment.module.css";
 
 /** Pretty-print JSON; falls back to the raw input when parsing fails so the
@@ -21,49 +23,25 @@ export function prettyPrintJson(input: string): {
 
 /** Inline preview for a JSON attachment: pretty-printed with 2-space indent
  *  inside a monospace block. Falls back to the raw input on parse failure. */
-export function JsonAttachmentCard({
-  attachmentId,
-  text_content,
-  data_base64,
-  filename,
-  size_bytes,
-  onContextMenu,
-}: {
-  attachmentId?: string;
-  text_content?: string | null;
-  data_base64?: string | null;
-  filename: string;
-  size_bytes: number;
-  onContextMenu?: (e: React.MouseEvent) => void;
-}) {
-  const { text, error } = useAttachmentText({
-    text_content,
-    data_base64,
-    attachmentId,
-  });
-
-  const result = useMemo(() => (text === null ? null : prettyPrintJson(text)), [text]);
-
+export function JsonAttachmentCard(props: TextDataAttachmentProps) {
   return (
-    <AttachmentCardShell
-      filename={filename}
+    <TextDataAttachmentCard
+      {...props}
       mediaType="application/json"
-      sizeBytes={size_bytes}
       collapsible
-      onContextMenu={onContextMenu}
-    >
-      {error ? (
-        <div className={styles.error}>Failed to load: {error}</div>
-      ) : result === null ? (
-        <div className={styles.error}>Loading…</div>
-      ) : (
-        <>
-          {!result.parsed && (
-            <div className={styles.error}>(invalid JSON — showing raw)</div>
-          )}
-          <pre className={styles.preBody}>{result.formatted}</pre>
-        </>
+      render={(text) => <JsonBody text={text} />}
+    />
+  );
+}
+
+function JsonBody({ text }: { text: string }) {
+  const result = useMemo(() => prettyPrintJson(text), [text]);
+  return (
+    <>
+      {!result.parsed && (
+        <div className={styles.error}>(invalid JSON — showing raw)</div>
       )}
-    </AttachmentCardShell>
+      <pre className={styles.preBody}>{result.formatted}</pre>
+    </>
   );
 }

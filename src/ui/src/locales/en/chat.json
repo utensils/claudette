@@ -301,5 +301,6 @@
   "agents_done": "{{count}} done",
   "agents_failed": "{{count}} failed",
   "agents_stopped": "{{count}} stopped",
-  "agents_queued": "{{count}} queued"
+  "agents_queued": "{{count}} queued",
+  "task_progress_count": "{{completed}}/{{total}} tasks"
 }

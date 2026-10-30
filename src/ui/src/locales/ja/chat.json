@@ -225,5 +225,6 @@
   "agents_done": "{{count}} 件完了",
   "agents_failed": "{{count}} 件失敗",
   "agents_stopped": "{{count}} 件停止",
-  "agents_queued": "{{count}} 件待機中"
+  "agents_queued": "{{count}} 件待機中",
+  "task_progress_count": "{{completed}}/{{total}} タスク"
 }

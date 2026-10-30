@@ -227,5 +227,6 @@
   "agents_done": "{{count}} completados",
   "agents_failed": "{{count}} fallidos",
   "agents_stopped": "{{count}} detenidos",
-  "agents_queued": "{{count}} en cola"
+  "agents_queued": "{{count}} en cola",
+  "task_progress_count": "{{completed}}/{{total}} tareas"
 }
