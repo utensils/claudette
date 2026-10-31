@@ -12,6 +12,9 @@ pub struct ServerEvent {
 
 /// Transport-agnostic connection to a remote claudette-server.
 #[allow(dead_code)]
+// async_trait's expansion marks the boxed futures `#[must_use]`, which newer
+// clippy flags as `double_must_use` on the generated trait methods.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait Transport: Send + Sync + 'static {
     /// Send a JSON-RPC request and return the response.
