@@ -183,6 +183,15 @@ impl RpcHost for TauriRpcHost {
                 )
                 .await?,
             ),
+            "prepare_cross_harness_migration" => {
+                commands::chat::lifecycle::prepare_cross_harness_migration(
+                    chat_session_param(&params)?,
+                    app.clone(),
+                    self.state(),
+                )
+                .await?;
+                Ok(json!(null))
+            }
             "read_plan_file" => {
                 to_value(commands::plan::read_plan_file(str_param(&params, "path")?).await?)
             }

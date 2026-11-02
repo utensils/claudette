@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { setRemoteRoutingResolver } from "./remoteRouting";
-import { submitPlanApproval } from "./chat";
+import { prepareCrossHarnessMigration, submitPlanApproval } from "./chat";
 import { createChatSession } from "./chatSessions";
 import { closePty, spawnPty, writePty } from "./pty";
 import { loadCommitFileDiff } from "./diff";
@@ -63,6 +63,17 @@ describe("remote routing", () => {
     expect(sendRemoteCommand).toHaveBeenCalledWith("conn-1", "create_chat_session", {
       workspace_id: "remote-ws",
     });
+  });
+
+  it("stages a cross-harness migration on the session's host", async () => {
+    sendRemoteCommand.mockResolvedValue(null);
+    await prepareCrossHarnessMigration("remote-session");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(sendRemoteCommand).toHaveBeenCalledWith(
+      "conn-1",
+      "prepare_cross_harness_migration",
+      { chat_session_id: "remote-session" },
+    );
   });
 
   it("reads a remote workspace's commit diffs on its own machine", async () => {

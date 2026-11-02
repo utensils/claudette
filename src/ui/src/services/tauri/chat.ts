@@ -7,7 +7,7 @@ import type {
   ChatMessage,
 } from "../../types";
 import type { ConversationCheckpoint } from "../../types/checkpoint";
-import { remoteConnectionForSession, viaSession } from "./remoteRouting";
+import { viaSession } from "./remoteRouting";
 
 export function loadChatHistory(sessionId: string): Promise<ChatMessage[]> {
   return viaSession(sessionId, "load_chat_history", {}, () =>
@@ -148,10 +148,11 @@ export function resetAgentSession(sessionId: string): Promise<void> {
  * harness.
  */
 export function prepareCrossHarnessMigration(sessionId: string): Promise<void> {
-  // A remote host resolves the harness per turn from the `backend_id` sent
-  // with each message; there is no migration to stage from this side.
-  if (remoteConnectionForSession(sessionId)) return Promise.resolve();
-  return invoke("prepare_cross_harness_migration", { sessionId });
+  // A standalone server can't stage a prelude and rejects the method; the
+  // caller then falls back to `resetAgentSession`.
+  return viaSession(sessionId, "prepare_cross_harness_migration", {}, () =>
+    invoke("prepare_cross_harness_migration", { sessionId }),
+  );
 }
 
 export function clearAttention(sessionId: string): Promise<void> {
