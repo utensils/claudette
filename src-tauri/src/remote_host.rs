@@ -175,6 +175,14 @@ impl RpcHost for TauriRpcHost {
                 )
                 .await?,
             ),
+            "load_commit_file_diff" => to_value(
+                commands::diff::load_commit_file_diff(
+                    str_param(&params, "worktree_path")?,
+                    str_param(&params, "commit_hash")?,
+                    str_param(&params, "file_path")?,
+                )
+                .await?,
+            ),
             "read_plan_file" => {
                 to_value(commands::plan::read_plan_file(str_param(&params, "path")?).await?)
             }

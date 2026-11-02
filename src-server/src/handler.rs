@@ -288,6 +288,12 @@ pub async fn dispatch(
             )
             .await
         }
+        "load_commit_file_diff" => {
+            let worktree_path = param_str(&params, "worktree_path");
+            let commit_hash = param_str(&params, "commit_hash");
+            let file_path = param_str(&params, "file_path");
+            handle_load_commit_file_diff(&worktree_path, &commit_hash, &file_path).await
+        }
         "spawn_pty" => {
             let workspace_id = param_str(&params, "workspace_id");
             let cwd = param_str(&params, "cwd");
@@ -1785,6 +1791,18 @@ async fn handle_load_file_diff(
         claudette::diff::file_diff_for_layer(worktree_path, merge_base, file_path, diff_layer)
             .await
             .map_err(|e| format!("{e:?}"))?;
+    let parsed = claudette::diff::parse_unified_diff(&raw, file_path);
+    Ok(serde_json::to_value(parsed).unwrap_or_default())
+}
+
+async fn handle_load_commit_file_diff(
+    worktree_path: &str,
+    commit_hash: &str,
+    file_path: &str,
+) -> Result<serde_json::Value, String> {
+    let raw = claudette::diff::commit_file_diff(worktree_path, commit_hash, file_path)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
     let parsed = claudette::diff::parse_unified_diff(&raw, file_path);
     Ok(serde_json::to_value(parsed).unwrap_or_default())
 }

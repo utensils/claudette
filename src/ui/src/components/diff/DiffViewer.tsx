@@ -154,7 +154,12 @@ export function DiffViewer() {
     const version = ++loadVersionRef.current;
     setDiffLoading(true);
     const load = diffSelectedCommitHash
-      ? loadCommitFileDiff(ws.worktree_path, diffSelectedCommitHash, diffSelectedFile)
+      ? loadCommitFileDiff(
+          ws.worktree_path,
+          diffSelectedCommitHash,
+          diffSelectedFile,
+          ws.id,
+        )
       : loadFileDiff(
           ws.worktree_path,
           diffMergeBase!,

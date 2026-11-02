@@ -52,12 +52,30 @@ export function loadFileDiff(
   );
 }
 
+/** One file's diff within a commit; `workspaceId` routes it like `loadFileDiff`. */
 export function loadCommitFileDiff(
   worktreePath: string,
   commitHash: string,
   filePath: string,
+  workspaceId?: string,
 ): Promise<FileDiff> {
-  return invoke("load_commit_file_diff", { worktreePath, commitHash, filePath });
+  const local = () =>
+    invoke<FileDiff>("load_commit_file_diff", {
+      worktreePath,
+      commitHash,
+      filePath,
+    });
+  if (!workspaceId) return local();
+  return viaWorkspace(
+    workspaceId,
+    "load_commit_file_diff",
+    {
+      worktree_path: worktreePath,
+      commit_hash: commitHash,
+      file_path: filePath,
+    },
+    local,
+  );
 }
 
 export function revertFile(

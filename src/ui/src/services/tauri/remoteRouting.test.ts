@@ -14,6 +14,7 @@ import { setRemoteRoutingResolver } from "./remoteRouting";
 import { submitPlanApproval } from "./chat";
 import { createChatSession } from "./chatSessions";
 import { closePty, spawnPty, writePty } from "./pty";
+import { loadCommitFileDiff } from "./diff";
 
 describe("remote routing", () => {
   beforeEach(() => {
@@ -61,6 +62,18 @@ describe("remote routing", () => {
     await expect(createChatSession("remote-ws")).resolves.toEqual({ id: "s1" });
     expect(sendRemoteCommand).toHaveBeenCalledWith("conn-1", "create_chat_session", {
       workspace_id: "remote-ws",
+    });
+  });
+
+  it("reads a remote workspace's commit diffs on its own machine", async () => {
+    sendRemoteCommand.mockResolvedValue({ path: "a.ts", hunks: [] });
+    await loadCommitFileDiff("/remote/wt", "abc123", "a.ts", "remote-ws");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(sendRemoteCommand).toHaveBeenCalledWith("conn-1", "load_commit_file_diff", {
+      workspace_id: "remote-ws",
+      worktree_path: "/remote/wt",
+      commit_hash: "abc123",
+      file_path: "a.ts",
     });
   });
 

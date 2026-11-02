@@ -156,10 +156,7 @@ pub async fn start(options: ServerOptions, host: Arc<dyn RpcHost>) -> Result<Ser
     };
 
     let hostname = gethostname::gethostname().to_string_lossy().to_string();
-    let connection_string = format!(
-        "claudette://{}:{}/{}",
-        hostname, port, pairing_token
-    );
+    let connection_string = format!("claudette://{}:{}/{}", hostname, port, pairing_token);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let ctx = ws::ConnectionContext {
