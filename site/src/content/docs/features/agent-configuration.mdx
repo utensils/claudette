@@ -72,6 +72,12 @@ The expanded state sticks to each tool call while the chat panel re-renders, so 
 
 Sub-agent runs from the Agent tool render as their own expandable transcript blocks instead of being mixed into adjacent tool-call groups. Expanding one shows the delegated prompt, captured thinking blocks, nested tool calls, live progress, and the final result returned to the parent agent.
 
+The block's header shows a state glyph (`◐` running, `●` done, `✕` failed, `–` stopped), the sub-agent type when one was requested (e.g. `Explore`, `Plan`), and — once the CLI reports it — the sub-agent's tool-call count, total tokens, and elapsed time. Collapsing the block hides only the nested transcript, so that summary stays visible.
+
+- **Parallel agents** — when the agent launches several sub-agents back to back, they roll up under a single **N agents** header with live per-state counts (`2 running · 1 done`) and the combined token total. Each sub-agent inside stays individually collapsible.
+- **Long transcripts** — only the latest 8 nested tool calls are shown at first; **Show all N tool calls** reveals the rest. Long results are clamped behind **Show full result**. An active chat search reveals everything so matches are never hidden.
+- **Background sub-agents** — a sub-agent started with `run_in_background` keeps updating after the turn that launched it ends: its nested calls, final result, and status land on the completed turn and are saved, so they survive a reload. If the session's CLI process exits while a sub-agent is still marked running, it is marked **stopped**.
+
 ## Fast Mode
 
 Fast mode prioritizes speed over depth. When enabled, the agent uses quicker, more concise responses.

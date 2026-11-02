@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type {
   ContextType,
   Dispatch,
@@ -11,14 +12,7 @@ import { LoaderCircle, SendHorizontal } from "lucide-react";
 
 import type { AttachmentInput } from "../../types/chat";
 import type { DownloadableAttachment } from "../../utils/attachmentDownload";
-import {
-  submitAgentAnswer,
-  submitAgentApproval,
-  submitPlanApproval,
-} from "../../services/tauri";
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
-import { AgentApprovalCard } from "./AgentApprovalCard";
-import { AgentQuestionCard } from "./AgentQuestionCard";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { ChatErrorBanner } from "./ChatErrorBanner";
 import { ChatInputArea } from "./ChatInputArea";
@@ -27,8 +21,6 @@ import { CliInvocationBanner } from "./CliInvocationBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 import { OverlayScrollbar } from "./OverlayScrollbar";
-import { PlanApprovalCard } from "./PlanApprovalCard";
-import { setPlanModeAndPersist } from "./planModePersistence";
 import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
 import { ScrollContext } from "./ScrollContext";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
@@ -36,7 +28,8 @@ import { WorkflowStatusPill } from "./WorkflowStatusPill";
 import { SetupScriptBanner } from "./SetupScriptBanner";
 import { StreamingMessage } from "./StreamingMessage";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
-import { formatElapsedSeconds } from "./chatHelpers";
+import { PendingControlCards } from "./PendingControlCards";
+import { ProcessingIndicator } from "./ProcessingIndicator";
 import { extractMentionPaths } from "./queuedMessageEditing";
 import { usePendingChatPrompt } from "./usePendingChatPrompt";
 import styles from "./ChatPanel.module.css";
@@ -85,7 +78,6 @@ type ChatPanelSessionViewProps = Pick<
 > & {
   clearQueuedMessagesAndCancelEdit: (sessionId: string) => void;
   draftRef: MutableRefObject<string>;
-  elapsed: number;
   error: string | null;
   historyIndexRef: MutableRefObject<number>;
   historyRef: MutableRefObject<Record<string, string[]>>;
@@ -133,7 +125,6 @@ export function ChatPanelSessionView({
   clearPlanApproval,
   clearQueuedMessagesAndCancelEdit,
   draftRef,
-  elapsed,
   error,
   globalOffset,
   hasPendingTypewriter,
@@ -187,7 +178,57 @@ export function ChatPanelSessionView({
 }: ChatPanelSessionViewProps) {
   const { t } = useTranslation("chat");
   const cliInvocation = activeChatSessionRecord?.cli_invocation ?? null;
-  const formatElapsed = formatElapsedSeconds;
+
+  // Built once per relevant input change rather than inline in JSX:
+  // `MessagesWithTurns` is memoized, and fresh element props on every
+  // render of this view defeated that memo — the whole transcript
+  // re-rendered on any parent update.
+  const hasLiveActivities = activitiesCount > 0;
+  const liveTaskProgressNode = useMemo(
+    () =>
+      activeSessionId && hasLiveActivities ? (
+        <CurrentTurnTaskProgress sessionId={activeSessionId} />
+      ) : null,
+    [activeSessionId, hasLiveActivities],
+  );
+  const streamingThinkingNode = useMemo(
+    () =>
+      activeSessionId && hasThinking && showThinkingBlocks ? (
+        <StreamingThinkingBlock
+          sessionId={activeSessionId}
+          isStreaming={isRunning ?? false}
+          inline={toolDisplayMode === "inline"}
+          searchQuery={searchQuery}
+        />
+      ) : null,
+    [
+      activeSessionId,
+      hasThinking,
+      isRunning,
+      searchQuery,
+      showThinkingBlocks,
+      toolDisplayMode,
+    ],
+  );
+  const streamingMessageNode = useMemo(
+    () =>
+      activeSessionId && selectedWorkspaceId && (hasStreaming || hasPendingTypewriter) ? (
+        <StreamingMessage
+          sessionId={activeSessionId}
+          workspaceId={selectedWorkspaceId}
+          isStreaming={isRunning ?? false}
+          searchQuery={searchQuery}
+        />
+      ) : null,
+    [
+      activeSessionId,
+      hasPendingTypewriter,
+      hasStreaming,
+      isRunning,
+      searchQuery,
+      selectedWorkspaceId,
+    ],
+  );
 
   // Prompts handed off by a pinned prompt that opened its own tab. The
   // launcher can't call `onSend` directly — that closure is bound to
@@ -264,31 +305,9 @@ export function ChatPanelSessionView({
                     searchQuery={searchQuery}
                     globalOffset={globalOffset}
                     toolDisplayMode={toolDisplayMode}
-                    liveTaskProgressNode={
-                      activitiesCount > 0 ? (
-                        <CurrentTurnTaskProgress sessionId={activeSessionId} />
-                      ) : null
-                    }
-                    streamingThinkingNode={
-                      hasThinking && showThinkingBlocks ? (
-                        <StreamingThinkingBlock
-                          sessionId={activeSessionId}
-                          isStreaming={isRunning ?? false}
-                          inline={toolDisplayMode === "inline"}
-                          searchQuery={searchQuery}
-                        />
-                      ) : null
-                    }
-                    streamingMessageNode={
-                      hasStreaming || hasPendingTypewriter ? (
-                        <StreamingMessage
-                          sessionId={activeSessionId}
-                          workspaceId={selectedWorkspaceId}
-                          isStreaming={isRunning ?? false}
-                          searchQuery={searchQuery}
-                        />
-                      ) : null
-                    }
+                    liveTaskProgressNode={liveTaskProgressNode}
+                    streamingThinkingNode={streamingThinkingNode}
+                    streamingMessageNode={streamingMessageNode}
                   />
                 )}
 
@@ -311,75 +330,19 @@ export function ChatPanelSessionView({
                   />
                 )}
 
-                {pendingQuestion && (
-                  <AgentQuestionCard
-                    question={pendingQuestion}
-                    onRespond={async (answers) => {
-                      if (!activeSessionId) return;
-                      const sid = activeSessionId;
-                      const toolUseId = pendingQuestion.toolUseId;
-                      try {
-                        await submitAgentAnswer(sid, toolUseId, answers);
-                        clearAgentQuestion(sid);
-                      } catch (e) {
-                        console.error("Failed to submit agent answer:", e);
-                        setError(String(e));
-                      }
-                    }}
-                  />
-                )}
-
-                {pendingPlan && selectedWorkspaceId && (
-                  <PlanApprovalCard
-                    approval={pendingPlan}
-                    workspaceId={selectedWorkspaceId}
-                    remoteConnectionId={ws?.remote_connection_id ?? undefined}
-                    onRespond={async (approved, reason) => {
-                      if (!activeSessionId) return;
-                      const sid = activeSessionId;
-                      const toolUseId = pendingPlan.toolUseId;
-                      const codexPlanApproval = pendingPlan.source === "codex";
-                      try {
-                        await submitPlanApproval(sid, toolUseId, approved, reason);
-                        clearPlanApproval(sid);
-                        if (codexPlanApproval) {
-                          if (approved) {
-                            await setPlanModeAndPersist(sid, false);
-                            await onSend("Implement the plan.");
-                          } else if (reason?.trim()) {
-                            await setPlanModeAndPersist(sid, true);
-                            await onSend(
-                              `${reason.trim()}\n\nRevise the plan to address this feedback. Do not begin implementation.`,
-                            );
-                          }
-                        } else {
-                          await setPlanModeAndPersist(sid, false);
-                        }
-                      } catch (e) {
-                        console.error("Failed to submit plan approval:", e);
-                        setError(String(e));
-                      }
-                    }}
-                  />
-                )}
-
-                {pendingApproval && (
-                  <AgentApprovalCard
-                    approval={pendingApproval}
-                    onRespond={async (approved, reason) => {
-                      if (!activeSessionId) return;
-                      const sid = activeSessionId;
-                      const toolUseId = pendingApproval.toolUseId;
-                      try {
-                        await submitAgentApproval(sid, toolUseId, approved, reason);
-                        clearAgentApproval(sid);
-                      } catch (e) {
-                        console.error("Failed to submit agent approval:", e);
-                        setError(String(e));
-                      }
-                    }}
-                  />
-                )}
+                <PendingControlCards
+                  activeSessionId={activeSessionId}
+                  selectedWorkspaceId={selectedWorkspaceId}
+                  ws={ws}
+                  pendingQuestion={pendingQuestion}
+                  pendingPlan={pendingPlan}
+                  pendingApproval={pendingApproval}
+                  clearAgentQuestion={clearAgentQuestion}
+                  clearPlanApproval={clearPlanApproval}
+                  clearAgentApproval={clearAgentApproval}
+                  setError={setError}
+                  onSend={onSend}
+                />
 
                 {isSteeringQueued && (
                   <div
@@ -400,30 +363,12 @@ export function ChatPanelSessionView({
                 )}
 
                 {isRunning && !pendingQuestion && !pendingPlan && !pendingApproval && (
-                  <div
-                    ref={processingRef}
-                    className={styles.processing}
-                    role="status"
-                    aria-label={
-                      ws?.agent_status === "Compacting"
-                        ? t("compacting_aria", {
-                            elapsed: formatElapsed(elapsed),
-                          })
-                        : t("processing_aria", {
-                            elapsed: formatElapsed(elapsed),
-                          })
-                    }
-                  >
-                    <span className={styles.spinnerWrap} aria-hidden="true">
-                      <span className={styles.spinner} />
-                    </span>
-                    {ws?.agent_status === "Compacting" && (
-                      <span className={styles.compactingLabel}>
-                        {t("compacting_label")}
-                      </span>
-                    )}
-                    <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
-                  </div>
+                  <ProcessingIndicator
+                    workspaceId={selectedWorkspaceId}
+                    isRunning={isRunning}
+                    isCompacting={ws?.agent_status === "Compacting"}
+                    processingRef={processingRef}
+                  />
                 )}
 
                 {error && (

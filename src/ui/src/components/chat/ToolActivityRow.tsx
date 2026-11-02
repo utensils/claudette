@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useMemo, useReducer, type MouseEvent } from "react";
+import { parseToolInput } from "../../utils/toolInput";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  type MouseEvent,
+} from "react";
 import { ChevronRight, WandSparkles } from "lucide-react";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { useAppStore } from "../../stores/useAppStore";
-import { extractToolSummary, relativizePath } from "../../hooks/toolSummary";
+import { relativizePath } from "../../hooks/toolSummary";
 import { getCachedHighlight, highlightCode } from "../../utils/highlight";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ChatPanel.module.css";
@@ -14,6 +22,7 @@ import {
   summarizeToolActivityEdit,
 } from "./editActivitySummary";
 import { resolveToolSummary } from "./toolMetadata";
+import { activitySummaryText } from "./agentToolCallRendering";
 import { isSkillActivity, skillActivationName } from "./toolActivityGroups";
 import { parseMcpToolName } from "./mcpToolName";
 import { tryOpenAgentFileTab } from "../../utils/agentFiles";
@@ -41,7 +50,11 @@ interface ToolDetails {
   lang: string | null;
 }
 
-export function ToolActivityRow(props: ToolActivityRowProps) {
+// Memoized: completed turns re-render with the transcript, and a row's props
+// only change when its own activity object does.
+export const ToolActivityRow = memo(function ToolActivityRow(
+  props: ToolActivityRowProps,
+) {
   // Skill invocations get a distinct, non-expandable presentation — a
   // "<skill> activated" marker with the wand icon — instead of the
   // generic tool row, so a glance at the transcript shows which skills
@@ -57,7 +70,7 @@ export function ToolActivityRow(props: ToolActivityRowProps) {
     );
   }
   return <GenericToolActivityRow {...props} />;
-}
+});
 
 function SkillActivationRow({
   activity,
@@ -103,13 +116,13 @@ function GenericToolActivityRow({
   const expanded = useAppStore((s) => !!s.expandedToolUseIds[activity.toolUseId]);
   const toggleToolUseExpanded = useAppStore((s) => s.toggleToolUseExpanded);
   const extendedToolCallOutput = useAppStore((s) => s.extendedToolCallOutput);
-  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const diffFiles = useAppStore((s) => s.diffFiles);
-  const diffStagedFiles = useAppStore((s) => s.diffStagedFiles);
-  const openDiffTab = useAppStore((s) => s.openDiffTab);
-  const openFileTab = useAppStore((s) => s.openFileTab);
-  const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
-  const editSummary = summarizeToolActivityEdit(activity);
+  // Derived from the input JSON only; memoized so a re-render (search
+  // keystroke, transcript update) doesn't re-parse it.
+  const editSummary = useMemo(
+    () => summarizeToolActivityEdit(activity),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the fields it reads
+    [activity.toolName, activity.inputJson],
+  );
   const summary = activitySummaryText(activity);
   // Inside an MCP container the server is already in the group header, so
   // show just the bare tool name (`search_datadog_dashboards`) instead of
@@ -136,8 +149,19 @@ function GenericToolActivityRow({
     };
   }, [cachedHtml, details.content, details.lang, expanded, extendedToolCallOutput]);
 
+  // Diff state is read at click time rather than subscribed to: every row in
+  // every completed turn used to re-render on each diff refresh just to
+  // keep this handler's closure current.
   const openEditedFile = useCallback(
     (filePath: string) => {
+      const {
+        selectedWorkspaceId,
+        diffFiles,
+        diffStagedFiles,
+        openDiffTab,
+        openFileTab,
+        setDiffSelectedCommitHash,
+      } = useAppStore.getState();
       if (!selectedWorkspaceId) return;
       // Agent-managed files (plans, memory) live outside the worktree, so
       // they have no diff entry and no worktree-relative form — route them
@@ -152,15 +176,7 @@ function GenericToolActivityRow({
       }
       openFileTab(selectedWorkspaceId, relativePath);
     },
-    [
-      diffFiles,
-      diffStagedFiles,
-      openDiffTab,
-      openFileTab,
-      selectedWorkspaceId,
-      setDiffSelectedCommitHash,
-      worktreePath,
-    ],
+    [worktreePath],
   );
 
   // The visible row shows the stripped `displayName`, but the toggle's
@@ -234,15 +250,6 @@ function GenericToolActivityRow({
   );
 }
 
-function activitySummaryText(activity: ToolActivity): string {
-  return (
-    activity.summary ||
-    activity.agentDescription ||
-    extractToolSummary(activity.toolName, activity.inputJson) ||
-    ""
-  );
-}
-
 function findDiffTarget(
   path: string,
   diffFiles: ReturnType<typeof useAppStore.getState>["diffFiles"],
@@ -265,7 +272,7 @@ function findDiffTarget(
 }
 
 function toolDetails(activity: ToolActivity): ToolDetails {
-  const input = parseObject(activity.inputJson);
+  const input = parseToolInput(activity.inputJson);
   const display = resolveToolSummary(activity.toolName, activity.inputJson);
   const readableInput = input ? readableToolInput(activity.toolName, input) : null;
 
@@ -286,15 +293,7 @@ function toolDetails(activity: ToolActivity): ToolDetails {
   return { content: activity.inputJson || "{}", lang: null };
 }
 
-function parseObject(inputJson: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(inputJson);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
+
 
 function shouldShowStructuredInput(
   input: Record<string, unknown>,

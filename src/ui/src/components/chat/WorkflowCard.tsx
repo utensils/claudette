@@ -1,3 +1,4 @@
+import { parseToolInput } from "../../utils/toolInput";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { isTerminalBackgroundTaskStatus } from "../../types/backgroundTaskStatus";
@@ -16,6 +17,7 @@ import {
   workflowDisplayName,
 } from "./workflowMeta";
 import { WORKFLOW_CARD_ANCHOR_ATTR } from "./workflowAnchor";
+import { TaskStateIcon } from "./TaskStateIcon";
 import styles from "./WorkflowCard.module.css";
 
 /** Grouping key for an agent with no phase — workflows can call `agent()`
@@ -29,49 +31,8 @@ const UNPHASED = "__claudette_unphased__";
  *  the script. Returns null for workflows launched by `name` or
  *  `scriptPath`, where there is no inline source to show. */
 function workflowScript(inputJson: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(inputJson || "{}");
-    if (!parsed || typeof parsed !== "object") return null;
-    const script = (parsed as { script?: unknown }).script;
-    return typeof script === "string" && script.trim() ? script : null;
-  } catch {
-    return null;
-  }
-}
-
-function stateIcon(state: string): string {
-  switch (state) {
-    case "done":
-      return "●";
-    case "error":
-      return "✕";
-    case "progress":
-      return "◐";
-    case "stopped":
-      // Reconciled straggler: the run ended before this agent did. Distinct
-      // from "queued" so a cancelled run doesn't read as one that never
-      // started, and from "error" so it doesn't read as a failure.
-      return "–";
-    default:
-      // Covers "queued" and any state we don't recognize — both mean
-      // "hasn't produced anything yet" as far as the reader is concerned.
-      return "○";
-  }
-}
-
-function stateClass(state: string): string {
-  switch (state) {
-    case "done":
-      return styles.stateDone;
-    case "error":
-      return styles.stateError;
-    case "progress":
-      return styles.stateProgress;
-    // "stopped" shares the muted treatment with "queued": neither produced
-    // a result, and neither is a failure worth colouring.
-    default:
-      return styles.stateQueued;
-  }
+  const script = parseToolInput(inputJson)?.script;
+  return typeof script === "string" && script.trim() ? script : null;
 }
 
 /**
@@ -135,13 +96,7 @@ function AgentRow({
 
   return (
     <div className={styles.agent}>
-      <span
-        className={`${styles.stateIcon} ${stateClass(agent.state)}`}
-        role="img"
-        aria-label={agent.state || "queued"}
-      >
-        {stateIcon(agent.state)}
-      </span>
+      <TaskStateIcon state={agent.state} className={styles.stateIcon} />
       <span
         className={`${styles.agentLabel} ${
           isAgentTerminal(agent) ? styles.agentLabelDone : ""

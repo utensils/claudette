@@ -1,4 +1,5 @@
 import { isClaudeAuthError } from "../auth/claudeAuth";
+import { makeChatMessage } from "../../utils/chatMessage";
 import type { ChatMessage } from "../../types/chat";
 
 interface SendFailureMessageInput {
@@ -20,19 +21,12 @@ export function buildSendFailureSystemMessage({
   id,
   createdAt,
 }: SendFailureMessageInput): ChatMessage {
-  return {
+  return makeChatMessage({
     id,
-    workspace_id: workspaceId,
-    chat_session_id: sessionId,
+    workspaceId,
+    sessionId,
     role: "System",
     content: error,
-    cost_usd: null,
-    duration_ms: null,
-    created_at: createdAt,
-    thinking: null,
-    input_tokens: null,
-    output_tokens: null,
-    cache_read_tokens: null,
-    cache_creation_tokens: null,
-  };
+    createdAt,
+  });
 }

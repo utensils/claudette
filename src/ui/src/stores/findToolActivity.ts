@@ -20,22 +20,38 @@ import type { CompletedTurn, ToolActivity } from "./useAppStore";
  * activity has long since moved into `completedTurns`.
  */
 export function findToolActivity(
-  state: {
-    toolActivities: Record<string, ToolActivity[]>;
-    completedTurns: Record<string, CompletedTurn[]>;
-  },
+  state: ToolActivityState,
   sessionId: string,
   toolUseId: string,
 ): ToolActivity | undefined {
-  const live = state.toolActivities[sessionId]?.find(
+  return findToolActivityWhere(
+    state,
+    sessionId,
     (a) => a.toolUseId === toolUseId,
   );
+}
+
+type ToolActivityState = {
+  toolActivities: Record<string, ToolActivity[]>;
+  completedTurns: Record<string, CompletedTurn[]>;
+};
+
+/** `findToolActivity` with an arbitrary predicate — for callers that only
+ *  know an activity by something other than its `toolUseId` (e.g. a
+ *  subagent's `agentTaskId` from a `SubagentStop` hook). Same search order:
+ *  live lane first, then completed turns newest-first. */
+export function findToolActivityWhere(
+  state: ToolActivityState,
+  sessionId: string,
+  predicate: (activity: ToolActivity) => boolean,
+): ToolActivity | undefined {
+  const live = state.toolActivities[sessionId]?.find(predicate);
   if (live) return live;
 
   const turns = state.completedTurns[sessionId];
   if (!turns) return undefined;
   for (let i = turns.length - 1; i >= 0; i--) {
-    const match = turns[i].activities.find((a) => a.toolUseId === toolUseId);
+    const match = turns[i].activities.find(predicate);
     if (match) return match;
   }
   return undefined;

@@ -1,6 +1,7 @@
 import { memo, useCallback, useContext, useEffect } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { useTypewriter } from "../../hooks/useTypewriter";
+import { useThrottledText } from "../../hooks/useThrottledText";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { StreamingContext } from "./StreamingContext";
 import { ScrollContext } from "./ScrollContext";
@@ -9,6 +10,11 @@ import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import { useWorkspaceFileIndex } from "./useWorkspaceFileIndex";
 import styles from "./ChatPanel.module.css";
 import caretStyles from "./caret.module.css";
+
+/** Below this length a full markdown re-parse per typewriter tick is cheap
+ *  enough to keep; above it, parse cost grows with every token. */
+const STREAMING_MARKDOWN_THROTTLE_MIN_CHARS = 2_000;
+const STREAMING_MARKDOWN_INTERVAL_MS = 80;
 
 /**
  * Isolated streaming message component — runs the typewriter reveal at a steady
@@ -42,6 +48,14 @@ export const StreamingMessage = memo(function StreamingMessage({
 
   const fullText = streaming || pendingText;
   const { displayed, showCaret } = useTypewriter(fullText, isStreaming);
+  // Long replies re-parse markdown at ~12 Hz instead of per typewriter tick;
+  // the final drained text always lands (throttle is off once the caret
+  // goes away, so the hand-off to the completed message is exact).
+  const markdownSource = useThrottledText(displayed, {
+    intervalMs: STREAMING_MARKDOWN_INTERVAL_MS,
+    minLength: STREAMING_MARKDOWN_THROTTLE_MIN_CHARS,
+    enabled: showCaret,
+  });
 
   useEffect(() => {
     handleContentChanged();
@@ -79,7 +93,7 @@ export const StreamingMessage = memo(function StreamingMessage({
       <div className={styles.content}>
         <StreamingContext.Provider value={isStreaming || pendingText.length > 0}>
           <HighlightedMessageMarkdown
-            content={displayed}
+            content={markdownSource}
             query={searchQuery}
             onOpenFile={openFileInMonaco}
             resolveFilePath={fileIndex.resolve}

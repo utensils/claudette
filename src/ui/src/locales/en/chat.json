@@ -290,5 +290,18 @@
   "auth_resolved_label": "Resolved",
   "auth_resolved_message": "Claude Code sign-in was restored for this chat.",
 
-  "terminal_failed_to_start": "Failed to start shell"
+  "terminal_failed_to_start": "Failed to start shell",
+
+  "agent_tokens": "{{tokens}} tokens",
+  "agent_show_all_calls": "Show all {{count}} tool calls",
+  "agent_show_fewer_calls": "Show fewer",
+  "agent_result_show_more": "Show full result",
+  "agent_result_show_less": "Show less",
+  "agents_running": "{{count}} running",
+  "agents_done": "{{count}} done",
+  "agents_failed": "{{count}} failed",
+  "agents_stopped": "{{count}} stopped",
+  "agents_queued": "{{count}} queued",
+  "task_progress_count": "{{completed}}/{{total}} tasks",
+  "tab_rename_failed": "Rename failed: {{error}}"
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "./ChatPanel.module.css";
 
 /** Inline progress bar rendered beneath a turn summary when tasks are present. */
@@ -10,6 +11,7 @@ export function TaskProgressBar({
 }) {
   const percent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
   const allDone = completedCount === totalCount;
+  const { t } = useTranslation("chat");
 
   return (
     <div className={styles.taskProgressBar}>
@@ -20,7 +22,11 @@ export function TaskProgressBar({
         />
       </div>
       <span className={styles.taskProgressLabel}>
-        {completedCount}/{totalCount} tasks
+        {t("task_progress_count", {
+          completed: completedCount,
+          total: totalCount,
+          defaultValue: `${completedCount}/${totalCount} tasks`,
+        })}
       </span>
     </div>
   );

@@ -1,0 +1,21 @@
+.icon {
+  display: inline-block;
+  text-align: center;
+  line-height: 1;
+}
+
+.queued {
+  color: var(--text-faint);
+}
+
+.progress {
+  color: var(--accent-primary);
+}
+
+.done {
+  color: var(--accent-success);
+}
+
+.error {
+  color: var(--accent-error);
+}

@@ -216,5 +216,18 @@
   "auth_resolved_label": "Resuelto",
   "auth_resolved_message": "El inicio de sesión de Claude Code se restauró para este chat.",
 
-  "terminal_failed_to_start": "Error al iniciar el shell"
+  "terminal_failed_to_start": "Error al iniciar el shell",
+
+  "agent_tokens": "{{tokens}} tokens",
+  "agent_show_all_calls": "Mostrar las {{count}} llamadas a herramientas",
+  "agent_show_fewer_calls": "Mostrar menos",
+  "agent_result_show_more": "Mostrar resultado completo",
+  "agent_result_show_less": "Mostrar menos",
+  "agents_running": "{{count}} en curso",
+  "agents_done": "{{count}} completados",
+  "agents_failed": "{{count}} fallidos",
+  "agents_stopped": "{{count}} detenidos",
+  "agents_queued": "{{count}} en cola",
+  "task_progress_count": "{{completed}}/{{total}} tareas",
+  "tab_rename_failed": "No se pudo renombrar: {{error}}"
 }

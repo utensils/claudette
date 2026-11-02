@@ -1,23 +1,13 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FileDiff as FileDiffIcon, Plus, X } from "lucide-react";
+import { FileDiff as FileDiffIcon, Plus } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   fileBufferKey,
   isFileTabDirty,
 } from "../../stores/slices/fileTreeSlice";
 import {
-  listChatSessions,
-  createChatSession,
   renameChatSession,
-  archiveChatSession,
   readWorkspaceFileForViewer,
   reorderChatSessions,
 } from "../../services/tauri";
@@ -25,27 +15,20 @@ import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
 import {
   buildWorkspaceTabNavEntries,
-  closeScopeForTabContext,
   type NavEntry,
   splitUnifiedTabOrder,
 } from "./sessionTabsLogic";
-import { ask } from "@tauri-apps/plugin-dialog";
-import { chatCloseConfirmKind } from "../../hotkeys/contextActions";
-import { tooltipAttributes, tooltipWithHotkey } from "../../hotkeys/display";
+import { tooltipAttributes } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import { DangerousFlagBadge } from "./DangerousFlagBadge";
 import { hasDangerousFlag } from "../../stores/slices/workspaceClaudeFlagsSlice";
-import {
-  AttachmentContextMenu,
-  type AttachmentContextMenuItem,
-} from "./AttachmentContextMenu";
+import { AttachmentContextMenu } from "./AttachmentContextMenu";
 import { DiscardUnsavedChangesConfirm } from "../files/DiscardUnsavedChangesConfirm";
 import { FilePathContextMenu } from "../files/FilePathContextMenu";
 import { useFilePathActions } from "../files/useFilePathActions";
 import { InlineRenameInput } from "../files/InlineRenameInput";
 import { getFileIcon } from "../../utils/fileIcons";
-import { createSerialGate } from "../../utils/serialGate";
 import {
   statusColor,
   statusForOpenFileTab,
@@ -59,22 +42,10 @@ import type {
   FileStatus,
   GitFileLayer,
 } from "../../types";
+import { TabShell, type NavDirection, type TabDragProps, type TabShellBaseProps } from "./TabShell";
+import { useSessionTabActions } from "./useSessionTabActions";
+import { useTabContextMenu } from "./useTabContextMenu";
 import styles from "./SessionTabs.module.css";
-
-type NavDirection = "prev" | "next" | "first" | "last";
-
-/** Tauri's native confirm dialog. Used everywhere the close-tab UI
- *  asks the user to confirm — `window.confirm()` is a silent no-op
- *  in Tauri 2 webviews and was the cause of the "Cmd+W kills running
- *  sessions without prompting" regression. */
-async function askToClose(message: string): Promise<boolean> {
-  return ask(message, {
-    title: "Close session",
-    kind: "warning",
-    okLabel: "Close",
-    cancelLabel: "Cancel",
-  });
-}
 
 // `NavEntry` and `buildWorkspaceTabNavEntries` are imported from
 // `./sessionTabsLogic` so the cycle-tabs hotkey and this component
@@ -124,10 +95,7 @@ export function SessionTabs({ workspaceId }: Props) {
     (s) => s.activeFileTabByWorkspace[workspaceId] ?? null,
   );
   const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
-  const markSessionsLoaded = useAppStore((s) => s.markSessionsLoaded);
-  const addChatSession = useAppStore((s) => s.addChatSession);
   const updateChatSession = useAppStore((s) => s.updateChatSession);
-  const removeChatSession = useAppStore((s) => s.removeChatSession);
   const selectSession = useAppStore((s) => s.selectSession);
   const selectDiffTab = useAppStore((s) => s.selectDiffTab);
   const closeDiffTab = useAppStore((s) => s.closeDiffTab);
@@ -169,50 +137,6 @@ export function SessionTabs({ workspaceId }: Props) {
   const [renamingFilePath, setRenamingFilePath] = useState<string | null>(null);
   const filePathActions = useFilePathActions(workspaceId);
 
-  // Monotonic version token: each local mutation (create/archive) bumps this so
-  // an in-flight `listChatSessions` response can detect it's stale and skip the
-  // overwrite. Without this, a create+archive that races with the initial load
-  // can get stomped by the older snapshot.
-  const loadVersionRef = useRef(0);
-
-  // Defang rapid clicks on the "+ new session" button. Without the gate, a
-  // user mashing the button while `createChatSession` is in flight would
-  // queue every click as a separate tab once the backend caught up.
-  // Issue 574 made this trivial to repro because the streaming task
-  // could starve the create command for the duration of an entire turn.
-  // We keep both pieces of state because each is load-bearing:
-  //  - `gateRef` is the synchronous source of truth (a `useState` setter
-  //    only takes effect after the next render, so two clicks in the same
-  //    tick would both observe `false`).
-  //  - `creating` drives the disabled prop / aria-busy on the button so
-  //    the user gets immediate visual feedback.
-  const gateRef = useRef(createSerialGate());
-  const [creating, setCreating] = useState(false);
-
-  // Load sessions for this workspace on mount / workspace change.
-  useEffect(() => {
-    const version = ++loadVersionRef.current;
-    listChatSessions(workspaceId, false)
-      .then((sessions) => {
-        if (version === loadVersionRef.current) {
-          setSessionsForWorkspace(workspaceId, sessions);
-        }
-      })
-      .catch((err) => {
-        console.error("[SessionTabs] Failed to load sessions:", err);
-        // Don't strand ChatPanel on the loading shell when the initial
-        // fetch fails — flip the loaded flag so the user falls through
-        // to `WorkspaceEmptyTabs` and can recover via "+ Open new session".
-        // We deliberately don't overwrite `sessionsByWorkspace` here: a
-        // racing `addChatSession` (e.g. an agent stream event mid-fetch)
-        // may have already populated the list, and that authoritative
-        // state must not be clobbered by the error path.
-        if (version === loadVersionRef.current) {
-          markSessionsLoaded(workspaceId);
-        }
-      });
-  }, [workspaceId, setSessionsForWorkspace, markSessionsLoaded]);
-
   // Memoized so navEntries / navigateTabs stay referentially stable when the
   // session list hasn't changed — without this, `sessions.filter` returns a
   // fresh array each render and defeats the downstream useMemo/useCallback.
@@ -220,98 +144,13 @@ export function SessionTabs({ workspaceId }: Props) {
     () => sessions.filter((s) => s.status === "Active"),
     [sessions],
   );
-
-  const handleCreate = async () => {
-    // Drive `setCreating` from inside the gated callback so it only fires
-    // for the call that actually acquires the gate. If a second click
-    // somehow slipped past the synchronous `isPending()` check, gate.run
-    // would return `null` immediately for it and that caller wouldn't
-    // touch the visual state — leaving the in-flight call's `creating=true`
-    // intact for the duration of the real request.
-    try {
-      const session = await gateRef.current.run(async () => {
-        setCreating(true);
-        try {
-          return await createChatSession(workspaceId);
-        } finally {
-          setCreating(false);
-        }
-      });
-      if (session !== null) {
-        // Invalidate any in-flight load — our local addChatSession is authoritative.
-        loadVersionRef.current += 1;
-        addChatSession(session);
-        switchToSession(session.id);
-      }
-    } catch (err) {
-      console.error("[SessionTabs] Failed to create session:", err);
-    }
-  };
-
-  const archiveSessionImmediate = useCallback(
-    async (session: ChatSession) => {
-      try {
-        // Decide whether the backend should auto-create a replacement. We
-        // skip the replacement only when this is the LAST tab in the
-        // workspace across every kind (chat sessions, diff tabs, file tabs)
-        // — that's the "close the final tab and land on the empty-tabs
-        // view" path. As long as some other tab is still around, keeping
-        // the always-≥1-active-session invariant matches existing UX.
-        const isLastSession = activeSessions.length <= 1;
-        const noOtherTabs = diffTabs.length === 0 && fileTabs.length === 0;
-        const autoReplace = !(isLastSession && noOtherTabs);
-        const autoCreated = await archiveChatSession(session.id, autoReplace);
-        loadVersionRef.current += 1;
-        removeChatSession(session.id);
-        if (autoCreated) {
-          addChatSession(autoCreated);
-          // Only navigate to the new session when the diff panel isn't active —
-          // bulk-closing sessions while a diff tab is focused should leave the
-          // diff view undisturbed.
-          if (useAppStore.getState().diffSelectedFile === null) {
-            selectSession(workspaceId, autoCreated.id);
-          }
-        }
-      } catch (err) {
-        console.error("[SessionTabs] Failed to archive session:", err);
-      }
-    },
-    [removeChatSession, addChatSession, selectSession, workspaceId, activeSessions, diffTabs, fileTabs],
-  );
-
-  const handleArchive = async (session: ChatSession) => {
-    // The shared `chatCloseConfirmKind` helper is also used by the
-    // global Cmd+W path in `hotkeys/contextActions.ts`, so the rules
-    // ("running" / "active" / "last" → confirm) stay in lockstep
-    // between the close button and the keystroke. Each kind maps to
-    // its own translated string so the message matches the trigger.
-    // Pull draft + pending-attachment state for the placeholder-skip
-    // guard inside chatCloseConfirmKind: a brand-new "New chat" with
-    // unsent typing in the composer must still trip the confirm dialog
-    // — letting the close button silently archive that session would
-    // discard the user's work-in-progress.
-    const storeNow = useAppStore.getState();
-    const draft = storeNow.chatDrafts[session.id] ?? null;
-    const pendingAttachmentsCount =
-      (storeNow.pendingAttachmentsBySession[session.id] ?? []).length;
-    const kind = chatCloseConfirmKind({
-      session,
-      activeSessions,
-      isActiveSession: session.id === selectedSessionId,
-      draft,
-      pendingAttachmentsCount,
-    });
-    if (kind !== "none") {
-      const message =
-        kind === "running"
-          ? t("session_running_confirm_close", { name: session.name })
-          : kind === "active"
-            ? t("session_active_confirm_close", { name: session.name })
-            : t("session_last_confirm_close", { name: session.name });
-      if (!(await askToClose(message))) return;
-    }
-    await archiveSessionImmediate(session);
-  };
+  // O(1) id → session lookup for the render loop, drag ghost title, and
+  // bulk close (avoids an `activeSessions.find` per tab).
+  const activeSessionById = useMemo(() => {
+    const m = new Map<string, ChatSession>();
+    for (const s of activeSessions) m.set(s.id, s);
+    return m;
+  }, [activeSessions]);
 
   // Refs keyed by a unified nav key (sessionNavKey / diffNavKey) so arrow-key
   // navigation can focus any tab in the strip, regardless of kind.
@@ -364,7 +203,7 @@ export function SessionTabs({ workspaceId }: Props) {
     getId: (e) => e.key,
     getTitle: (e) => {
       if (e.kind === "session") {
-        return activeSessions.find((s) => s.id === e.sessionId)?.name ?? "";
+        return activeSessionById.get(e.sessionId)?.name ?? "";
       }
       if (e.kind === "diff" || e.kind === "file") {
         return e.path.split("/").pop() || e.path;
@@ -415,13 +254,6 @@ export function SessionTabs({ workspaceId }: Props) {
     },
   });
 
-  // Right-click menu state. Tracks which tab was clicked (by its NavEntry key)
-  // and the click position. Rendered once at the bottom; portal'd to body so
-  // tab-strip overflow doesn't clip it.
-  const [contextMenu, setContextMenu] = useState<
-    { entryKey: string; x: number; y: number } | null
-  >(null);
-
   // Close handler for file tabs — checks the dirty flag and routes to the
   // confirm-discard modal when there are unsaved edits. Reads dirty from
   // a fresh store snapshot so we always get the latest buffer state, not
@@ -463,103 +295,17 @@ export function SessionTabs({ workspaceId }: Props) {
     [workspaceId, closeFileTab, setPendingClosePaths],
   );
 
-  // Close a list of tabs (sessions, diffs, and/or files) sequentially. Sessions
-  // get archived through the same backend command as the close button; diffs
-  // and files drop from the local store (file tabs route through the
-  // dirty-confirm modal).
-  //
-  // Confirmation rules mirror the per-tab close path's
-  // `chatCloseConfirmKind` (running / active / last / none) but
-  // aggregate across the batch so the user sees one prompt — not one
-  // per tab — when bulk-closing. Priority order:
-  //
-  //   1. Any running session in the batch → "running" prompt (kept
-  //      verbatim; the multi-running plural string already exists).
-  //   2. Batch contains the currently-selected session → "active"
-  //      prompt (NEW; previously only the single-tab path guarded
-  //      this case, leaving Cmd+Shift+W "close all" able to silently
-  //      yank the visible chat).
-  //   3. Batch closes every Active session in the workspace → "last"
-  //      prompt (NEW; the auto-create path runs and the visible
-  //      history archives away).
-  const closeEntries = useCallback(
-    async (entries: NavEntry[]) => {
-      if (entries.length === 0) return;
-      const sessionEntries = entries.flatMap((e) =>
-        e.kind === "session" ? [e] : [],
-      );
-      const sessionsBeingClosed = sessionEntries
-        .map((e) => activeSessions.find((s) => s.id === e.sessionId))
-        .filter((s): s is ChatSession => !!s);
-      const runningSessions = sessionsBeingClosed.filter(
-        (s) => s.agent_status === "Running",
-      );
-      const closingActive = sessionsBeingClosed.some(
-        (s) => s.id === selectedSessionId,
-      );
-      const remainingActiveAfterBatch =
-        activeSessions.length - sessionsBeingClosed.length;
-
-      if (runningSessions.length > 0) {
-        const message =
-          runningSessions.length === 1
-            ? t("session_running_confirm_close", { name: runningSessions[0].name })
-            : t("session_running_confirm_close_multi", { count: runningSessions.length });
-        if (!(await askToClose(message))) return;
-      } else if (closingActive) {
-        const active = sessionsBeingClosed.find(
-          (s) => s.id === selectedSessionId,
-        );
-        if (
-          active &&
-          !(await askToClose(
-            t("session_active_confirm_close", { name: active.name }),
-          ))
-        )
-          return;
-      } else if (
-        sessionsBeingClosed.length > 0 &&
-        remainingActiveAfterBatch <= 0
-      ) {
-        // Batch wipes out every Active session — surface the last-one
-        // prompt against any of them (pick the first; user can still
-        // cancel the whole batch).
-        const last = sessionsBeingClosed[0];
-        if (
-          last &&
-          !(await askToClose(
-            t("session_last_confirm_close", { name: last.name }),
-          ))
-        )
-          return;
-      }
-
-      // File tabs: collect first, close clean ones immediately, route
-      // dirty ones through a single batched confirm. Sessions and diffs
-      // close inline as before.
-      const filePaths: string[] = [];
-      for (const entry of entries) {
-        if (entry.kind === "session") {
-          const session = activeSessions.find((s) => s.id === entry.sessionId);
-          if (session) await archiveSessionImmediate(session);
-        } else if (entry.kind === "diff") {
-          closeDiffTab(workspaceId, entry.path, entry.layer);
-        } else {
-          filePaths.push(entry.path);
-        }
-      }
-      requestCloseFileTabsBatch(filePaths);
-    },
-    [
-      activeSessions,
-      archiveSessionImmediate,
-      closeDiffTab,
-      requestCloseFileTabsBatch,
-      selectedSessionId,
-      t,
+  const { creating, handleCreate, handleArchive, closeEntries } =
+    useSessionTabActions({
       workspaceId,
-    ],
-  );
+      activeSessions,
+      activeSessionById,
+      diffTabs,
+      fileTabs,
+      selectedSessionId,
+      switchToSession,
+      requestCloseFileTabsBatch,
+    });
 
   const navigateTabs = useCallback(
     (fromKey: string, direction: NavDirection) => {
@@ -594,13 +340,6 @@ export function SessionTabs({ workspaceId }: Props) {
     [navEntries, switchToSession, switchToDiff, selectFileTab, workspaceId],
   );
 
-  const openContextMenu = useCallback(
-    (entryKey: string, x: number, y: number) => {
-      setContextMenu({ entryKey, x, y });
-    },
-    [setContextMenu],
-  );
-
   // Helper to activate a nav entry (session, diff, or file tab).
   const selectEntry = useCallback(
     (entry: NavEntry) => {
@@ -615,54 +354,24 @@ export function SessionTabs({ workspaceId }: Props) {
     [switchToSession, switchToDiff, selectFileTab, workspaceId],
   );
 
-  // Build the menu items lazily from the entry that was right-clicked. The
-  // unified navEntries order is what "to the right" / "others" resolve against,
-  // matching the order the user sees in the strip.
-  const contextMenuItems = useMemo<AttachmentContextMenuItem[] | null>(() => {
-    if (!contextMenu) return null;
-    const idx = navEntries.findIndex((e) => e.key === contextMenu.entryKey);
-    if (idx < 0) return null;
-    const target = navEntries[idx];
-    const closeScope = closeScopeForTabContext(
-      navEntries,
-      target.key,
-      (entry) =>
-        entry.kind === "diff" &&
-        statusForOpenFileTab(entry.path, diffStagedFiles) === "Deleted",
-    );
-    const scopedIdx = closeScope.findIndex((e) => e.key === target.key);
-    const others = closeScope.filter((_, i) => i !== scopedIdx);
-    const toRight = closeScope.slice(scopedIdx + 1);
-    return [
-      { label: t("tab_close"), onSelect: () => void closeEntries([target]) },
-      {
-        label: t("tab_close_others"),
-        onSelect: async () => {
-          await closeEntries(others);
-          selectEntry(target);
-        },
-        disabled: others.length === 0,
-      },
-      {
-        label: t("tab_close_to_right"),
-        onSelect: async () => {
-          await closeEntries(toRight);
-          selectEntry(target);
-        },
-        disabled: toRight.length === 0,
-      },
-      { label: t("tab_close_all"), onSelect: () => void closeEntries(navEntries) },
-    ];
-  }, [contextMenu, diffStagedFiles, navEntries, closeEntries, selectEntry, t]);
-
-  const contextMenuEntry = contextMenu
-    ? (navEntryByKey.get(contextMenu.entryKey) ?? null)
-    : null;
+  const {
+    contextMenu,
+    contextMenuItems,
+    contextMenuEntry,
+    openContextMenu,
+    closeContextMenu,
+  } = useTabContextMenu({
+    navEntries,
+    navEntryByKey,
+    diffStagedFiles,
+    closeEntries,
+    selectEntry,
+  });
 
   // Convenience helper that builds the drag-reorder slice of props each
   // sub-tab needs. Avoids repeating `tabReorder.getTabHandlers(...)` and the
   // drop-indicator booleans three times in the render block below.
-  const dragPropsFor = (navKey: string) => {
+  const dragPropsFor = (navKey: string): TabDragProps | null => {
     const entry = navEntryByKey.get(navKey);
     if (!entry) return null;
     const handlers = tabReorder.getTabHandlers(entry);
@@ -694,7 +403,7 @@ export function SessionTabs({ workspaceId }: Props) {
         const navKey = entry.key;
         const drag = dragPropsFor(navKey);
         if (entry.kind === "session") {
-          const session = activeSessions.find((s) => s.id === entry.sessionId);
+          const session = activeSessionById.get(entry.sessionId);
           if (!session) return null;
           return (
             <SessionTab
@@ -776,7 +485,12 @@ export function SessionTabs({ workspaceId }: Props) {
                 return true;
               } catch (err) {
                 console.error("[SessionTabs] Failed to rename file:", err);
-                useAppStore.getState().addToast(`Rename failed: ${String(err)}`);
+                useAppStore.getState().addToast(
+                  t("tab_rename_failed", {
+                    error: String(err),
+                    defaultValue: `Rename failed: ${String(err)}`,
+                  }),
+                );
                 return false;
               }
             }}
@@ -812,7 +526,7 @@ export function SessionTabs({ workspaceId }: Props) {
           y={contextMenu.y}
           beforeItems={contextMenuItems}
           onRenameRequest={(target) => setRenamingFilePath(target.path)}
-          onClose={() => setContextMenu(null)}
+          onClose={closeContextMenu}
         />
       )}
       {contextMenu && contextMenuItems && contextMenuEntry?.kind !== "file" && (
@@ -820,7 +534,7 @@ export function SessionTabs({ workspaceId }: Props) {
           x={contextMenu.x}
           y={contextMenu.y}
           items={contextMenuItems}
-          onClose={() => setContextMenu(null)}
+          onClose={closeContextMenu}
         />
       )}
       {pendingClosePaths.length > 0 && (
@@ -842,47 +556,12 @@ export function SessionTabs({ workspaceId }: Props) {
   );
 }
 
-// Drag-reorder slice of props each sub-tab consumes. Built once per render
-// by SessionTabs.dragPropsFor; passed straight through to the tab element.
-interface TabDragProps {
-  navKey: string;
-  handlers: {
-    onPointerDown: (ev: ReactPointerEvent<HTMLElement>) => void;
-    onPointerMove: (ev: ReactPointerEvent<HTMLElement>) => void;
-    onPointerUp: (ev: ReactPointerEvent<HTMLElement>) => void;
-    onPointerCancel: (ev: ReactPointerEvent<HTMLElement>) => void;
-  };
-  isDragging: boolean;
-  dropBefore: boolean;
-  dropAfter: boolean;
-  /** Reads the latest "did a drag just end" flag from the hook. Tab onClick
-   *  handlers call this to skip the synthetic post-pointerup click. */
-  isClickSuppressed: () => boolean;
-}
-
-interface TabProps {
+interface TabProps extends TabShellBaseProps {
   session: ChatSession;
-  isActive: boolean;
-  onSelect: () => void;
-  onClose: () => void;
   onRename: (name: string) => void;
-  onNavigate: (direction: "prev" | "next" | "first" | "last") => void;
-  onContextMenu: (x: number, y: number) => void;
-  tabRef: (el: HTMLDivElement | null) => void;
-  drag: TabDragProps | null;
 }
 
-function SessionTab({
-  session,
-  isActive,
-  onSelect,
-  onClose,
-  onRename,
-  onNavigate,
-  onContextMenu,
-  tabRef,
-  drag,
-}: TabProps) {
+function SessionTab({ session, onRename, ...shell }: TabProps) {
   const { t } = useTranslation("chat");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.name);
@@ -900,11 +579,6 @@ function SessionTab({
   const loadWorkspaceClaudeFlags = useAppStore(
     (s) => s.loadWorkspaceClaudeFlags,
   );
-  const keybindings = useAppStore((s) => s.keybindings);
-  const isMac = isMacHotkeyPlatform();
-  const closeTitle = isActive
-    ? tooltipWithHotkey(t("session_close"), "global.close-tab", keybindings, isMac)
-    : t("session_close");
 
   useEffect(() => {
     if (editing) {
@@ -946,61 +620,16 @@ function SessionTab({
   };
 
   return (
-    <div
-      ref={tabRef}
-      role="tab"
-      aria-selected={isActive}
-      tabIndex={isActive ? 0 : -1}
-      data-session-tab-key={drag?.navKey}
-      className={`${styles.tab} ${isActive ? styles.active : ""} ${drag?.isDragging ? styles.dragging : ""}`}
-      onClick={() => {
-        if (drag?.isClickSuppressed()) return;
-        if (!editing) onSelect();
-      }}
-      onContextMenu={(e) => {
-        // Skip while inline-renaming so the input's native context menu
-        // (cut/copy/paste) still works.
-        if (editing) return;
-        e.preventDefault();
-        onContextMenu(e.clientX, e.clientY);
-      }}
+    <TabShell
+      {...shell}
+      closeLabel={t("session_close")}
+      locked={editing}
+      onRenameKey={startEditing}
       onDoubleClick={(e) => {
         e.stopPropagation();
         startEditing();
       }}
-      onPointerDown={drag?.handlers.onPointerDown}
-      onPointerMove={drag?.handlers.onPointerMove}
-      onPointerUp={drag?.handlers.onPointerUp}
-      onPointerCancel={drag?.handlers.onPointerCancel}
-      onKeyDown={(e) => {
-        if (editing) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        } else if (e.key === "F2") {
-          e.preventDefault();
-          startEditing();
-        } else if (e.key === "ArrowLeft") {
-          e.preventDefault();
-          onNavigate("prev");
-        } else if (e.key === "ArrowRight") {
-          e.preventDefault();
-          onNavigate("next");
-        } else if (e.key === "Home") {
-          e.preventDefault();
-          onNavigate("first");
-        } else if (e.key === "End") {
-          e.preventDefault();
-          onNavigate("last");
-        }
-      }}
     >
-      {drag?.dropBefore && (
-        <span className={`${styles.dropEdge} ${styles.dropBefore}`} aria-hidden />
-      )}
-      {drag?.dropAfter && (
-        <span className={`${styles.dropEdge} ${styles.dropAfter}`} aria-hidden />
-      )}
       <span className={`${styles.icon} ${session.needs_attention ? styles.pulse : ""}`}>
         <SessionStatusIcon status={statusFor(session)} size={12} />
       </span>
@@ -1026,38 +655,18 @@ function SessionTab({
           {session.name}
         </span>
       )}
-      <button
-        type="button"
-        className={styles.closeBtn}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        data-tooltip={closeTitle}
-        data-tooltip-placement="bottom"
-        aria-label={t("session_close")}
-      >
-        <X size={12} />
-      </button>
-    </div>
+    </TabShell>
   );
 }
 
-interface FileTabProps {
+interface FileTabProps extends TabShellBaseProps {
   workspaceId: string;
   path: string;
   gitStatus: FileStatus | null;
   gitLayer: GitFileLayer | null;
-  isActive: boolean;
-  onSelect: () => void;
-  onClose: () => void;
-  onNavigate: (direction: NavDirection) => void;
-  onContextMenu: (x: number, y: number) => void;
   renaming: boolean;
   onRenameCommit: (newName: string) => Promise<boolean>;
   onRenameCancel: () => void;
-  tabRef: (el: HTMLDivElement | null) => void;
-  drag: TabDragProps | null;
 }
 
 function FileTab({
@@ -1065,23 +674,12 @@ function FileTab({
   path,
   gitStatus,
   gitLayer,
-  isActive,
-  onSelect,
-  onClose,
-  onNavigate,
-  onContextMenu,
   renaming,
   onRenameCommit,
   onRenameCancel,
-  tabRef,
-  drag,
+  ...shell
 }: FileTabProps) {
   const { t } = useTranslation("chat");
-  const keybindings = useAppStore((s) => s.keybindings);
-  const isMac = isMacHotkeyPlatform();
-  const closeTitle = isActive
-    ? tooltipWithHotkey(t("session_close_file"), "global.close-tab", keybindings, isMac)
-    : t("session_close_file");
   // Subscribe only to dirty state for this tab's buffer. Reading the whole
   // buffer would re-render the tab on every keystroke; reading just dirty
   // means we re-render only when it crosses the saved/unsaved boundary.
@@ -1114,53 +712,12 @@ function FileTab({
         : `Renamed from ${gitStatus.Renamed.from}`;
 
   return (
-    <div
-      ref={tabRef}
-      role="tab"
-      aria-selected={isActive}
-      tabIndex={isActive ? 0 : -1}
-      data-session-tab-key={drag?.navKey}
-      className={`${styles.tab} ${isActive ? styles.active : ""} ${drag?.isDragging ? styles.dragging : ""}`}
-      onClick={() => {
-        if (drag?.isClickSuppressed()) return;
-        if (renaming) return;
-        onSelect();
-      }}
-      onContextMenu={(e) => {
-        if (renaming) return;
-        e.preventDefault();
-        onContextMenu(e.clientX, e.clientY);
-      }}
-      onPointerDown={renaming ? undefined : drag?.handlers.onPointerDown}
-      onPointerMove={renaming ? undefined : drag?.handlers.onPointerMove}
-      onPointerUp={renaming ? undefined : drag?.handlers.onPointerUp}
-      onPointerCancel={renaming ? undefined : drag?.handlers.onPointerCancel}
-      onKeyDown={(e) => {
-        if (renaming) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        } else if (e.key === "ArrowLeft") {
-          e.preventDefault();
-          onNavigate("prev");
-        } else if (e.key === "ArrowRight") {
-          e.preventDefault();
-          onNavigate("next");
-        } else if (e.key === "Home") {
-          e.preventDefault();
-          onNavigate("first");
-        } else if (e.key === "End") {
-          e.preventDefault();
-          onNavigate("last");
-        }
-      }}
+    <TabShell
+      {...shell}
+      closeLabel={t("session_close_file")}
+      locked={renaming}
+      detachDragWhileLocked
     >
-      {drag?.dropBefore && (
-        <span className={`${styles.dropEdge} ${styles.dropBefore}`} aria-hidden />
-      )}
-      {drag?.dropAfter && (
-        <span className={`${styles.dropEdge} ${styles.dropAfter}`} aria-hidden />
-      )}
       <span className={styles.icon}>
         {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
         <Icon size={12} />
@@ -1232,119 +789,29 @@ function FileTab({
           {statusLabel(gitStatus, gitLayer)}
         </span>
       )}
-      <button
-        type="button"
-        className={styles.closeBtn}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        data-tooltip={closeTitle}
-        data-tooltip-placement="bottom"
-        aria-label={t("session_close_file")}
-      >
-        <X size={12} />
-      </button>
-    </div>
+    </TabShell>
   );
 }
 
-interface DiffTabProps {
+interface DiffTabProps extends TabShellBaseProps {
   tab: DiffFileTab;
-  isActive: boolean;
-  onSelect: () => void;
-  onClose: () => void;
-  onNavigate: (direction: NavDirection) => void;
-  onContextMenu: (x: number, y: number) => void;
-  tabRef: (el: HTMLDivElement | null) => void;
-  drag: TabDragProps | null;
 }
 
-function DiffTab({
-  tab,
-  isActive,
-  onSelect,
-  onClose,
-  onNavigate,
-  onContextMenu,
-  tabRef,
-  drag,
-}: DiffTabProps) {
+function DiffTab({ tab, ...shell }: DiffTabProps) {
   const { t } = useTranslation("chat");
-  const keybindings = useAppStore((s) => s.keybindings);
-  const isMac = isMacHotkeyPlatform();
-  const closeTitle = isActive
-    ? tooltipWithHotkey(t("session_close_diff"), "global.close-tab", keybindings, isMac)
-    : t("session_close_diff");
   // Show just the basename in the tab; the full path goes in the tooltip
   // (mirrors how editors label file tabs). `path.split("/").pop()` is fine
   // because diff paths come from git and use forward slashes on every
   // platform.
   const basename = tab.path.split("/").pop() || tab.path;
   return (
-    <div
-      ref={tabRef}
-      role="tab"
-      aria-selected={isActive}
-      tabIndex={isActive ? 0 : -1}
-      data-session-tab-key={drag?.navKey}
-      className={`${styles.tab} ${isActive ? styles.active : ""} ${drag?.isDragging ? styles.dragging : ""}`}
-      onClick={() => {
-        if (drag?.isClickSuppressed()) return;
-        onSelect();
-      }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onContextMenu(e.clientX, e.clientY);
-      }}
-      onPointerDown={drag?.handlers.onPointerDown}
-      onPointerMove={drag?.handlers.onPointerMove}
-      onPointerUp={drag?.handlers.onPointerUp}
-      onPointerCancel={drag?.handlers.onPointerCancel}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        } else if (e.key === "ArrowLeft") {
-          e.preventDefault();
-          onNavigate("prev");
-        } else if (e.key === "ArrowRight") {
-          e.preventDefault();
-          onNavigate("next");
-        } else if (e.key === "Home") {
-          e.preventDefault();
-          onNavigate("first");
-        } else if (e.key === "End") {
-          e.preventDefault();
-          onNavigate("last");
-        }
-      }}
-    >
-      {drag?.dropBefore && (
-        <span className={`${styles.dropEdge} ${styles.dropBefore}`} aria-hidden />
-      )}
-      {drag?.dropAfter && (
-        <span className={`${styles.dropEdge} ${styles.dropAfter}`} aria-hidden />
-      )}
+    <TabShell {...shell} closeLabel={t("session_close_diff")}>
       <span className={styles.icon}>
         <FileDiffIcon size={12} />
       </span>
       <span className={styles.name} title={tab.path}>
         {basename}
       </span>
-      <button
-        type="button"
-        className={styles.closeBtn}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        data-tooltip={closeTitle}
-        data-tooltip-placement="bottom"
-        aria-label={t("session_close_diff")}
-      >
-        <X size={12} />
-      </button>
-    </div>
+    </TabShell>
   );
 }

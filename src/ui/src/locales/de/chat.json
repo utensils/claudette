@@ -288,5 +288,18 @@
   "auth_resolved_label": "Behoben",
   "auth_resolved_message": "Claude-Code-Anmeldung für diesen Chat wurde wiederhergestellt.",
 
-  "terminal_failed_to_start": "Shell konnte nicht gestartet werden"
+  "terminal_failed_to_start": "Shell konnte nicht gestartet werden",
+
+  "agent_tokens": "{{tokens}} Tokens",
+  "agent_show_all_calls": "Alle {{count}} Tool-Aufrufe anzeigen",
+  "agent_show_fewer_calls": "Weniger anzeigen",
+  "agent_result_show_more": "Vollständiges Ergebnis anzeigen",
+  "agent_result_show_less": "Weniger anzeigen",
+  "agents_running": "{{count}} laufen",
+  "agents_done": "{{count}} fertig",
+  "agents_failed": "{{count}} fehlgeschlagen",
+  "agents_stopped": "{{count}} gestoppt",
+  "agents_queued": "{{count}} wartend",
+  "task_progress_count": "{{completed}}/{{total}} Aufgaben",
+  "tab_rename_failed": "Umbenennen fehlgeschlagen: {{error}}"
 }

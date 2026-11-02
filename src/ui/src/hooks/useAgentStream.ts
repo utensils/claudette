@@ -1,7 +1,10 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
-import { findToolActivity } from "../stores/findToolActivity";
+import {
+  findToolActivity,
+  findToolActivityWhere,
+} from "../stores/findToolActivity";
 import { collectInFlightWorkflows } from "../stores/inFlightWorkflows";
 import {
   FAILED_BACKGROUND_TASK_STATUS,
@@ -14,6 +17,7 @@ import {
   loadChatHistory,
   saveTurnToolActivities,
   updateTurnToolActivityProgress,
+  updateTurnAgentActivity,
   setSessionCliInvocation,
 } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
@@ -36,6 +40,8 @@ import {
   clearBlockToolsForSession,
 } from "./blockToolMap";
 import { debugChat } from "../utils/chatDebug";
+import { StreamDeltaBuffer } from "./streamDeltaBuffer";
+import { makeChatMessage } from "../utils/chatMessage";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
@@ -209,6 +215,94 @@ function resolveNeverStartedWorkflow(
   );
 }
 
+/**
+ * `reapInFlightWorkflows` for subagents: once the session's CLI process has
+ * exited, no `SubagentStop` can arrive, so an `Agent` still reading as
+ * running (a stopped turn, a crash, a background subagent cut off) would
+ * spin forever and replay that way after reload.
+ *
+ * Deliberately narrow: only an explicit `running` / `starting` status is
+ * reaped. Historical Agent rows with a null status (saved before task
+ * events were tracked) must not be rewritten as stopped on every exit.
+ */
+function reapInFlightAgents(
+  sessionId: string,
+  updateToolActivity: (
+    sessionId: string,
+    toolUseId: string,
+    updates: Partial<ToolActivity>,
+  ) => void,
+): void {
+  const state = useAppStore.getState();
+  const candidates = [
+    ...(state.toolActivities[sessionId] ?? []),
+    ...(state.completedTurns[sessionId] ?? []).flatMap((t) => t.activities),
+  ].filter((a) => {
+    if (a.toolName !== "Agent") return false;
+    const status = (a.agentStatus ?? "").toLowerCase();
+    return status === "running" || status === "starting";
+  });
+  for (const activity of candidates) {
+    updateToolActivity(sessionId, activity.toolUseId, {
+      agentStatus: REAPED_BACKGROUND_TASK_STATUS,
+    });
+    persistBackgroundAgentActivity(sessionId, activity.toolUseId);
+  }
+}
+
+/**
+ * Write a background subagent's current state onto its checkpointed row.
+ *
+ * A no-op while the activity is still in the live lane: the turn's own
+ * checkpoint write (`saveTurnToolActivities`) will carry everything. Only
+ * once the activity has migrated into `completedTurns` — i.e. the subagent
+ * outlived its launching turn — is there a saved row that would otherwise
+ * replay a stale "running" status with no result after reload.
+ */
+function persistBackgroundAgentActivity(
+  sessionId: string,
+  toolUseId: string,
+): void {
+  const state = useAppStore.getState();
+  const isLive = (state.toolActivities[sessionId] ?? []).some(
+    (a) => a.toolUseId === toolUseId,
+  );
+  if (isLive) return;
+  const activity = findToolActivity(state, sessionId, toolUseId);
+  if (activity?.toolName !== "Agent") return;
+  void updateTurnAgentActivity(sessionId, toolUseId, {
+    agentStatus: activity.agentStatus ?? null,
+    agentResultText: activity.agentResultText ?? null,
+    agentToolCallsJson: activity.agentToolCalls?.length
+      ? JSON.stringify(activity.agentToolCalls)
+      : null,
+    agentThinkingBlocksJson: activity.agentThinkingBlocks?.length
+      ? JSON.stringify(activity.agentThinkingBlocks)
+      : null,
+    agentToolUseCount: activity.agentToolUseCount ?? null,
+    agentTotalTokens: activity.agentTotalTokens ?? null,
+    agentDurationMs: activity.agentDurationMs ?? null,
+  }).catch((err) => {
+    debugChat("stream", "persist background agent failed", {
+      toolUseId,
+      error: String(err),
+    });
+  });
+}
+
+/** `content_block_delta` stream events — the only ones the delta buffer
+ *  absorbs. Everything else flushes it first. */
+function isContentDeltaEvent(agentEvent: AgentStreamPayload["event"]): boolean {
+  if (!("Stream" in agentEvent)) return false;
+  const streamEvent = agentEvent.Stream;
+  return (
+    "type" in streamEvent &&
+    streamEvent.type === "stream_event" &&
+    "type" in streamEvent.event &&
+    streamEvent.event.type === "content_block_delta"
+  );
+}
+
 function isCodexApprovalTool(toolName: string): boolean {
   return (
     toolName === CODEX_COMMAND_APPROVAL_TOOL ||
@@ -333,18 +427,13 @@ interface AgentHookEventPayload {
 }
 
 export function useAgentStream() {
-  const appendStreamingContent = useAppStore((s) => s.appendStreamingContent);
   const setStreamingContent = useAppStore((s) => s.setStreamingContent);
   const setPendingTypewriter = useAppStore((s) => s.setPendingTypewriter);
-  const appendStreamingThinking = useAppStore((s) => s.appendStreamingThinking);
   const clearStreamingThinking = useAppStore((s) => s.clearStreamingThinking);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const addToolActivity = useAppStore((s) => s.addToolActivity);
   const updateToolActivity = useAppStore((s) => s.updateToolActivity);
   const upsertAgentToolCall = useAppStore((s) => s.upsertAgentToolCall);
-  const appendToolActivityInput = useAppStore(
-    (s) => s.appendToolActivityInput
-  );
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const updateChatSession = useAppStore((s) => s.updateChatSession);
   const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
@@ -352,6 +441,19 @@ export function useAgentStream() {
   const setAgentApproval = useAppStore((s) => s.setAgentApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
   const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
+
+  // Frame-coalesced text / thinking / tool-input deltas. Flushed before every
+  // non-delta event (see `StreamDeltaBuffer` for the ordering contract).
+  const deltaBufferRef = useRef<StreamDeltaBuffer | null>(null);
+  deltaBufferRef.current ??= new StreamDeltaBuffer({
+    appendText: (sessionId, text) =>
+      useAppStore.getState().appendStreamingContent(sessionId, text),
+    appendThinking: (sessionId, text) =>
+      useAppStore.getState().appendStreamingThinking(sessionId, text),
+    appendToolInput: (sessionId, toolUseId, json) =>
+      useAppStore.getState().appendToolActivityInput(sessionId, toolUseId, json),
+  });
+  const deltaBuffer = deltaBufferRef.current;
 
   // Per-session map: sessionId → (content-block index → tool entry). Two
   // concurrent sessions routinely reuse the same Anthropic content-block
@@ -396,6 +498,10 @@ export function useAgentStream() {
       const { workspace_id: wsId, chat_session_id: sessionId, event: agentEvent } =
         event.payload;
 
+      // Anything other than a content delta may read (or snapshot) the
+      // fields the buffer accumulates, so land them first.
+      if (!isContentDeltaEvent(agentEvent)) deltaBuffer.flush();
+
       if ("ProcessExited" in agentEvent) {
         debugChat("stream", "ProcessExited", {
           wsId,
@@ -417,6 +523,7 @@ export function useAgentStream() {
         // After `finalizeTurn`, so the activity sits in exactly one lane
         // (`completedTurns`) and the update has one place to land.
         reapInFlightWorkflows(sessionId, updateToolActivity);
+        reapInFlightAgents(sessionId, updateToolActivity);
         turnMessageCountRef.current[sessionId] = 0;
         turnFinalizedRef.current[sessionId] = false;
         turnCheckpointIdRef.current[sessionId] = undefined;
@@ -485,6 +592,12 @@ export function useAgentStream() {
               if (typeof streamEvent.usage?.tool_uses === "number") {
                 updates.agentToolUseCount = streamEvent.usage.tool_uses;
               }
+              if (typeof streamEvent.usage?.total_tokens === "number") {
+                updates.agentTotalTokens = streamEvent.usage.total_tokens;
+              }
+              if (typeof streamEvent.usage?.duration_ms === "number") {
+                updates.agentDurationMs = streamEvent.usage.duration_ms;
+              }
               // Full replacement snapshot of a Workflow run's phase/agent
               // tree. The CLI only attaches it on real state transitions;
               // the throttled in-between ticks omit the key entirely, and
@@ -532,6 +645,12 @@ export function useAgentStream() {
                   sessionId,
                   streamEvent.tool_use_id,
                 );
+                if (activity?.toolName === "Agent") {
+                  persistBackgroundAgentActivity(
+                    sessionId,
+                    streamEvent.tool_use_id,
+                  );
+                }
                 // Persist for workflows even when no tree was ever reported
                 // (a run that failed before its first `task_progress`): the
                 // terminal status alone still has to land, or the pill keeps
@@ -621,21 +740,13 @@ export function useAgentStream() {
                 postTokens: m.post_tokens,
                 durationMs: m.duration_ms,
               });
-              const liveSentinel: ChatMessage = {
-                id: crypto.randomUUID(),
-                workspace_id: wsId,
-                chat_session_id: sessionId,
+              const liveSentinel = makeChatMessage({
+                workspaceId: wsId,
+                sessionId,
                 role: "System",
                 content: sentinel,
-                cost_usd: null,
-                duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking: null,
-                input_tokens: null,
-                output_tokens: null,
-                cache_read_tokens: m.post_tokens,
-                cache_creation_tokens: null,
-              };
+                cacheReadTokens: m.post_tokens,
+              });
               store.addChatMessage(sessionId, liveSentinel);
 
               // Drop the ContextMeter to the post-compaction baseline
@@ -689,7 +800,7 @@ export function useAgentStream() {
                 case "content_block_delta": {
                   const delta = inner.delta;
                   if ("type" in delta && delta.type === "text_delta") {
-                    appendStreamingContent(sessionId, delta.text);
+                    deltaBuffer.appendText(sessionId, delta.text);
                   }
                   if (
                     "type" in delta &&
@@ -702,10 +813,10 @@ export function useAgentStream() {
                       inner.index,
                     );
                     if (entry) {
-                      appendToolActivityInput(
+                      deltaBuffer.appendToolInput(
                         sessionId,
                         entry.toolUseId,
-                        delta.partial_json
+                        delta.partial_json,
                       );
                     }
                   }
@@ -720,10 +831,10 @@ export function useAgentStream() {
                       inner.index,
                     );
                     if (entry) {
-                      appendToolActivityInput(
+                      deltaBuffer.appendToolInput(
                         sessionId,
                         entry.toolUseId,
-                        delta.partial_json
+                        delta.partial_json,
                       );
                     }
                   }
@@ -733,7 +844,7 @@ export function useAgentStream() {
                     "thinking" in delta &&
                     delta.thinking
                   ) {
-                    appendStreamingThinking(sessionId, delta.thinking);
+                    deltaBuffer.appendThinking(sessionId, delta.thinking);
                   }
                   break;
                 }
@@ -860,24 +971,20 @@ export function useAgentStream() {
               // messageId tells MessagesWithTurns to hide the just-added
               // completed message until drain finishes.
               setPendingTypewriter(sessionId, messageId, text);
-              addChatMessage(sessionId, {
-                id: messageId,
-                workspace_id: wsId,
-                chat_session_id: sessionId,
-                role: "Assistant",
-                content: text,
-                cost_usd: null,
-                duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking:
-                  useAppStore.getState().streamingThinking[sessionId] ||
-                  thinking ||
-                  null,
-                input_tokens: null,
-                output_tokens: null,
-                cache_read_tokens: null,
-                cache_creation_tokens: null,
-              });
+              addChatMessage(
+                sessionId,
+                makeChatMessage({
+                  id: messageId,
+                  workspaceId: wsId,
+                  sessionId,
+                  role: "Assistant",
+                  content: text,
+                  thinking:
+                    useAppStore.getState().streamingThinking[sessionId] ||
+                    thinking ||
+                    null,
+                }),
+              );
               // streamingThinking is NOT cleared here — StreamingThinkingBlock
               // needs to keep rendering through the typewriter drain so the
               // block doesn't vanish between streamingContent clearing and the
@@ -957,18 +1064,17 @@ export function useAgentStream() {
 
     return () => {
       active = false;
+      deltaBuffer.flush();
       unlisten.then((fn) => fn());
     };
   }, [
-    appendStreamingContent,
+    deltaBuffer,
     setStreamingContent,
-    appendStreamingThinking,
     clearStreamingThinking,
     addChatMessage,
     setPendingTypewriter,
     addToolActivity,
     updateToolActivity,
-    appendToolActivityInput,
     updateWorkspace,
     setAgentQuestion,
     setPlanApproval,
@@ -982,6 +1088,7 @@ export function useAgentStream() {
     let active = true;
     const unlisten = listen<AgentHookEventPayload>("agent-hook-event", (event) => {
       if (!active) return;
+      deltaBuffer.flush();
       const { chat_session_id: sessionId, input } = event.payload;
       const agentId = input.agent_id;
       const hookName = input.hook_event_name;
@@ -999,9 +1106,12 @@ export function useAgentStream() {
       }
 
       if (hookName === "SubagentStop") {
-        const activity = (
-          useAppStore.getState().toolActivities[sessionId] || []
-        ).find(
+        // Search completed turns too: a `run_in_background` subagent stops
+        // long after the turn that launched it was finalized, and a
+        // live-only lookup dropped its result and left it "running".
+        const activity = findToolActivityWhere(
+          useAppStore.getState(),
+          sessionId,
           (item) =>
             item.agentTaskId === agentId ||
             item.toolUseId === input.tool_use_id ||
@@ -1022,6 +1132,7 @@ export function useAgentStream() {
           updates.agentThinkingBlocks = thinkingBlocks;
         }
         updateToolActivity(sessionId, activity.toolUseId, updates);
+        persistBackgroundAgentActivity(sessionId, activity.toolUseId);
         return;
       }
 
@@ -1069,7 +1180,7 @@ export function useAgentStream() {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [upsertAgentToolCall, updateToolActivity]);
+  }, [deltaBuffer, upsertAgentToolCall, updateToolActivity]);
 
   // Listen for `agent-permission-prompt` — emitted by the Rust bridge the
   // moment a CLI `control_request: can_use_tool` is captured for
@@ -1087,6 +1198,7 @@ export function useAgentStream() {
       input: unknown;
     }>("agent-permission-prompt", (event) => {
       if (!active) return;
+      deltaBuffer.flush();
       const {
         chat_session_id: sessionId,
         tool_use_id: toolUseId,
@@ -1197,7 +1309,13 @@ export function useAgentStream() {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [setAgentApproval, setAgentQuestion, setPlanApproval, updateChatSession]);
+  }, [
+    deltaBuffer,
+    setAgentApproval,
+    setAgentQuestion,
+    setPlanApproval,
+    updateChatSession,
+  ]);
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
@@ -1210,6 +1328,9 @@ export function useAgentStream() {
       checkpoint: ConversationCheckpoint;
     }>("checkpoint-created", (event) => {
       if (!active) return;
+      // The turn's tool activities are snapshotted below; their input JSON
+      // must be complete.
+      deltaBuffer.flush();
       const { chat_session_id: sessionId, checkpoint } = event.payload;
       addCheckpoint(sessionId, checkpoint);
       turnCheckpointIdRef.current[sessionId] = checkpoint.id;
@@ -1254,6 +1375,8 @@ export function useAgentStream() {
               ),
               agent_result_text: a.agentResultText ?? null,
               workflow_progress_json: JSON.stringify(a.workflowProgress ?? []),
+              agent_total_tokens: a.agentTotalTokens ?? null,
+              agent_duration_ms: a.agentDurationMs ?? null,
             }));
             return saveTurnToolActivities(checkpoint.id, messageCount, activities);
           })()
@@ -1308,7 +1431,7 @@ export function useAgentStream() {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [addCheckpoint, setChatMessages]);
+  }, [addCheckpoint, deltaBuffer, setChatMessages]);
 
   // Listen for workspace-renamed events (auto-rename after first prompt).
   useEffect(() => {

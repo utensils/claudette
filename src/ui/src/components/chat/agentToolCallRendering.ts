@@ -1,9 +1,6 @@
+import { nonEmptyStringField, parseToolInput } from "../../utils/toolInput";
 import type { AgentToolCall, ToolActivity } from "../../stores/useAppStore";
 import { extractToolSummary, relativizePath } from "../../hooks/toolSummary";
-
-export function activityHasAgentToolCalls(activity: ToolActivity): boolean {
-  return activity.toolName === "Agent" && (activity.agentToolCalls?.length ?? 0) > 0;
-}
 
 export function activityMatchesSearch(
   activity: ToolActivity,
@@ -49,21 +46,14 @@ export function activitySummaryText(activity: ToolActivity): string {
 }
 
 export function agentPromptText(activity: ToolActivity): string {
-  try {
-    const parsed = JSON.parse(activity.inputJson || "{}") as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return "";
-    }
-    const input = parsed as Record<string, unknown>;
-    return (
-      stringField(input.prompt) ||
-      stringField(input.description) ||
-      stringField(input.task) ||
-      ""
-    );
-  } catch {
-    return "";
-  }
+  const input = parseToolInput(activity.inputJson);
+  if (!input) return "";
+  return (
+    nonEmptyStringField(input.prompt) ||
+    nonEmptyStringField(input.description) ||
+    nonEmptyStringField(input.task) ||
+    ""
+  );
 }
 
 export function agentToolCallSummary(call: AgentToolCall): string {
@@ -71,10 +61,6 @@ export function agentToolCallSummary(call: AgentToolCall): string {
   if (inputSummary) return inputSummary;
   if (call.error) return call.error;
   return valuePreview(call.input ?? call.response);
-}
-
-function stringField(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function safeJson(value: unknown): string {

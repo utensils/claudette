@@ -1,3 +1,4 @@
+import { parseToolInput } from "../../utils/toolInput";
 /**
  * Pull a stable display name and description for a `Workflow` tool call out
  * of its input JSON.
@@ -27,13 +28,7 @@ interface WorkflowToolInput {
 }
 
 function parseInput(inputJson: string): WorkflowToolInput | null {
-  try {
-    const parsed: unknown = JSON.parse(inputJson || "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    return parsed as WorkflowToolInput;
-  } catch {
-    return null;
-  }
+  return parseToolInput(inputJson) as WorkflowToolInput | null;
 }
 
 function nonEmptyString(value: unknown): string | null {

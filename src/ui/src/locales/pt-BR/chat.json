@@ -216,5 +216,18 @@
   "auth_resolved_label": "Resolvido",
   "auth_resolved_message": "O login do Claude Code foi restaurado para este chat.",
 
-  "terminal_failed_to_start": "Falha ao iniciar o shell"
+  "terminal_failed_to_start": "Falha ao iniciar o shell",
+
+  "agent_tokens": "{{tokens}} tokens",
+  "agent_show_all_calls": "Mostrar todas as {{count}} chamadas de ferramenta",
+  "agent_show_fewer_calls": "Mostrar menos",
+  "agent_result_show_more": "Mostrar resultado completo",
+  "agent_result_show_less": "Mostrar menos",
+  "agents_running": "{{count}} em execução",
+  "agents_done": "{{count}} concluídos",
+  "agents_failed": "{{count}} com falha",
+  "agents_stopped": "{{count}} parados",
+  "agents_queued": "{{count}} na fila",
+  "task_progress_count": "{{completed}}/{{total}} tarefas",
+  "tab_rename_failed": "Falha ao renomear: {{error}}"
 }

@@ -1,3 +1,4 @@
+import { nonEmptyStringField, parseToolInput } from "../../utils/toolInput";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { parseMcpToolName } from "./mcpToolName";
@@ -5,7 +6,7 @@ import { workflowDisplayName } from "./workflowMeta";
 
 export type ToolActivityDisplayGroup = {
   key: string;
-  kind: "tools" | "agent" | "skill" | "mcp" | "workflow";
+  kind: "tools" | "agent" | "agents" | "skill" | "mcp" | "workflow";
   label: string;
   activities: ToolActivity[];
 };
@@ -21,6 +22,24 @@ export function groupToolActivitiesForDisplay(
   const groups: ToolActivityDisplayGroup[] = [];
   let directTools: ToolActivity[] = [];
   let mcpRun: { server: string; activities: ToolActivity[] } | null = null;
+  let agentRun: ToolActivity[] = [];
+
+  // Consecutive Agent calls are a fan-out (the model launched them in one
+  // message, usually in parallel). One agent keeps its own group; two or
+  // more roll up under a single "N agents" header with per-state counts.
+  const flushAgentRun = () => {
+    if (agentRun.length === 1) {
+      groups.push(activityDisplayGroup(agentRun[0]));
+    } else if (agentRun.length > 1) {
+      groups.push({
+        key: `agents:${agentRun.map((activity) => activity.toolUseId).join(",")}`,
+        kind: "agents",
+        label: `${agentRun.length} agents`,
+        activities: agentRun,
+      });
+    }
+    agentRun = [];
+  };
 
   const flushDirectTools = () => {
     if (directTools.length === 0) return;
@@ -46,19 +65,23 @@ export function groupToolActivitiesForDisplay(
     mcpRun = null;
   };
 
-  // `directTools` and `mcpRun` are mutually exclusive accumulators: pushing to
-  // either flushes the other first, so at most one is non-empty at a time.
+  // `directTools`, `mcpRun`, and `agentRun` are mutually exclusive
+  // accumulators: pushing to one flushes the others first, so at most one is
+  // non-empty at a time.
   for (const activity of activities) {
+    if (isAgentActivity(activity)) {
+      flushDirectTools();
+      flushMcpRun();
+      agentRun.push(activity);
+      continue;
+    }
+    flushAgentRun();
     // Agents, skills, and workflows are first-class transcript entries,
     // not tool calls — they break a run of direct tools and render on
     // their own (agents and workflows as collapsible groups, skills as a
     // flat "activated" marker) rather than getting bundled into the
     // "N tool calls" pill.
-    if (
-      isAgentActivity(activity) ||
-      isSkillActivity(activity) ||
-      isWorkflowActivity(activity)
-    ) {
+    if (isSkillActivity(activity) || isWorkflowActivity(activity)) {
       flushDirectTools();
       flushMcpRun();
       groups.push(activityDisplayGroup(activity));
@@ -83,7 +106,34 @@ export function groupToolActivitiesForDisplay(
 
   flushDirectTools();
   flushMcpRun();
+  flushAgentRun();
   return groups;
+}
+
+/**
+ * Compact "what happened" line for a collapsed tool group — tool names in
+ * first-seen order with repeat counts, e.g. `Read ×3 · Edit · Bash`. Capped
+ * at `maxNames` distinct tools with a `+N` overflow so a long run of mixed
+ * calls doesn't wrap the header. Returns "" for a single-tool group (the
+ * row itself already says it).
+ */
+export function toolBreakdown(
+  activities: readonly ToolActivity[],
+  maxNames = 4,
+): string {
+  if (activities.length < 2) return "";
+  const counts = new Map<string, number>();
+  for (const activity of activities) {
+    const name = parseMcpToolName(activity.toolName)?.tool ?? activity.toolName;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const entries = [...counts.entries()];
+  const shown = entries
+    .slice(0, maxNames)
+    .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name));
+  const overflow = entries.length - maxNames;
+  if (overflow > 0) shown.push(`+${overflow}`);
+  return shown.join(" · ");
 }
 
 export function isAgentActivity(activity: ToolActivity): boolean {
@@ -102,20 +152,8 @@ export function isWorkflowActivity(activity: ToolActivity): boolean {
  *  back to the first token of the activity summary, then "Skill". Shared by
  *  the group label and the rendered "<skill> activated" marker. */
 export function skillActivationName(activity: ToolActivity): string {
-  try {
-    const parsed = JSON.parse(activity.inputJson || "{}") as unknown;
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      typeof (parsed as { skill?: unknown }).skill === "string"
-    ) {
-      const skill = (parsed as { skill: string }).skill.trim();
-      if (skill) return skill;
-    }
-  } catch {
-    // Fall through to the summary-derived fallback below.
-  }
+  const skill = nonEmptyStringField(parseToolInput(activity.inputJson)?.skill);
+  if (skill) return skill;
   const fromSummary = activity.summary?.trim().split(/\s+/)[0] ?? "";
   return fromSummary || "Skill";
 }

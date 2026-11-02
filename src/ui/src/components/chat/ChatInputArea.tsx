@@ -1,70 +1,47 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, FileText, LoaderCircle, Mic, Plus, Send, Square, Terminal as TerminalIcon, X } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { AlertCircle, LoaderCircle, Mic, Plus, Send, Square, Terminal as TerminalIcon, X } from "lucide-react";
 import { VoiceMeter } from "./VoiceMeter";
 import { useAppStore } from "../../stores/useAppStore";
 import { useEnvElapsedSeconds } from "../../hooks/useEnvElapsedSeconds";
 import {
   listSlashCommands,
   listWorkspaceFiles,
-  readFileAsBase64,
   recordSlashCommandUsage,
 } from "../../services/tauri";
-import type { FileEntry, PinnedPrompt, SlashCommand } from "../../services/tauri";
-import type {
-  AttachmentInput,
-  PendingAttachment,
-  StoredAttachment,
-} from "../../types/chat";
-import { base64ToBytes } from "../../utils/base64";
-import {
-  MAX_ATTACHMENTS,
-  SUPPORTED_ATTACHMENT_TYPES,
-  SUPPORTED_DOCUMENT_TYPES,
-  SUPPORTED_IMAGE_TYPES,
-  isTextFile,
-  maxSizeFor,
-} from "../../utils/attachmentValidation";
+import type { FileEntry, SlashCommand } from "../../services/tauri";
+import type { AttachmentInput } from "../../types/chat";
 import { type DownloadableAttachment } from "../../utils/attachmentDownload";
-import {
-  insertTranscriptAtSelection,
-  shouldOpenVoiceSettingsForError,
-} from "../../utils/voice";
-import { useVoiceInput } from "../../hooks/useVoiceInput";
-import { useVoiceHotkey } from "../../hooks/useVoiceHotkey";
 import {
   eventToBinding,
   getEffectiveBindingById,
 } from "../../hotkeys/bindings";
 import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
+import { ComposerAttachmentStrip } from "./composer/ComposerAttachmentStrip";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
 import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
 import { UsageIndicator } from "./composer/UsageIndicator";
+import {
+  hydratePendingFromSlice,
+  useComposerAttachments,
+} from "./composer/useComposerAttachments";
+import { COMPOSER_MIN_HEIGHT, useComposerResize } from "./composer/useComposerResize";
+import { useComposerVoice } from "./composer/useComposerVoice";
+import { usePinnedPromptLaunch } from "./composer/usePinnedPromptLaunch";
 import { ResizeHandle } from "../layout/ResizeHandle";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import { PinnedPromptsBar } from "./PinnedPromptsBar";
-import { extractMentionPaths } from "./queuedMessageEditing";
 import { SlashCommandPicker } from "./SlashCommandPicker";
 import { useSlashPicker } from "../../hooks/useSlashPicker";
 import { formatEnvProviderName } from "../../utils/workspaceEnvironment";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
 import { setPlanModeAndPersist } from "./planModePersistence";
-import { preparePinnedPromptTarget } from "./pinnedPromptLaunch";
 import styles from "./ChatPanel.module.css";
 
 type ComposerMode = "prompt" | "shell";
-
-const COMPOSER_MIN_HEIGHT = 52;
-const COMPOSER_DEFAULT_AUTOGROW_MAX = 160;
-const COMPOSER_MAX_HEIGHT = 1200;
-
-function clampComposerHeight(value: number, max: number): number {
-  return Math.max(COMPOSER_MIN_HEIGHT, Math.min(max, value));
-}
 
 function parseComposerDraft(value: string): { mode: ComposerMode; text: string } {
   return value.startsWith("!")
@@ -95,40 +72,6 @@ export function shouldSteerQueuedTopOnImmediateSend({
   return isRunning && !isRemote && hasQueuedMessages && !hasComposerPayload;
 }
 
-/** Rebuild a `PendingAttachment[]` for a session from the slice's
- * `StoredAttachment[]`. Image preview blob URLs are regenerated from
- * `data_base64` (the underlying Blob is GC'd once the previous mount
- * dropped its reference). PDFs and non-image attachments don't get a
- * thumbnail re-generated here — that work is asynchronous and gated
- * inside `addAttachment`; on rehydration we leave `preview_url` empty
- * for those, so the row still renders the filename + size with no
- * thumbnail rather than blocking the mount on PDF.js. */
-function hydratePendingFromSlice(sessionId: string): PendingAttachment[] {
-  const stored = useAppStore.getState().pendingAttachmentsBySession[sessionId];
-  if (!stored || stored.length === 0) return [];
-  return stored.map((a) => ({
-    id: a.id,
-    filename: a.filename,
-    media_type: a.media_type,
-    data_base64: a.data_base64,
-    preview_url: rehydrateImagePreviewUrl(a),
-    size_bytes: a.size_bytes,
-    text_content: a.text_content,
-  }));
-}
-
-function rehydrateImagePreviewUrl(a: StoredAttachment): string {
-  if (!SUPPORTED_IMAGE_TYPES.has(a.media_type)) return "";
-  try {
-    const bytes = base64ToBytes(a.data_base64);
-    const blob = new Blob([bytes], { type: a.media_type });
-    return URL.createObjectURL(blob);
-  } catch (e) {
-    console.error("[chat-input] failed to rehydrate preview URL", e);
-    return "";
-  }
-}
-
 /** Extract the @-query based on cursor position in the textarea. */
 function extractMentionQuery(text: string, cursorPos: number): string | null {
   const before = text.slice(0, cursorPos);
@@ -140,20 +83,6 @@ function extractMentionQuery(text: string, cursorPos: number): string | null {
   // If query contains whitespace, the mention is "closed".
   if (/\s/.test(query)) return null;
   return query;
-}
-
-/** Convert a File/Blob to a base64 string (without the data: prefix). */
-function fileToBase64(file: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      const base64 = result.split(",")[1] ?? "";
-      resolve(base64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 }
 
 // Separate component for input area to prevent full ChatPanel re-renders on every keystroke
@@ -263,92 +192,22 @@ export function ChatInputArea({
         : t("composer_placeholder_idle");
   const filesCache = useRef<Record<string, FileEntry[]>>({});
   const mentionedFilesRef = useRef<Set<string>>(new Set());
-  // `pendingAttachments` is the local view (with transient blob URLs);
-  // the slice (`pendingAttachmentsBySession`) is the per-session source
-  // of truth so attachments survive any composer remount — including
-  // the unmount that fires when `<ChatPanel>` is conditionally rendered
-  // out of `AppLayout` whenever the user opens a file or diff. The
-  // unmount cleanup further down revokes blob URLs on tear-down so we
-  // don't leak them; the next mount calls `hydratePendingFromSlice` to
-  // recreate the URLs from the persisted `data_base64` payload.
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>(
-    () => hydratePendingFromSlice(sessionId),
-  );
-  const setPendingAttachmentsBoth = useCallback(
-    (
-      sessionForUpdate: string,
-      updater: (prev: PendingAttachment[]) => PendingAttachment[],
-    ) => {
-      const next = updater(pendingAttachmentsRef.current);
-      pendingAttachmentsRef.current = next;
-      setPendingAttachments(next);
-      // Mirror to slice (without `preview_url` since it's transient). Keep
-      // this outside the React state updater; calling a Zustand setter from
-      // inside the updater trips React's render-time update warning.
-      const stored: StoredAttachment[] = next.map((a) => ({
-        id: a.id,
-        filename: a.filename,
-        media_type: a.media_type,
-        data_base64: a.data_base64,
-        size_bytes: a.size_bytes,
-        text_content: a.text_content,
-      }));
-      useAppStore
-        .getState()
-        .setPendingAttachmentsForSession(sessionForUpdate, stored);
-    },
-    [],
-  );
-  const [dragActive, setDragActive] = useState(false);
+  const {
+    pendingAttachments,
+    setPendingAttachments,
+    pendingAttachmentsRef,
+    setPendingAttachmentsBoth,
+    dragActive,
+    removeAttachment,
+    handlePaste,
+    handleAttachClick,
+  } = useComposerAttachments({ sessionId, isRemote });
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const meterRef = useRef<HTMLButtonElement>(null);
   const inputAreaRef = useRef<HTMLDivElement>(null);
-  // The user-set composer height (persisted globally). CSS var
-  // `--composer-h` on the inputArea div drives the textarea's visible
-  // height; CSS keeps the historical 160px auto-grow ceiling until
-  // the user resizes beyond it.
-  const composerHeight = useAppStore((s) => s.composerHeight);
-  const setComposerHeight = useAppStore((s) => s.setComposerHeight);
-  // Dynamic upper bound for the resize drag — half the chat pane's
-  // height, so the user can't drag the composer past the visible
-  // message area. Measured via ResizeObserver on the inputArea's
-  // offsetParent (the chat session container).
-  const [composerMaxBound, setComposerMaxBound] = useState(COMPOSER_DEFAULT_AUTOGROW_MAX);
-  const appliedComposerHeight = Math.min(composerHeight, composerMaxBound);
-  useEffect(() => {
-    const el = inputAreaRef.current;
-    if (!el) return;
-    const target = el.offsetParent as HTMLElement | null;
-    if (!target) return;
-    const update = () => {
-      const half = Math.floor(target.clientHeight / 2);
-      setComposerMaxBound(
-        Math.max(
-          COMPOSER_MIN_HEIGHT,
-          Math.min(COMPOSER_MAX_HEIGHT, half),
-        ),
-      );
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(target);
-    return () => ro.disconnect();
-  }, []);
-  // Mirror Zustand value → CSS var on the inputArea. ResizeHandle
-  // writes the var directly during drag (no React state churn); this
-  // effect handles every other update (mount, persistence rehydrate,
-  // external setComposerHeight calls).
-  useEffect(() => {
-    const el = inputAreaRef.current;
-    if (!el) return;
-    if (el.dataset.resizing === "true") return;
-    el.style.setProperty("--composer-h", `${appliedComposerHeight}px`);
-  }, [appliedComposerHeight]);
-  const handleComposerResizeEnd = useCallback(
-    (final: number) => setComposerHeight(clampComposerHeight(final, composerMaxBound)),
-    [composerMaxBound, setComposerHeight],
-  );
+  const { composerMaxBound, appliedComposerHeight, handleComposerResizeEnd } =
+    useComposerResize(inputAreaRef);
   const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
   const openSettings = useAppStore((s) => s.openSettings);
 
@@ -358,60 +217,26 @@ export function ChatInputArea({
     }
   }, [workspaceEnvironmentPreparing]);
 
-  const insertTranscript = useCallback((transcript: string) => {
-    const ta = textareaRef.current;
-    const start = ta?.selectionStart ?? cursorPos;
-    const end = ta?.selectionEnd ?? cursorPos;
-    // Compute the next state outside the updater so the updater stays
-    // pure. React may run a `setX(updater)` updater multiple times
-    // (Strict Mode, concurrent rendering); calling other setters from
-    // inside it triggers the "Cannot update a component while
-    // rendering" dev warning and risks compounding side-effects.
-    const next = insertTranscriptAtSelection(
-      ta?.value ?? "",
-      transcript,
-      start,
-      end,
-    );
-    setChatInput(next.text);
-    setCursorPos(next.cursor);
-    requestAnimationFrame(() => {
-      const current = textareaRef.current;
-      if (!current) return;
-      current.focus();
-      current.selectionStart = current.selectionEnd = next.cursor;
-    });
-  }, [cursorPos]);
-
-  const voiceToggleHotkey = useAppStore((s) => s.voiceToggleHotkey);
-  const voiceHoldHotkey = useAppStore((s) => s.voiceHoldHotkey);
-  const focusVoiceProvider = useAppStore((s) => s.focusVoiceProvider);
   // User-remappable bindings (`chat.steer-immediate` etc) — empty `{}` keeps
   // defaults active until the user customises one.
   const keybindings = useAppStore((s) => s.keybindings);
-  const voice = useVoiceInput(
-    insertTranscript,
-    (providerId) => {
-      focusVoiceProvider(providerId);
-      openSettings("plugins");
-    },
-  );
-  const voiceErrorOpensSettings = shouldOpenVoiceSettingsForError(
-    voice.activeProvider,
-  );
-  useVoiceHotkey(voice, voiceToggleHotkey, voiceHoldHotkey);
   const isMac = isMacHotkeyPlatform();
-  const voiceButtonLabel = voice.state === "recording"
-    ? t("voice_stop")
-    : voice.state === "transcribing"
-      ? t("voice_discard")
-      : voice.state === "starting"
-        ? t("voice_cancel")
-        : t("voice_input");
-  const voiceButtonTooltip =
-    voice.state === "recording" || voice.state === "idle"
-      ? tooltipWithHotkey(voiceButtonLabel, "voice.toggle", keybindings, isMac)
-      : voiceButtonLabel;
+  const {
+    voice,
+    voiceErrorOpensSettings,
+    voiceButtonLabel,
+    voiceButtonTooltip,
+    useDynamicMeter,
+  } = useComposerVoice({
+    textareaRef,
+    cursorPos,
+    setChatInput,
+    setCursorPos,
+    keybindings,
+    isMac,
+    openSettings,
+    t,
+  });
   const sendButtonLabel = isRunning
     ? t("stop_agent")
     : composerMode === "shell"
@@ -423,198 +248,19 @@ export function ChatInputArea({
       ? t("send_disabled_preparing_env")
       : sendButtonLabel;
 
-  // VU meter dynamic-vs-static decision lives in the parent because it
-  // depends on the OS reduced-motion preference and the active provider's
-  // `recordingMode`. The meter itself is a child component so 30 Hz level
-  // events don't re-render this large composer.
-  const [reducedMotion, setReducedMotion] = useState(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return false;
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const handleUsePinnedPrompt = usePinnedPromptLaunch({
+    onSend,
+    pendingAttachments,
+    cancelVoice: voice.cancel,
+    selectedWorkspaceId,
+    sessionId,
+    setPendingAttachmentsBoth,
+    setComposerMode,
+    setChatInput,
+    textareaRef,
+    mentionedFilesRef,
+    t,
   });
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = (e: MediaQueryListEvent) => setReducedMotion(e.matches);
-    mq.addEventListener?.("change", onChange);
-    return () => mq.removeEventListener?.("change", onChange);
-  }, []);
-  const nativeRecording = voice.activeProvider?.recordingMode === "native";
-  const useDynamicMeter = !reducedMotion && nativeRecording;
-
-  // Esc cancels an active recording regardless of where focus is. The
-  // textarea's onKeyDown also handles Esc when it has focus; clicking
-  // the mic moves focus to the button, where Esc would otherwise just
-  // defocus it instead of stopping the recording.
-  //
-  // While recording, Esc is treated as exclusively "cancel recording" —
-  // we capture it ahead of bubbling handlers and stop propagation so
-  // it doesn't also close an unrelated popover/modal that happens to
-  // be open. Without this, the same keypress could cancel recording
-  // *and* dismiss the surrounding UI, which feels jumpy.
-  useEffect(() => {
-    if (voice.state !== "recording") return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      voice.cancel();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [voice.state, voice.cancel]);
-
-  const handleUsePinnedPrompt = useCallback(
-    (pin: PinnedPrompt) => {
-      // Auto-send cancels any in-flight recording, mirroring handleSend —
-      // otherwise a one-click launch leaves the recorder running in the
-      // background. A new-tab launch cancels regardless, since the recording
-      // belongs to the tab being navigated away from.
-      if (pin.auto_send || pin.new_session) voice.cancel();
-
-      // Snapshot the composer payload synchronously. `preparePinnedPromptTarget`
-      // awaits real IPC (setting persistence, session creation), and the user
-      // could keep typing or attach a file in the meantime — the prompt they
-      // clicked should ship with the state that was on screen at click time.
-      const attachmentsAtClick = pendingAttachments;
-      const mentionsAtClick = new Set(mentionedFilesRef.current);
-
-      void (async () => {
-        let target;
-        try {
-          // Applies the pin's tri-state toolbar overrides and its model.
-          // For `new_session` pins this also creates, names, and selects the
-          // tab; for everything else it configures the active session in
-          // place, which is the pre-existing behaviour.
-          //
-          // Awaited rather than fired-and-forgotten: a cross-harness model
-          // swap mints a fresh session id mid-flight, so sending before it
-          // settles would dispatch against the id that's being replaced.
-          target = await preparePinnedPromptTarget(pin, {
-            workspaceId: selectedWorkspaceId,
-            sessionId,
-          });
-        } catch (err) {
-          console.error("[pinned-prompt] Failed to prepare the session:", err);
-          useAppStore
-            .getState()
-            .addToast(
-              t("pinned_prompt_launch_failed", { name: pin.display_name }),
-            );
-          return;
-        }
-
-        if (target.openedNewSession) {
-          // `onSend` is bound to the session this composer renders, which is
-          // no longer the target. Hand the prompt to the store instead and
-          // let ChatPanel dispatch it once the new tab is active.
-          //
-          // Only the prompt text travels. Composer attachments and
-          // picker-tracked mentions deliberately stay behind in *this*
-          // tab's composer: they belong to the conversation the user was
-          // having, not to a reusable named prompt, and silently relocating
-          // a pasted screenshot into an unrelated review tab would be
-          // surprising (and would clear it from where they put it). Any
-          // `@path` baked into the prompt body still resolves — the drain in
-          // `ChatPanelSessionView` re-extracts mentions from the text it
-          // dispatches.
-          const store = useAppStore.getState();
-          if (pin.auto_send) {
-            store.enqueueChatPrompt(target.sessionId, pin.prompt);
-          } else {
-            // Seed the new tab's composer instead. The session-switch effect
-            // below reads `chatDrafts[sessionId]` when it sees the id change,
-            // so the text is already there when the tab renders.
-            store.setChatDraft(target.sessionId, pin.prompt);
-          }
-          return;
-        }
-
-        // This component instance is shared across sessions — switching tabs
-        // swaps the `sessionId` prop rather than remounting. A model-bearing
-        // pin awaits real IPC above (longest on a cross-harness swap, which
-        // builds a transcript prelude), so by the time we get here the
-        // composer on screen may belong to a different session than the one
-        // this click was for. `onSend` is still correctly bound to the
-        // clicked session, but the composer mutations below are not
-        // session-scoped, so they'd land on whatever tab is now visible —
-        // wiping text the user typed there, or inserting the prompt into it.
-        //
-        // When we've been navigated away from, write to the clicked
-        // session's persisted draft instead. `ChatInputArea` rehydrates from
-        // `chatDrafts` on session switch, so the result is the same as if
-        // the user had never left.
-        const stillOnClickedSession =
-          useAppStore.getState().selectedSessionIdByWorkspaceId[
-            selectedWorkspaceId
-          ] === sessionId;
-
-        if (pin.auto_send) {
-          // mentionedFilesRef only tracks paths inserted via the file picker
-          // into the textarea, but a pinned prompt's text was never
-          // picker-typed — so we extract any baked-in @path mentions from
-          // pin.prompt itself, then union them with picker-tracked paths that
-          // also appear in the prompt body.
-          const activeFiles = extractMentionPaths(pin.prompt);
-          for (const path of mentionsAtClick) {
-            if (pin.prompt.includes(`@${path}`)) {
-              activeFiles.add(path);
-            }
-          }
-          const files = activeFiles.size > 0 ? activeFiles : undefined;
-          const attachmentPayload =
-            attachmentsAtClick.length > 0
-              ? attachmentsAtClick.map((a) => ({
-                  filename: a.filename,
-                  media_type: a.media_type,
-                  data_base64: a.data_base64,
-                  text_content: a.text_content ?? undefined,
-                }))
-              : undefined;
-          void onSend(pin.prompt, files, attachmentPayload);
-          for (const a of attachmentsAtClick) {
-            if (a.preview_url.startsWith("blob:"))
-              URL.revokeObjectURL(a.preview_url);
-          }
-          if (stillOnClickedSession) {
-            setComposerMode("prompt");
-            setChatInput("");
-            // `setPendingAttachmentsBoth` writes component-local state as
-            // well as the slice, so it's only safe while this composer is
-            // still showing the clicked session.
-            setPendingAttachmentsBoth(sessionId, () => []);
-            mentionedFilesRef.current = new Set();
-          } else {
-            const store = useAppStore.getState();
-            store.setChatDraft(sessionId, "");
-            store.setPendingAttachmentsForSession(sessionId, []);
-          }
-          return;
-        }
-
-        if (stillOnClickedSession) {
-          setComposerMode("prompt");
-          setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
-          textareaRef.current?.focus();
-          return;
-        }
-        const store = useAppStore.getState();
-        const existing = store.chatDrafts[sessionId] ?? "";
-        store.setChatDraft(
-          sessionId,
-          pin.prompt + (existing ? " " + existing : ""),
-        );
-      })();
-    },
-    [
-      onSend,
-      pendingAttachments,
-      voice,
-      selectedWorkspaceId,
-      sessionId,
-      setPendingAttachmentsBoth,
-      t,
-    ],
-  );
 
   // Don't subscribe to chatDrafts — drafts are read inside the session-switch
   // effect (one-shot) and via getState() in the lazy initializer above. A
@@ -816,262 +462,6 @@ export function ChatInputArea({
     textarea.style.height = `${textarea.scrollHeight}px`;
   }, [chatInput]);
 
-  // -- Attachment helpers --
-
-  const addAttachment = useCallback(async (file: Blob, filename: string, textContent?: string) => {
-    if (isRemote) return; // Attachments not supported over remote transport
-    if (!SUPPORTED_ATTACHMENT_TYPES.has(file.type)) {
-      console.warn(`Unsupported file type: ${file.type}`);
-      return;
-    }
-    const isPdf = SUPPORTED_DOCUMENT_TYPES.has(file.type);
-    const isImage = SUPPORTED_IMAGE_TYPES.has(file.type);
-    const isText = isTextFile(file.type);
-    const prepared = isImage
-      ? await import("../../utils/imageAttachment").then((m) =>
-          m.prepareImageAttachment(file, filename),
-        )
-      : { blob: file, mediaType: file.type, filename };
-    const attachmentBlob = prepared.blob;
-    const mediaType = prepared.mediaType;
-    const sizeLimit = maxSizeFor(mediaType);
-    if (attachmentBlob.size > sizeLimit) {
-      console.warn(
-        `File too large: ${(attachmentBlob.size / 1024 / 1024).toFixed(1)} MB (max ${(sizeLimit / 1024 / 1024).toFixed(1)} MB)`,
-      );
-      return;
-    }
-    const data_base64 = await fileToBase64(attachmentBlob);
-    let preview_url: string;
-    if (isPdf) {
-      const { generatePdfThumbnail } = await import("../../utils/pdfThumbnail");
-      preview_url = await generatePdfThumbnail(await attachmentBlob.arrayBuffer()).catch(() => "");
-      if (!preview_url) return;
-    } else if (isImage) {
-      preview_url = URL.createObjectURL(attachmentBlob);
-    } else {
-      preview_url = "";
-    }
-    const att: PendingAttachment = {
-      id: crypto.randomUUID(),
-      filename: prepared.filename,
-      media_type: mediaType,
-      data_base64,
-      preview_url,
-      size_bytes: attachmentBlob.size,
-      text_content: isText ? (textContent ?? await attachmentBlob.text()) : null,
-    };
-    setPendingAttachmentsBoth(sessionId, (prev) => {
-      if (prev.length >= MAX_ATTACHMENTS) {
-        if (preview_url.startsWith("blob:")) URL.revokeObjectURL(preview_url);
-        return prev;
-      }
-      return [...prev, att];
-    });
-  }, [isRemote, sessionId, setPendingAttachmentsBoth]);
-
-  const removeAttachment = useCallback((id: string) => {
-    setPendingAttachmentsBoth(sessionId, (prev) => {
-      const att = prev.find((a) => a.id === id);
-      if (att?.preview_url.startsWith("blob:")) URL.revokeObjectURL(att.preview_url);
-      return prev.filter((a) => a.id !== id);
-    });
-  }, [sessionId, setPendingAttachmentsBoth]);
-
-  // Track current attachments in a ref so the unmount cleanup always
-  // revokes the latest blob URLs (not the stale initial-render snapshot).
-  const pendingAttachmentsRef = useRef(pendingAttachments);
-  pendingAttachmentsRef.current = pendingAttachments;
-  useEffect(() => {
-    return () => {
-      for (const a of pendingAttachmentsRef.current) {
-        if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
-      }
-    };
-  }, []);
-
-  // Consume attachment prefill (e.g. from rollback) — convert the raw
-  // base64 data back into PendingAttachment objects with preview URLs.
-  const attachmentsPrefill = useAppStore((s) => s.pendingAttachmentsPrefill);
-  const setAttachmentsPrefill = useAppStore((s) => s.setPendingAttachmentsPrefill);
-  useEffect(() => {
-    if (!attachmentsPrefill || attachmentsPrefill.length === 0) return;
-    setAttachmentsPrefill(null);
-
-    (async () => {
-      for (const a of attachmentsPrefill) {
-        const bytes = base64ToBytes(a.data_base64);
-        const blob = new Blob([bytes], { type: a.media_type });
-        await addAttachment(blob, a.filename, a.text_content ?? undefined);
-      }
-    })().catch((e) => console.error("Failed to restore attachment prefill:", e));
-  }, [attachmentsPrefill, setAttachmentsPrefill, addAttachment]);
-
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-
-      for (const item of items) {
-        // Skip text/plain — pasting text should insert into the textarea,
-        // not create a file attachment.
-        if (item.type === "text/plain") continue;
-        // Some clipboard writers (notably `navigator.clipboard.write` with
-        // a ClipboardItem) expose the image both as a "string" item (its
-        // data URL) and a "file" item. We must check the file variant —
-        // getAsFile() returns null for string items, which would
-        // silently drop the paste.
-        if (item.kind !== "file") continue;
-        if (SUPPORTED_ATTACHMENT_TYPES.has(item.type)) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) {
-            const defaultName = item.type === "application/pdf"
-              ? "pasted-document.pdf"
-              : "pasted-image.png";
-            addAttachment(file, file.name || defaultName);
-          }
-          return; // Only handle first attachment
-        }
-      }
-      // If no supported items, let the default text paste proceed.
-    },
-    [addAttachment],
-  );
-
-  // Tauri intercepts native file drops before they reach the webview's HTML5
-  // drag events. Use Tauri's onDragDropEvent to handle file drops, and fall
-  // through to readFileAsBase64 (which validates type + size on the Rust side).
-  //
-  // The handler references addAttachment via a ref to avoid re-registering the
-  // listener when the callback identity changes — re-registration causes a race
-  // where the old listener's async cleanup hasn't fired yet and the same drop
-  // event is processed by both the old and new listeners, duplicating files.
-  const addAttachmentRef = useRef(addAttachment);
-  addAttachmentRef.current = addAttachment;
-  const tauriDragListenerActive = useRef(false);
-
-  useEffect(() => {
-    if (isRemote) return;
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-
-    import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => {
-      if (cancelled) return;
-      return getCurrentWebview()
-        .onDragDropEvent((event) => {
-          if (cancelled) return;
-          if (event.payload.type === "enter" || event.payload.type === "over") {
-            setDragActive(true);
-          } else if (event.payload.type === "leave") {
-            setDragActive(false);
-          } else if (event.payload.type === "drop") {
-            setDragActive(false);
-            for (const filePath of event.payload.paths) {
-              readFileAsBase64(filePath)
-                .then((result) => {
-                  if (cancelled) return;
-                  const bytes = base64ToBytes(result.data_base64);
-                  const blob = new Blob([bytes], { type: result.media_type });
-                  addAttachmentRef.current(blob, result.filename, result.text_content ?? undefined);
-                })
-                .catch((err) =>
-                  console.warn("Skipped dropped file:", err),
-                );
-            }
-          }
-        })
-        .then((fn) => {
-          if (cancelled) {
-            fn();
-          } else {
-            unlisten = fn;
-            tauriDragListenerActive.current = true;
-          }
-        });
-    }).catch((err) => {
-      console.error(
-        "[drag-drop] Tauri native listener failed, falling back to HTML5:",
-        err,
-      );
-      tauriDragListenerActive.current = false;
-      setDragActive(false);
-    });
-
-    return () => {
-      cancelled = true;
-      tauriDragListenerActive.current = false;
-      unlisten?.();
-    };
-  }, [isRemote]);
-
-  // HTML5 file-drop fallback: activates only when the Tauri native handler
-  // failed to register (tauriDragListenerActive is false). The global dragover
-  // preventDefault is always active to suppress the browser's default
-  // file-navigation behavior.
-  useEffect(() => {
-    if (isRemote) return;
-
-    const preventNav = (e: DragEvent) => {
-      e.preventDefault();
-    };
-
-    const handleDragEnter = (e: DragEvent) => {
-      if (tauriDragListenerActive.current) return;
-      if (!e.dataTransfer?.types.includes("Files")) return;
-      e.preventDefault();
-      setDragActive(true);
-    };
-
-    const handleDragLeave = (e: DragEvent) => {
-      if (tauriDragListenerActive.current) return;
-      if (e.relatedTarget) return;
-      setDragActive(false);
-    };
-
-    const handleDrop = (e: DragEvent) => {
-      if (tauriDragListenerActive.current) return;
-      if (!e.dataTransfer?.types.includes("Files")) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setDragActive(false);
-      const files = e.dataTransfer.files;
-      if (files.length === 0) return;
-      for (const file of Array.from(files)) {
-        void addAttachmentRef.current(file, file.name).catch((error) => {
-          console.error("[drag-drop] Failed to add dropped attachment:", error);
-        });
-      }
-    };
-
-    document.addEventListener("dragover", preventNav);
-    document.addEventListener("dragenter", handleDragEnter);
-    document.addEventListener("dragleave", handleDragLeave);
-    document.addEventListener("drop", handleDrop);
-
-    return () => {
-      document.removeEventListener("dragover", preventNav);
-      document.removeEventListener("dragenter", handleDragEnter);
-      document.removeEventListener("dragleave", handleDragLeave);
-      document.removeEventListener("drop", handleDrop);
-    };
-  }, [isRemote]);
-
-  const handleAttachClick = useCallback(async () => {
-    const selected = await open({ multiple: true });
-    if (!selected) return;
-    const paths = Array.isArray(selected) ? selected : [selected];
-    for (const filePath of paths) {
-      try {
-        const result = await readFileAsBase64(filePath);
-        const bytes = base64ToBytes(result.data_base64);
-        const blob = new Blob([bytes], { type: result.media_type });
-        await addAttachment(blob, result.filename, result.text_content ?? undefined);
-      } catch (err) {
-        console.error("Failed to read file:", err);
-      }
-    }
-  }, [addAttachment]);
 
   // Build the (content, files, attachments) payload from the current
   // composer state and clear local UI state. Shared by the normal Enter
@@ -1323,69 +713,12 @@ export function ChatInputArea({
           onHover={slashPicker.setSelectedIndex}
         />
       )}
-      {pendingAttachments.length > 0 && (
-        <div className={styles.attachmentStrip}>
-          {pendingAttachments.map((att) => (
-            <div key={att.id} className={styles.attachmentThumb} title={att.filename}>
-              {isTextFile(att.media_type) || !att.preview_url ? (
-                // No preview URL: text files (always show filename
-                // chip) AND non-image attachments rehydrated from the
-                // slice without their thumbnail (PDFs lose their
-                // first-page render on composer remount because the
-                // underlying Blob is GC'd; the slice only stores
-                // `data_base64`, not the transient thumbnail URL).
-                // Without this fallback the row rendered as a broken
-                // <img> after a remount even though the attachment
-                // would still send correctly. The badge layout is
-                // identical in both cases — file icon + name + size.
-                <div className={styles.textFileBadge}>
-                  <FileText size={16} />
-                  <span className={styles.textFileName}>{att.filename}</span>
-                  <span className={styles.textFileSize}>
-                    {att.size_bytes < 1024
-                      ? `${att.size_bytes} B`
-                      : `${(att.size_bytes / 1024).toFixed(0)} KB`}
-                  </span>
-                </div>
-              ) : (
-                <img
-                  src={att.preview_url}
-                  alt={att.filename}
-                  onClick={(e) => {
-                    // PDFs also render as an <img> here (preview_url is a blob
-                    // URL of the first-page thumbnail), but their data_base64
-                    // is PDF bytes — not renderable inside an <img>. Only open
-                    // the lightbox for actual image MIME types.
-                    if (!att.media_type.startsWith("image/")) return;
-                    onAttachmentClick?.(e, {
-                      filename: att.filename,
-                      media_type: att.media_type,
-                      data_base64: att.data_base64,
-                    });
-                  }}
-                  onContextMenu={(e) =>
-                    onAttachmentContextMenu?.(e, {
-                      filename: att.filename,
-                      media_type: att.media_type,
-                      data_base64: att.data_base64,
-                    })
-                  }
-                />
-              )}
-              <button
-                className={styles.attachmentRemove}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeAttachment(att.id);
-                }}
-                title={t("remove_attachment")}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      <ComposerAttachmentStrip
+        attachments={pendingAttachments}
+        onRemove={removeAttachment}
+        onAttachmentClick={onAttachmentClick}
+        onAttachmentContextMenu={onAttachmentContextMenu}
+      />
       <PinnedPromptsBar
         repoId={repoId}
         onUsePinnedPrompt={handleUsePinnedPrompt}
