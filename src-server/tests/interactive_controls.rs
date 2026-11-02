@@ -5,11 +5,8 @@
 //! tool-name dispatch, queue depth) is covered here so a regression that
 //! e.g. drains the pending entry on the wrong tool gets caught.
 //!
-//! Tests call the handler helper functions directly rather than going
-//! through `handle_request` — that public entrypoint takes a
-//! `&Arc<Writer>` (a `Mutex<SplitSink<WebSocketStream<TlsStream<TcpStream>>>>`)
-//! which can't be constructed without a real TLS handshake. None of the
-//! error paths we cover here ever write to that Writer.
+//! Tests call the handler helper functions directly so each case can
+//! seed the in-memory session map before the call.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -59,6 +56,7 @@ fn session_with_pending(
         persistent_session: None,
         pending_permissions: pending,
         pending_message_queue: VecDeque::new(),
+        spawn_signature: String::new(),
     }
 }
 
@@ -73,6 +71,7 @@ fn session_empty(workspace_id: &str) -> AgentSessionState {
         persistent_session: None,
         pending_permissions: HashMap::new(),
         pending_message_queue: VecDeque::new(),
+        spawn_signature: String::new(),
     }
 }
 
@@ -159,17 +158,18 @@ async fn steer_queued_chat_message_appends_to_queue() {
                 persistent_session: None,
                 pending_permissions: HashMap::new(),
                 pending_message_queue: VecDeque::new(),
+                spawn_signature: String::new(),
             },
         );
     }
 
-    let r1 = handle_steer_queued_chat_message(&state, "chat-4", "first")
+    let r1 = handle_steer_queued_chat_message(&state, "chat-4", "first", None, Vec::new())
         .await
         .unwrap();
     assert_eq!(r1["queue_depth"], 1);
     assert_eq!(r1["queued"], true);
 
-    let r2 = handle_steer_queued_chat_message(&state, "chat-4", "second")
+    let r2 = handle_steer_queued_chat_message(&state, "chat-4", "second", None, Vec::new())
         .await
         .unwrap();
     assert_eq!(r2["queue_depth"], 2);
@@ -193,7 +193,7 @@ async fn steer_queued_chat_message_rejects_empty_content() {
     }
 
     for empty in ["", "   ", "\n\t  \n"] {
-        let err = handle_steer_queued_chat_message(&state, "chat-5", empty)
+        let err = handle_steer_queued_chat_message(&state, "chat-5", empty, None, Vec::new())
             .await
             .expect_err("empty content must error");
         assert!(
@@ -208,7 +208,7 @@ async fn steer_queued_chat_message_rejects_empty_content() {
 #[tokio::test]
 async fn steer_queued_chat_message_errors_on_unknown_session() {
     let state = make_state().await;
-    let err = handle_steer_queued_chat_message(&state, "no-such", "hi")
+    let err = handle_steer_queued_chat_message(&state, "no-such", "hi", None, Vec::new())
         .await
         .expect_err("unknown session must error");
     assert!(err.contains("Session not found"), "unexpected error: {err}");

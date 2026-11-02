@@ -7,10 +7,7 @@ use crate::remote::{DiscoveredServer, RemoteConnectionInfo, RemoteConnectionMana
 use crate::state::AppState;
 #[cfg(feature = "server")]
 use crate::state::LocalServerState;
-#[cfg(feature = "server")]
 use claudette::transport::ws::WebSocketTransport;
-#[cfg(feature = "server")]
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Serialize)]
 pub struct PairResult {
@@ -19,80 +16,141 @@ pub struct PairResult {
     pub initial_data: Option<serde_json::Value>,
 }
 
+fn connection_info(c: claudette::model::RemoteConnection) -> RemoteConnectionInfo {
+    RemoteConnectionInfo {
+        id: c.id,
+        name: c.name,
+        host: c.host,
+        port: c.port,
+        // The session token is a bearer credential for the remote machine;
+        // it never needs to leave the Rust side.
+        session_token: None,
+        cert_fingerprint: c.cert_fingerprint,
+        auto_connect: c.auto_connect,
+        created_at: c.created_at,
+    }
+}
+
 #[tauri::command]
 pub async fn list_remote_connections(
     state: State<'_, AppState>,
 ) -> Result<Vec<RemoteConnectionInfo>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let connections = db.list_remote_connections().map_err(|e| e.to_string())?;
-    Ok(connections
+    Ok(connections.into_iter().map(connection_info).collect())
+}
+
+/// IDs of connections the Rust side currently holds open. Lets the
+/// frontend resync after a webview reload, when its own state is empty but
+/// the sockets are still up.
+#[tauri::command]
+pub async fn list_active_remote_connections(
+    manager: State<'_, RemoteConnectionManager>,
+) -> Result<Vec<String>, String> {
+    Ok(manager
+        .list_active()
+        .await
         .into_iter()
-        .map(|c| RemoteConnectionInfo {
-            id: c.id,
-            name: c.name,
-            host: c.host,
-            port: c.port,
-            session_token: c.session_token,
-            cert_fingerprint: c.cert_fingerprint,
-            auto_connect: c.auto_connect,
-            created_at: c.created_at,
-        })
+        .map(|info| info.id)
         .collect())
 }
 
+#[tauri::command]
+pub async fn set_remote_auto_connect(
+    id: String,
+    auto_connect: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.set_remote_connection_auto_connect(&id, auto_connect)
+        .map_err(|e| e.to_string())
+}
+
+/// Pair with a server using its pairing token.
+///
+/// `expected_fingerprint_prefix` is the certificate fingerprint prefix the
+/// server advertised over mDNS. When present, the TLS certificate must
+/// match it, so a machine impersonating the server on the LAN can't
+/// capture the pairing token.
+///
+/// Pairing again with a host:port that is already saved (e.g. after the
+/// server regenerated its certificate or token) updates that entry instead
+/// of adding a duplicate.
 #[tauri::command]
 pub async fn pair_with_server(
     host: String,
     port: u16,
     pairing_token: String,
+    expected_fingerprint_prefix: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
     manager: State<'_, RemoteConnectionManager>,
 ) -> Result<PairResult, String> {
-    // Connect via WebSocket.
     let result = WebSocketTransport::connect(&host, port, None).await?;
     let transport = result.transport;
     let cert_fingerprint = result.cert_fingerprint;
 
-    // Authenticate with pairing token.
+    if let Some(prefix) = expected_fingerprint_prefix
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        && !cert_fingerprint.starts_with(prefix)
+    {
+        use claudette::transport::Transport;
+        let _ = transport.close().await;
+        return Err(format!(
+            "The server's certificate ({}) doesn't match the one it advertised on the \
+             network ({prefix}). Not sending the pairing token.",
+            &cert_fingerprint[..cert_fingerprint.len().min(16)]
+        ));
+    }
+
     let hostname = gethostname::gethostname().to_string_lossy().to_string();
     let auth = transport
         .authenticate_pairing(&pairing_token, &hostname)
         .await?;
+    let session_token = auth
+        .session_token
+        .clone()
+        .ok_or("Server did not issue a session token")?;
 
-    let connection_id = uuid::Uuid::new_v4().to_string();
-
-    // Persist to DB.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let db_conn = claudette::model::RemoteConnection {
-        id: connection_id.clone(),
-        name: auth.server_name.clone(),
-        host: host.clone(),
-        port,
-        session_token: auth.session_token.clone(),
-        cert_fingerprint: Some(cert_fingerprint.clone()),
-        auto_connect: false,
-        created_at: String::new(),
+    let existing = db
+        .list_remote_connections()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|c| c.host == host && c.port == port);
+    let connection_id = match existing {
+        Some(existing) => {
+            db.update_remote_connection_session(&existing.id, &session_token, &cert_fingerprint)
+                .map_err(|e| e.to_string())?;
+            db.rename_remote_connection(&existing.id, &auth.server_name)
+                .map_err(|e| e.to_string())?;
+            existing.id
+        }
+        None => {
+            let id = uuid::Uuid::new_v4().to_string();
+            db.insert_remote_connection(&claudette::model::RemoteConnection {
+                id: id.clone(),
+                name: auth.server_name.clone(),
+                host: host.clone(),
+                port,
+                session_token: Some(session_token),
+                cert_fingerprint: Some(cert_fingerprint.clone()),
+                // A server you just paired with is one you want back on
+                // the next launch; the sidebar can turn this off.
+                auto_connect: true,
+                created_at: String::new(),
+            })
+            .map_err(|e| e.to_string())?;
+            id
+        }
     };
-    db.insert_remote_connection(&db_conn)
-        .map_err(|e| e.to_string())?;
 
-    // Re-fetch to get the DB-generated created_at timestamp.
     let saved = db
         .get_remote_connection(&connection_id)
         .map_err(|e| e.to_string())?
         .ok_or("Failed to re-read saved connection")?;
-
-    let info = RemoteConnectionInfo {
-        id: saved.id,
-        name: saved.name,
-        host: saved.host,
-        port: saved.port,
-        session_token: saved.session_token,
-        cert_fingerprint: saved.cert_fingerprint,
-        auto_connect: saved.auto_connect,
-        created_at: saved.created_at,
-    };
+    let info = connection_info(saved);
 
     // Load remote data before handing off the transport.
     use claudette::transport::Transport;
@@ -102,10 +160,9 @@ pub async fn pair_with_server(
             "params": {}
         }))
         .await
-        .ok()
-        .and_then(|r| r.get("result").cloned());
+        .and_then(crate::remote::rpc_result)
+        .ok();
 
-    // Add to active connections.
     manager.add(info.clone(), transport, app).await;
 
     Ok(PairResult {
@@ -143,33 +200,25 @@ pub async fn connect_remote(
     let auth = transport.authenticate_session(session_token).await?;
 
     let info = RemoteConnectionInfo {
-        id: conn.id.clone(),
         name: auth.server_name.clone(),
-        host: conn.host.clone(),
-        port: conn.port,
-        session_token: conn.session_token.clone(),
-        cert_fingerprint: conn.cert_fingerprint.clone(),
-        auto_connect: conn.auto_connect,
-        created_at: conn.created_at.clone(),
+        ..connection_info(conn.clone())
     };
 
     // Load remote data.
     use claudette::transport::Transport;
-    let remote_data = transport
-        .send(serde_json::json!({
-            "method": "load_initial_data",
-            "params": {}
-        }))
-        .await?;
+    let remote_data = crate::remote::rpc_result(
+        transport
+            .send(serde_json::json!({
+                "method": "load_initial_data",
+                "params": {}
+            }))
+            .await?,
+    )?;
 
     // Add to active connections.
     manager.add(info, transport, app).await;
 
-    // Return the remote initial data.
-    Ok(remote_data
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null))
+    Ok(remote_data)
 }
 
 #[tauri::command]
@@ -180,28 +229,129 @@ pub async fn disconnect_remote(
     manager.remove(&id).await
 }
 
+/// How long removing a server may spend revoking its session.
+const REVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Serialize)]
+pub struct RemoveResult {
+    /// Whether the server confirmed it revoked this device's session.
+    pub revoked: bool,
+    /// Why revocation failed, when it did. The saved entry is removed
+    /// either way; the session stays valid on the server until it resets
+    /// pairing.
+    pub revoke_error: Option<String>,
+}
+
+/// Ask the server to forget the session `transport` authenticated with.
+async fn revoke_over(transport: &WebSocketTransport) -> Result<(), String> {
+    use claudette::transport::Transport;
+    let response = transport
+        .send(serde_json::json!({ "method": "revoke_session", "params": {} }))
+        .await?;
+    let result = crate::remote::rpc_result(response)?;
+    if result.get("revoked").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err("the server no longer had this session".to_string())
+    }
+}
+
+/// Revoke this device's session on a saved server: over the live
+/// connection when there is one, otherwise over a short-lived connection
+/// pinned to the saved certificate. Whatever happens, the connection used
+/// is closed: only the network steps are bounded by [`REVOKE_TIMEOUT`],
+/// so a timeout can't leave a taken connection open.
+async fn revoke_saved_session(
+    conn: &claudette::model::RemoteConnection,
+    manager: &RemoteConnectionManager,
+) -> Result<(), String> {
+    use claudette::transport::Transport;
+    let deadline = tokio::time::Instant::now() + REVOKE_TIMEOUT;
+    let timed_out = || "timed out".to_string();
+
+    let transport = match manager.take(&conn.id).await {
+        Some(live) => live,
+        None => {
+            let token = conn
+                .session_token
+                .as_deref()
+                .ok_or("no saved session to revoke")?;
+            let fingerprint = conn
+                .cert_fingerprint
+                .as_deref()
+                .ok_or("no pinned certificate for this server")?;
+            let transport = tokio::time::timeout_at(
+                deadline,
+                WebSocketTransport::connect(&conn.host, conn.port, Some(fingerprint)),
+            )
+            .await
+            .map_err(|_| timed_out())??
+            .transport;
+            let transport = std::sync::Arc::new(transport);
+            if let Err(e) = tokio::time::timeout_at(deadline, transport.authenticate_session(token))
+                .await
+                .map_err(|_| timed_out())
+                .and_then(|r| r.map(|_| ()))
+            {
+                let _ = transport.close().await;
+                return Err(e);
+            }
+            transport
+        }
+    };
+    let result = tokio::time::timeout_at(deadline, revoke_over(&transport))
+        .await
+        .unwrap_or_else(|_| Err(timed_out()));
+    let _ = transport.close().await;
+    result
+}
+
 #[tauri::command]
 pub async fn remove_remote_connection(
     id: String,
     state: State<'_, AppState>,
     manager: State<'_, RemoteConnectionManager>,
-) -> Result<(), String> {
-    // Disconnect if active.
-    let _ = manager.remove(&id).await;
-
-    // Remove from DB.
+) -> Result<RemoveResult, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let revoke = match db.get_remote_connection(&id).map_err(|e| e.to_string())? {
+        Some(conn) => revoke_saved_session(&conn, &manager).await,
+        None => Ok(()),
+    };
+    // Whatever happened above, nothing of this connection stays live.
+    let _ = manager.remove(&id).await;
     db.delete_remote_connection(&id)
         .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(RemoveResult {
+        revoked: revoke.is_ok(),
+        revoke_error: revoke.err(),
+    })
 }
 
 #[tauri::command]
 pub async fn list_discovered_servers(
     state: State<'_, AppState>,
 ) -> Result<Vec<DiscoveredServer>, String> {
+    // Paired-ness is computed per call so a server paired a moment ago moves
+    // out of "Nearby" right away.
+    let saved_fingerprints: Vec<String> = Database::open(&state.db_path)
+        .ok()
+        .and_then(|db| db.list_remote_connections().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|c| c.cert_fingerprint)
+        .collect();
     let servers = state.discovered_servers.read().await;
-    Ok(servers.clone())
+    Ok(servers
+        .iter()
+        .cloned()
+        .map(|mut server| {
+            server.is_paired = crate::remote::fingerprint_matches_any(
+                &server.cert_fingerprint_prefix,
+                &saved_fingerprints,
+            );
+            server
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -227,7 +377,7 @@ pub async fn add_remote_connection(
         (host_port.to_string(), 7683)
     };
 
-    pair_with_server(host, port, token.to_string(), app, state, manager).await
+    pair_with_server(host, port, token.to_string(), None, app, state, manager).await
 }
 
 /// Forward a JSON-RPC command to a remote connection.
@@ -236,17 +386,10 @@ pub async fn send_remote_command(
     connection_id: String,
     method: String,
     params: serde_json::Value,
+    app: AppHandle,
     manager: State<'_, RemoteConnectionManager>,
 ) -> Result<serde_json::Value, String> {
-    let request = serde_json::json!({
-        "method": method,
-        "params": params,
-    });
-    let response = manager.send(&connection_id, request).await?;
-    Ok(response
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null))
+    manager.call(&app, &connection_id, &method, params).await
 }
 
 // -- Local server (Share this machine) --
@@ -258,16 +401,19 @@ pub struct LocalServerInfo {
 }
 
 #[tauri::command]
-pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServerInfo, String> {
+pub async fn start_local_server(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LocalServerInfo, String> {
     #[cfg(not(feature = "server"))]
     {
-        let _ = &state;
+        let _ = (&app, &state);
         Err("Server not available: built without the 'server' feature".to_string())
     }
 
     #[cfg(feature = "server")]
     {
-        // Hold write lock for the entire operation to prevent concurrent spawns.
+        // Hold write lock for the entire operation to prevent concurrent starts.
         let mut server = state.local_server.write().await;
 
         if let Some(ref srv) = *server {
@@ -277,110 +423,83 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
             });
         }
 
-        // Spawn ourselves with `--server` to run the embedded server as a subprocess.
-        let server_bin = std::env::current_exe()
-            .map_err(|e| format!("Failed to locate current executable: {e}"))?;
-
-        let mut child = claudette::process::command(&server_bin)
-            .arg("--server")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| format!("Failed to start embedded server: {e}"))?;
-
-        // Capture PID eagerly — child.id() returns None after the process is
-        // reaped, and we need the PID for synchronous cleanup on app exit.
-        let pid = child.id().ok_or("Failed to get server process PID")?;
-
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or("Failed to capture server stdout")?;
-        let stderr_handle = child.stderr.take();
-        let mut reader = BufReader::new(stdout).lines();
-
-        let mut connection_string = String::new();
-        let timeout = tokio::time::Duration::from_secs(10);
-        let deadline = tokio::time::Instant::now() + timeout;
-
-        while tokio::time::Instant::now() < deadline {
-            let line = tokio::time::timeout_at(deadline, reader.next_line())
+        // Serve in-process so paired clients drive this window's own agent
+        // sessions (and see them live) rather than a second runtime.
+        let host = crate::remote_host::TauriRpcHost::attach(app.clone());
+        let handle =
+            match claudette_server::start(claudette_server::ServerOptions::default(), host.clone())
                 .await
-                .map_err(|_| "Timed out waiting for server to start")?
-                .map_err(|e| format!("Error reading server output: {e}"))?;
-
-            if let Some(line) = line {
-                let trimmed = line.trim();
-                if trimmed.starts_with("claudette://") {
-                    connection_string = trimmed.to_string();
-                    break;
+            {
+                Ok(handle) => handle,
+                Err(e) => {
+                    host.detach();
+                    return Err(format!("Failed to start server: {e}"));
                 }
-            } else {
-                // Server exited — capture stderr for a useful error message.
-                let detail = match stderr_handle {
-                    Some(mut se) => {
-                        let mut buf = String::new();
-                        let _ = tokio::io::AsyncReadExt::read_to_string(&mut se, &mut buf).await;
-                        let t = buf.trim();
-                        if t.is_empty() {
-                            String::new()
-                        } else {
-                            format!(": {t}")
-                        }
-                    }
-                    None => String::new(),
-                };
-                // Reap the child so it doesn't become a zombie.
-                let status = child.wait().await.ok();
-                let code = status.and_then(|s| s.code());
-                let exit_info = match code {
-                    Some(c) => format!(" (exit code {c})"),
-                    None => String::new(),
-                };
-                return Err(format!("Server exited before ready{exit_info}{detail}"));
-            }
-        }
-
-        if connection_string.is_empty() {
-            let _ = child.kill().await;
-            return Err("Server started but did not print a connection string".to_string());
-        }
-
-        // Spawn tasks to continuously drain stdout and stderr to prevent broken
-        // pipe panics. If we don't read them, the pipe buffer fills and the server
-        // will die with "Broken pipe" on its next write.
-        tokio::spawn(async move { while let Ok(Some(_)) = reader.next_line().await {} });
-        if let Some(se) = stderr_handle {
-            tokio::spawn(async move {
-                let mut stderr_reader = BufReader::new(se).lines();
-                while let Ok(Some(_)) = stderr_reader.next_line().await {}
-            });
-        }
-
-        let info = LocalServerInfo {
-            running: true,
-            connection_string: Some(connection_string.clone()),
-        };
+            };
+        let connection_string = handle.connection_string.clone();
 
         *server = Some(LocalServerState {
-            child,
-            pid,
-            connection_string,
+            connection_string: connection_string.clone(),
+            handle,
+            host,
         });
 
-        Ok(info)
-    } // #[cfg(feature = "server")]
+        Ok(LocalServerInfo {
+            running: true,
+            connection_string: Some(connection_string),
+        })
+    }
 }
 
 #[tauri::command]
 pub async fn stop_local_server(state: State<'_, AppState>) -> Result<(), String> {
-    let mut server = state.local_server.write().await;
-    if let Some(mut srv) = server.take() {
-        let _ = srv.child.kill().await;
-        let _ = srv.child.wait().await;
+    let previous = state.local_server.write().await.take();
+    #[cfg(feature = "server")]
+    if let Some(mut srv) = previous {
+        // Wait for the port to free up so sharing can restart right away;
+        // dropping `srv` then detaches the event bridge.
+        srv.handle.stop_and_wait().await;
     }
+    #[cfg(not(feature = "server"))]
+    drop(previous);
     Ok(())
+}
+
+/// Issue a new pairing token and revoke every paired device. When sharing
+/// is on, the server restarts with the new token (dropping connected
+/// clients); the returned info carries the new connection string.
+#[tauri::command]
+pub async fn reset_local_server_pairing(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LocalServerInfo, String> {
+    #[cfg(not(feature = "server"))]
+    {
+        let _ = (&app, &state);
+        Err("Server not available: built without the 'server' feature".to_string())
+    }
+
+    #[cfg(feature = "server")]
+    {
+        let previous = state.local_server.write().await.take();
+        let was_running = previous.is_some();
+        if let Some(mut srv) = previous {
+            srv.handle.stop_and_wait().await;
+        }
+        let config_path = claudette_server::default_config_path();
+        let mut config = claudette_server::auth::ServerConfig::load_or_create(&config_path)
+            .map_err(|e| e.to_string())?;
+        config.regenerate_token();
+        config.save(&config_path).map_err(|e| e.to_string())?;
+        if was_running {
+            start_local_server(app, state).await
+        } else {
+            Ok(LocalServerInfo {
+                running: false,
+                connection_string: None,
+            })
+        }
+    }
 }
 
 #[tauri::command]

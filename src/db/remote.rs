@@ -99,6 +99,26 @@ impl Database {
         Ok(())
     }
 
+    pub fn set_remote_connection_auto_connect(
+        &self,
+        id: &str,
+        auto_connect: bool,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE remote_connections SET auto_connect = ?1 WHERE id = ?2",
+            params![auto_connect as i32, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn rename_remote_connection(&self, id: &str, name: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE remote_connections SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_remote_connection(&self, id: &str) -> Result<(), rusqlite::Error> {
         self.conn
             .execute("DELETE FROM remote_connections WHERE id = ?1", params![id])?;
@@ -175,6 +195,18 @@ mod tests {
         db.delete_remote_connection("rc1").unwrap();
         let conns = db.list_remote_connections().unwrap();
         assert!(conns.is_empty());
+    }
+
+    #[test]
+    fn test_set_auto_connect_and_rename() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_remote_connection(&make_remote_conn("r1", "Server A", "host-a.local", 7683))
+            .unwrap();
+        db.set_remote_connection_auto_connect("r1", true).unwrap();
+        db.rename_remote_connection("r1", "Renamed").unwrap();
+        let fetched = db.get_remote_connection("r1").unwrap().unwrap();
+        assert!(fetched.auto_connect);
+        assert_eq!(fetched.name, "Renamed");
     }
 
     #[test]

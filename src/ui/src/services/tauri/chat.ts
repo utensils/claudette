@@ -7,9 +7,12 @@ import type {
   ChatMessage,
 } from "../../types";
 import type { ConversationCheckpoint } from "../../types/checkpoint";
+import { viaSession } from "./remoteRouting";
 
 export function loadChatHistory(sessionId: string): Promise<ChatMessage[]> {
-  return invoke("load_chat_history", { sessionId });
+  return viaSession(sessionId, "load_chat_history", {}, () =>
+    invoke("load_chat_history", { sessionId }),
+  );
 }
 
 export function loadChatHistoryPage(
@@ -65,13 +68,24 @@ export function steerQueuedChatMessage(
   attachments?: AttachmentInput[],
   messageId?: string,
 ): Promise<ConversationCheckpoint | null> {
-  return invoke("steer_queued_chat_message", {
+  return viaSession(
     sessionId,
-    messageId: messageId ?? null,
-    content,
-    mentionedFiles: mentionedFiles ?? null,
-    attachments: attachments ?? null,
-  });
+    "steer_queued_chat_message",
+    {
+      message_id: messageId ?? null,
+      content,
+      mentioned_files: mentionedFiles ?? null,
+      attachments: attachments ?? null,
+    },
+    () =>
+      invoke("steer_queued_chat_message", {
+        sessionId,
+        messageId: messageId ?? null,
+        content,
+        mentionedFiles: mentionedFiles ?? null,
+        attachments: attachments ?? null,
+      }),
+  );
 }
 
 export function loadAttachmentsForSession(
@@ -99,11 +113,15 @@ export function readFileAsBase64(path: string): Promise<ChatAttachment> {
 }
 
 export function stopAgent(sessionId: string): Promise<void> {
-  return invoke("stop_agent", { sessionId });
+  return viaSession(sessionId, "stop_agent", {}, () =>
+    invoke("stop_agent", { sessionId }),
+  );
 }
 
 export function resetAgentSession(sessionId: string): Promise<void> {
-  return invoke("reset_agent_session", { sessionId });
+  return viaSession(sessionId, "reset_agent_session", {}, () =>
+    invoke("reset_agent_session", { sessionId }),
+  );
 }
 
 /**
@@ -130,11 +148,17 @@ export function resetAgentSession(sessionId: string): Promise<void> {
  * harness.
  */
 export function prepareCrossHarnessMigration(sessionId: string): Promise<void> {
-  return invoke("prepare_cross_harness_migration", { sessionId });
+  // A standalone server can't stage a prelude and rejects the method; the
+  // caller then falls back to `resetAgentSession`.
+  return viaSession(sessionId, "prepare_cross_harness_migration", {}, () =>
+    invoke("prepare_cross_harness_migration", { sessionId }),
+  );
 }
 
 export function clearAttention(sessionId: string): Promise<void> {
-  return invoke("clear_attention", { sessionId });
+  return viaSession(sessionId, "clear_attention", {}, () =>
+    invoke("clear_attention", { sessionId }),
+  );
 }
 
 /**
@@ -147,12 +171,18 @@ export function submitAgentAnswer(
   toolUseId: string,
   answers: Record<string, string>,
 ): Promise<void> {
-  return invoke("submit_agent_answer", {
+  return viaSession(
     sessionId,
-    toolUseId,
-    answers,
-    annotations: null,
-  });
+    "submit_agent_answer",
+    { tool_use_id: toolUseId, answers, annotations: null },
+    () =>
+      invoke("submit_agent_answer", {
+        sessionId,
+        toolUseId,
+        answers,
+        annotations: null,
+      }),
+  );
 }
 
 /**
@@ -165,12 +195,18 @@ export function submitPlanApproval(
   approved: boolean,
   reason?: string,
 ): Promise<void> {
-  return invoke("submit_plan_approval", {
+  return viaSession(
     sessionId,
-    toolUseId,
-    approved,
-    reason: reason ?? null,
-  });
+    "submit_plan_approval",
+    { tool_use_id: toolUseId, approved, reason: reason ?? null },
+    () =>
+      invoke("submit_plan_approval", {
+        sessionId,
+        toolUseId,
+        approved,
+        reason: reason ?? null,
+      }),
+  );
 }
 
 /**
@@ -184,10 +220,16 @@ export function submitAgentApproval(
   approved: boolean,
   reason?: string,
 ): Promise<void> {
-  return invoke("submit_agent_approval", {
+  return viaSession(
     sessionId,
-    toolUseId,
-    approved,
-    reason: reason ?? null,
-  });
+    "submit_agent_approval",
+    { tool_use_id: toolUseId, approved, reason: reason ?? null },
+    () =>
+      invoke("submit_agent_approval", {
+        sessionId,
+        toolUseId,
+        approved,
+        reason: reason ?? null,
+      }),
+  );
 }

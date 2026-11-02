@@ -929,6 +929,7 @@ dependencies = [
 name = "claudette-server"
 version = "0.28.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "clap",
  "claudette",

@@ -13,17 +13,13 @@ use claudette::model::{ChatMessage, ChatRole};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 
-use crate::ws::{
-    AgentSessionState, PendingPermission, PtyHandle, QueuedMessage, ServerState, Writer,
-    send_message,
-};
+use crate::ws::{AgentSessionState, PendingPermission, PtyHandle, QueuedMessage, ServerState};
 
 use claudette::permissions::tools_for_level;
 
 /// Dispatch a JSON-RPC request and return a JSON-RPC response.
 pub async fn handle_request(
     state: &Arc<ServerState>,
-    writer: &Arc<Writer>,
     request: &serde_json::Value,
 ) -> serde_json::Value {
     let id = request
@@ -32,8 +28,27 @@ pub async fn handle_request(
         .unwrap_or(serde_json::Value::Null);
     let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
     let params = request.get("params").cloned().unwrap_or_default();
+    rpc_envelope(id, dispatch(state, method, params).await)
+}
 
-    let result = match method {
+/// Wrap a handler result in a JSON-RPC response envelope.
+pub fn rpc_envelope(
+    id: serde_json::Value,
+    result: Result<serde_json::Value, String>,
+) -> serde_json::Value {
+    match result {
+        Ok(value) => json!({"id": id, "result": value}),
+        Err(msg) => json!({"id": id, "error": {"code": -1, "message": msg}}),
+    }
+}
+
+/// Route one method call to its handler.
+pub async fn dispatch(
+    state: &Arc<ServerState>,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    match method {
         "load_initial_data" => handle_load_initial_data(state).await,
         "load_chat_history" => {
             let chat_session_id = param_chat_session_id(&params);
@@ -83,10 +98,17 @@ pub async fn handle_request(
             let mentioned_files: Option<Vec<String>> = params
                 .get("mentioned_files")
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
+            // Clients pass their optimistic message's id so the persisted
+            // row matches it (no duplicate after a history reload).
+            let message_id = params
+                .get("message_id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
             handle_send_chat_message(
                 state,
-                writer,
                 &chat_session_id,
+                message_id,
                 &content,
                 permission_level.as_deref(),
                 model,
@@ -104,7 +126,23 @@ pub async fn handle_request(
         "steer_queued_chat_message" => {
             let chat_session_id = param_chat_session_id(&params);
             let content = param_str(&params, "content");
-            handle_steer_queued_chat_message(state, &chat_session_id, &content).await
+            let message_id = params
+                .get("message_id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let mentioned_files: Vec<String> = params
+                .get("mentioned_files")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            handle_steer_queued_chat_message(
+                state,
+                &chat_session_id,
+                &content,
+                message_id,
+                mentioned_files,
+            )
+            .await
         }
         "submit_agent_answer" => {
             let chat_session_id = param_chat_session_id(&params);
@@ -190,17 +228,41 @@ pub async fn handle_request(
             }
         }
         "create_workspace" => {
-            let repository_id = param_str(&params, "repository_id");
+            // `repo_id` is the desktop host's (IPC) spelling.
+            let repository_id = Some(param_str(&params, "repository_id"))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| param_str(&params, "repo_id"));
             let name = param_str(&params, "name");
             let preserve_supplied_name = params
                 .get("preserve_name")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            handle_create_workspace(state, &repository_id, &name, preserve_supplied_name).await
+            let input_values: Option<std::collections::HashMap<String, String>> = params
+                .get("input_values")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            handle_create_workspace(
+                state,
+                &repository_id,
+                &name,
+                preserve_supplied_name,
+                input_values,
+            )
+            .await
         }
         "archive_workspace" => {
             let workspace_id = param_str(&params, "workspace_id");
-            handle_archive_workspace(state, &workspace_id).await
+            let delete_branch = params.get("delete_branch").and_then(|v| v.as_bool());
+            handle_archive_workspace(state, &workspace_id, delete_branch).await
+        }
+        "clear_attention" => {
+            // Attention is derived from pending controls in snapshots; there
+            // is no separate flag to clear. Accepted so clients that call it
+            // after viewing a session don't get an error.
+            Ok(json!(null))
+        }
+        "read_plan_file" => {
+            let path = param_str(&params, "path");
+            handle_read_plan_file(path).await
         }
         "restore_workspace" => {
             let workspace_id = param_str(&params, "workspace_id");
@@ -226,12 +288,18 @@ pub async fn handle_request(
             )
             .await
         }
+        "load_commit_file_diff" => {
+            let worktree_path = param_str(&params, "worktree_path");
+            let commit_hash = param_str(&params, "commit_hash");
+            let file_path = param_str(&params, "file_path");
+            handle_load_commit_file_diff(&worktree_path, &commit_hash, &file_path).await
+        }
         "spawn_pty" => {
             let workspace_id = param_str(&params, "workspace_id");
             let cwd = param_str(&params, "cwd");
             let rows = params.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
             let cols = params.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-            handle_spawn_pty(state, writer, &workspace_id, &cwd, rows, cols).await
+            handle_spawn_pty(state, &workspace_id, &cwd, rows, cols).await
         }
         "write_pty" => {
             let pty_id = params.get("pty_id").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -288,7 +356,13 @@ pub async fn handle_request(
         }
         "archive_chat_session" => {
             let chat_session_id = param_chat_session_id(&params);
-            handle_archive_chat_session(state, &chat_session_id).await
+            // Same casing the desktop IPC reads; absent means replace.
+            let auto_replace = params
+                .get("autoReplace")
+                .or_else(|| params.get("auto_replace"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            handle_archive_chat_session(state, &chat_session_id, auto_replace).await
         }
         "refresh_claude_flags" => {
             // Drop the cache so the next `cached_claude_flag_defs` call
@@ -301,12 +375,59 @@ pub async fn handle_request(
             Ok(json!(null))
         }
         _ => Err(format!("Unknown method: {method}")),
-    };
-
-    match result {
-        Ok(value) => json!({"id": id, "result": value}),
-        Err(msg) => json!({"id": id, "error": {"code": -1, "message": msg}}),
     }
+}
+
+/// Whether a session's running CLI must be torn down because the
+/// env-provider output changed since it was spawned. Without a running
+/// process there is nothing stale to tear down.
+fn env_drift_requires_reset(
+    has_running_process: bool,
+    turn_count: u32,
+    spawned_env: &claudette::env_provider::types::EnvMap,
+    current_env: &claudette::env_provider::types::EnvMap,
+) -> bool {
+    has_running_process && turn_count > 0 && spawned_env != current_env
+}
+
+/// Fingerprint of the spawn-time agent flags; a change forces a respawn.
+#[allow(clippy::too_many_arguments)]
+fn spawn_signature(
+    permission_level: &str,
+    model: Option<&str>,
+    fast_mode: Option<bool>,
+    thinking_enabled: Option<bool>,
+    plan_mode: Option<bool>,
+    effort: Option<&str>,
+    chrome_enabled: Option<bool>,
+    disable_1m_context: Option<bool>,
+) -> String {
+    format!(
+        "{permission_level}|{}|{}|{}|{}|{}|{}|{}",
+        model.unwrap_or(""),
+        fast_mode.unwrap_or(false),
+        thinking_enabled.unwrap_or(false),
+        plan_mode.unwrap_or(false),
+        effort.unwrap_or(""),
+        chrome_enabled.unwrap_or(false),
+        disable_1m_context.unwrap_or(false),
+    )
+}
+
+/// Payload for the `agent-stream` event. The desktop UI keys streams on
+/// `chat_session_id` (matching the local Tauri event); the mobile client
+/// reads the older `session_id`. Emit both so neither breaks.
+pub fn agent_stream_payload(
+    workspace_id: &str,
+    chat_session_id: &str,
+    event: &AgentEvent,
+) -> serde_json::Value {
+    json!({
+        "workspace_id": workspace_id,
+        "chat_session_id": chat_session_id,
+        "session_id": chat_session_id,
+        "event": event,
+    })
 }
 
 fn param_str(params: &serde_json::Value, key: &str) -> String {
@@ -333,26 +454,7 @@ fn open_db(state: &ServerState) -> Result<Database, String> {
     Database::open(&state.db_path).map_err(|e| e.to_string())
 }
 
-/// Mirror of `commands::env::load_disabled_providers` from the Tauri side.
-/// Reads per-repo env-provider toggles persisted in `app_settings` under
-/// keys of the form `repo:{repo_id}:env_provider:{plugin}:enabled`. The
-/// dispatcher consults this set to skip the matching plugin without
-/// running its detect/export operations.
-fn load_disabled_providers(db: &Database, repo_id: &str) -> std::collections::HashSet<String> {
-    let prefix = format!("repo:{repo_id}:env_provider:");
-    db.list_app_settings_with_prefix(&prefix)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|(key, value)| {
-            if value == "false" {
-                let rest = key.strip_prefix(&prefix)?;
-                rest.strip_suffix(":enabled").map(|n| n.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
-}
+use claudette::env_provider::load_disabled_providers;
 
 /// Resolve the merged env-provider activation for a workspace turn.
 /// When the server's plugin registry is `None` (no bundled or
@@ -526,8 +628,8 @@ async fn handle_load_chat_history(
 #[allow(clippy::too_many_arguments)]
 async fn handle_send_chat_message(
     state: &Arc<ServerState>,
-    writer: &Arc<Writer>,
     chat_session_id: &str,
+    message_id: Option<String>,
     content: &str,
     permission_level: Option<&str>,
     model: Option<String>,
@@ -562,7 +664,7 @@ async fn handle_send_chat_message(
 
     // Save user message.
     let user_msg = ChatMessage {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         workspace_id: workspace_id.clone(),
         chat_session_id: chat_session_id.clone(),
         role: ChatRole::User,
@@ -618,7 +720,7 @@ async fn handle_send_chat_message(
     // duplicate SQLite connection and a non-`Send` borrow across `.await`.
     let disabled_env_providers =
         load_disabled_providers(&db, repo.as_ref().map(|r| r.id.as_str()).unwrap_or(""));
-    let resolved_env = resolve_workspace_env(
+    let mut resolved_env = resolve_workspace_env(
         state,
         ws,
         repo.as_ref(),
@@ -626,6 +728,12 @@ async fn handle_send_chat_message(
         disabled_env_providers,
     )
     .await;
+    // Workspace input values layer over env-provider output (desktop parity).
+    if let Ok(Some(values)) = db.get_workspace_input_values(&workspace_id) {
+        for (k, v) in values {
+            resolved_env.vars.insert(k, Some(v));
+        }
+    }
 
     let mut agents = state.agents.write().await;
     let workspace_id_owned = workspace_id.clone();
@@ -640,16 +748,25 @@ async fn handle_send_chat_message(
             });
             from_config.or_else(|| repo.as_ref().and_then(|r| r.custom_instructions.clone()))
         };
+        // Resume the conversation saved on the chat_sessions row (by this
+        // server or the desktop app sharing the DB) after a restart.
+        let (session_id, turn_count) = match chat_session.session_id.clone() {
+            Some(saved) if !saved.trim().is_empty() && chat_session.turn_count > 0 => {
+                (saved, chat_session.turn_count)
+            }
+            _ => (uuid::Uuid::new_v4().to_string(), 0),
+        };
         AgentSessionState {
             workspace_id: workspace_id_owned,
-            session_id: uuid::Uuid::new_v4().to_string(),
-            turn_count: 0,
+            session_id,
+            turn_count,
             active_pid: None,
             custom_instructions: instructions,
             session_resolved_env: Default::default(),
             persistent_session: None,
             pending_permissions: std::collections::HashMap::new(),
             pending_message_queue: std::collections::VecDeque::new(),
+            spawn_signature: String::new(),
         }
     });
 
@@ -661,7 +778,16 @@ async fn handle_send_chat_message(
     // env. Dropping `persistent_session` here lets `Arc::drop` kill the
     // running `claude` subprocess; the next turn will start a fresh one
     // with `is_resume = false` so the new env is picked up cleanly.
-    if session.turn_count > 0 && session.session_resolved_env != resolved_env.vars {
+    // Only a *running* process has stale env baked in. A session restored
+    // from the DB (server restart) or left idle after a stop has no
+    // process, so the next spawn picks up the fresh env and resumes the
+    // conversation as-is.
+    if env_drift_requires_reset(
+        session.persistent_session.is_some(),
+        session.turn_count,
+        &session.session_resolved_env,
+        &resolved_env.vars,
+    ) {
         tracing::info!(
             target: "claudette::ws",
             workspace_id = %workspace_id,
@@ -676,6 +802,31 @@ async fn handle_send_chat_message(
         session.persistent_session = None;
         session.pending_permissions.clear();
         session.pending_message_queue.clear();
+    }
+
+    // The CLI's model, permission and mode flags are fixed at spawn. When
+    // the client changes any of them (e.g. plan mode turning off after a
+    // plan is approved), restart the process on the same conversation so
+    // the new flags apply. Mirrors the desktop's flag-change respawn.
+    let spawn_signature = spawn_signature(
+        level,
+        model.as_deref(),
+        fast_mode,
+        thinking_enabled,
+        plan_mode,
+        effort.as_deref(),
+        chrome_enabled,
+        disable_1m_context,
+    );
+    if session.persistent_session.is_some() && session.spawn_signature != spawn_signature {
+        tracing::info!(
+            target: "claudette::ws",
+            chat_session_id = %chat_session_id,
+            "agent settings changed — restarting session with resume"
+        );
+        session.persistent_session = None;
+        session.active_pid = None;
+        session.pending_permissions.clear();
     }
 
     let is_resume = session.turn_count > 0;
@@ -703,7 +854,7 @@ async fn handle_send_chat_message(
     let extra_claude_flags = resolve_extra_claude_flags(&claude_flag_defs, &db, &ws.repository_id);
 
     let agent_settings = AgentSettings {
-        model: if !is_resume { model } else { None },
+        model,
         fast_mode: fast_mode.unwrap_or(false),
         thinking_enabled: thinking_enabled.unwrap_or(false),
         plan_mode: plan_mode.unwrap_or(false),
@@ -770,9 +921,12 @@ async fn handle_send_chat_message(
             };
             let arc = Arc::new(ps);
             session.persistent_session = Some(Arc::clone(&arc));
+            session.spawn_signature = spawn_signature;
             arc
         }
     };
+    // Persist the CLI session so a server (or app) restart resumes it.
+    let _ = db.save_chat_session_state(&chat_session_id, &session_id, session.turn_count);
 
     session.active_pid = Some(ps_arc.pid());
     session.session_resolved_env = resolved_env.vars.clone();
@@ -793,7 +947,6 @@ async fn handle_send_chat_message(
 
     spawn_turn_event_bridge(
         Arc::clone(state),
-        Arc::clone(writer),
         TurnBridgeContext {
             workspace_id: workspace_id.clone(),
             chat_session_id: chat_session_id.clone(),
@@ -839,7 +992,6 @@ pub struct TurnBridgeContext {
 /// steered turns silently lost their AskUserQuestion routing.
 pub fn spawn_turn_event_bridge(
     state: Arc<ServerState>,
-    writer: Arc<Writer>,
     ctx: TurnBridgeContext,
     turn_handle: claudette::agent::TurnHandle,
 ) {
@@ -933,7 +1085,7 @@ pub fn spawn_turn_event_bridge(
                         "input": input,
                     }
                 });
-                send_message(&writer, &prompt_msg).await;
+                state.emit(prompt_msg);
             }
 
             if let AgentEvent::ProcessExited(code) = &event {
@@ -1029,7 +1181,6 @@ pub fn spawn_turn_event_bridge(
                 if let Some(queued) = next_queued
                     && let Err(e) = dispatch_queued_message(
                         Arc::clone(&state),
-                        Arc::clone(&writer),
                         chat_session_id_for_stream.clone(),
                         queued,
                     )
@@ -1068,20 +1219,16 @@ pub fn spawn_turn_event_bridge(
                             "checkpoint": &cp,
                         }
                     });
-                    send_message(&writer, &event_msg).await;
+                    state.emit(event_msg);
                 }
             }
 
             // Emit event over WebSocket.
             let event_msg = json!({
                 "event": "agent-stream",
-                "payload": {
-                    "workspace_id": ws_id,
-                    "session_id": chat_session_id_for_stream,
-                    "event": event,
-                }
+                "payload": agent_stream_payload(&ws_id, &chat_session_id_for_stream, &event),
             });
-            send_message(&writer, &event_msg).await;
+            state.emit(event_msg);
         }
     });
 }
@@ -1311,6 +1458,8 @@ pub async fn handle_steer_queued_chat_message(
     state: &ServerState,
     chat_session_id: &str,
     content: &str,
+    message_id: Option<String>,
+    mentioned_files: Vec<String>,
 ) -> Result<serde_json::Value, String> {
     if content.trim().is_empty() {
         return Err("Cannot steer an empty message".into());
@@ -1319,6 +1468,8 @@ pub async fn handle_steer_queued_chat_message(
     let session = agents.get_mut(chat_session_id).ok_or("Session not found")?;
     session.pending_message_queue.push_back(QueuedMessage {
         content: content.to_string(),
+        message_id,
+        mentioned_files,
     });
     Ok(json!({
         "queued": true,
@@ -1342,7 +1493,6 @@ pub async fn handle_steer_queued_chat_message(
 /// turns silently dropped those prompts.
 async fn dispatch_queued_message(
     state: Arc<ServerState>,
-    writer: Arc<Writer>,
     chat_session_id: String,
     queued: QueuedMessage,
 ) -> Result<(), String> {
@@ -1374,7 +1524,10 @@ async fn dispatch_queued_message(
 
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let user_msg = ChatMessage {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: queued
+            .message_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         workspace_id: workspace_id.clone(),
         chat_session_id: chat_session_id.clone(),
         role: ChatRole::User,
@@ -1391,7 +1544,14 @@ async fn dispatch_queued_message(
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;
 
-    let turn_handle = ps_arc.send_turn(&queued.content, &[]).await?;
+    // Expand @-mentions against the worktree, as an interactive send does.
+    let prompt = claudette::file_expand::expand_file_mentions(
+        std::path::Path::new(&worktree_path),
+        &queued.content,
+        &queued.mentioned_files,
+    )
+    .await;
+    let turn_handle = ps_arc.send_turn(&prompt, &[]).await?;
 
     {
         let mut agents = state.agents.write().await;
@@ -1403,7 +1563,6 @@ async fn dispatch_queued_message(
 
     spawn_turn_event_bridge(
         Arc::clone(&state),
-        writer,
         TurnBridgeContext {
             workspace_id,
             chat_session_id,
@@ -1421,6 +1580,7 @@ async fn handle_create_workspace(
     repository_id: &str,
     name: &str,
     preserve_supplied_name: bool,
+    input_values: Option<std::collections::HashMap<String, String>>,
 ) -> Result<serde_json::Value, String> {
     use claudette::ops::{NoopHooks, workspace as ops_workspace};
 
@@ -1431,21 +1591,16 @@ async fn handle_create_workspace(
         .ok_or("Repository not found")?;
 
     let worktree_base_dir = state.worktree_base_dir.read().await.clone();
-    // Server uses the repo's path_slug as the prefix — historical behavior
-    // that survives the refactor unchanged. The GUI resolves a per-user
-    // prefix from app settings; harmonizing the two is a follow-up.
-    let branch_prefix = format!("{}/", repo.path_slug);
+    // Same branch-prefix setting the desktop app uses.
+    let (prefix_mode, prefix_custom) = ops_workspace::read_branch_prefix_settings(&db);
+    let branch_prefix = ops_workspace::resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
 
     let params = ops_workspace::CreateParams {
         repo_id: repository_id,
         name,
         branch_prefix: &branch_prefix,
-        // Remote server doesn't yet plumb required-input values through —
-        // matches the CLI v1 scope. The shared op will reject the create
-        // with `OpsError::Validation` if the repo declares inputs, which
-        // surfaces back to the WS client as a clear error rather than a
-        // silently misconfigured workspace.
-        input_values: None,
+        // Validated against the repo's declared inputs inside the op.
+        input_values: input_values.as_ref(),
     };
     let out = if preserve_supplied_name {
         ops_workspace::create_preserving_supplied_name(
@@ -1461,16 +1616,28 @@ async fn handle_create_workspace(
     .map_err(|e| e.to_string())?;
 
     // Run the setup script (if configured) for parity with the GUI path.
-    // The server has no plugin registry, so env-provider stack is not
-    // applied — adding that requires loading plugins server-side.
+    // Like the desktop, setup runs before the env-provider resolve, so the
+    // only env it gets on top of the inherited one is the workspace inputs.
+    let inputs_env = input_values.map(|values| {
+        let mut env = claudette::env_provider::ResolvedEnv::default();
+        for (k, v) in values {
+            env.vars.insert(k, Some(v));
+        }
+        env
+    });
+    let mut workspace_with_inputs = out.workspace.clone();
+    workspace_with_inputs.input_values = db
+        .get_workspace_input_values(&out.workspace.id)
+        .ok()
+        .flatten();
     let setup_result = ops_workspace::resolve_and_run_setup(
-        &out.workspace,
+        &workspace_with_inputs,
         std::path::Path::new(&repo.path),
         std::path::Path::new(&out.worktree_path),
         repo.setup_script.as_deref(),
         repo.base_branch.as_deref(),
         repo.default_remote.as_deref(),
-        None,
+        inputs_env.as_ref(),
     )
     .await;
 
@@ -1484,6 +1651,7 @@ async fn handle_create_workspace(
 async fn handle_archive_workspace(
     state: &ServerState,
     workspace_id: &str,
+    delete_branch_override: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     use claudette::ops::{NoopHooks, workspace as ops_workspace};
 
@@ -1511,21 +1679,42 @@ async fn handle_archive_workspace(
     }
 
     let mut db = open_db(state)?;
+    // Same "delete branch on archive" setting the desktop honors; callers
+    // can override per request.
+    let delete_branch = delete_branch_override.unwrap_or_else(|| {
+        db.get_app_setting("git_delete_branch_on_archive")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true")
+    });
     let _ = ops_workspace::archive(
         &mut db,
         &NoopHooks,
         ops_workspace::ArchiveParams {
             workspace_id,
-            // The server doesn't surface a delete-branch toggle today;
-            // archive without branch deletion mirrors prior behavior so
-            // remote clients can still restore archived workspaces.
-            delete_branch: false,
+            delete_branch,
         },
     )
     .await
     .map_err(|e| e.to_string())?;
 
     Ok(json!(null))
+}
+
+async fn handle_read_plan_file(path: String) -> Result<serde_json::Value, String> {
+    use claudette::agent_files::{AgentFileKind, classify_agent_file};
+    let text = tokio::task::spawn_blocking(move || {
+        match classify_agent_file(std::path::Path::new(&path)) {
+            Ok((canonical, AgentFileKind::Plan)) => std::fs::read_to_string(&canonical)
+                .map_err(|e| format!("Failed to read plan file: {e}")),
+            Ok(_) => Err("Only .claude/plans/*.md files can be read".to_string()),
+            Err(e) => Err(e),
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to read plan file: {e}"))??;
+    Ok(json!(text))
 }
 
 pub async fn handle_restore_workspace(
@@ -1612,9 +1801,20 @@ async fn handle_load_file_diff(
     Ok(serde_json::to_value(parsed).unwrap_or_default())
 }
 
+async fn handle_load_commit_file_diff(
+    worktree_path: &str,
+    commit_hash: &str,
+    file_path: &str,
+) -> Result<serde_json::Value, String> {
+    let raw = claudette::diff::commit_file_diff(worktree_path, commit_hash, file_path)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    let parsed = claudette::diff::parse_unified_diff(&raw, file_path);
+    Ok(serde_json::to_value(parsed).unwrap_or_default())
+}
+
 async fn handle_spawn_pty(
     state: &Arc<ServerState>,
-    writer: &Arc<Writer>,
     workspace_id: &str,
     cwd: &str,
     rows: u16,
@@ -1675,7 +1875,6 @@ async fn handle_spawn_pty(
     }
 
     // Spawn a reader task that forwards PTY output over WebSocket.
-    let writer = Arc::clone(writer);
     let state_clone = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         use std::io::Read;
@@ -1686,18 +1885,13 @@ async fn handle_spawn_pty(
                 Ok(0) => break,
                 Ok(n) => {
                     let data: Vec<u8> = buf[..n].to_vec();
-                    let writer = writer.clone();
-                    let rt = tokio::runtime::Handle::current();
-                    rt.block_on(async {
-                        let msg = json!({
-                            "event": "pty-output",
-                            "payload": {
-                                "pty_id": pty_id,
-                                "data": data,
-                            }
-                        });
-                        send_message(&writer, &msg).await;
-                    });
+                    state_clone.emit(json!({
+                        "event": "pty-output",
+                        "payload": {
+                            "pty_id": pty_id,
+                            "data": data,
+                        }
+                    }));
                 }
                 Err(_) => break,
             }
@@ -1708,6 +1902,10 @@ async fn handle_spawn_pty(
             let mut ptys = state_clone.ptys.write().await;
             ptys.remove(&pty_id);
         });
+        state_clone.emit(json!({
+            "event": "pty-exit",
+            "payload": { "pty_id": pty_id },
+        }));
     });
 
     Ok(json!({"pty_id": pty_id}))
@@ -1837,6 +2035,7 @@ fn handle_rename_chat_session(
 async fn handle_archive_chat_session(
     state: &ServerState,
     chat_session_id: &str,
+    auto_replace: bool,
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
     let session = db
@@ -1857,9 +2056,16 @@ async fn handle_archive_chat_session(
         let _ = agent::stop_agent(pid).await;
     }
 
-    let fresh = db
-        .archive_chat_session_ensuring_active(chat_session_id, &workspace_id)
-        .map_err(|e| e.to_string())?;
+    // Without replacement the workspace may be left with no sessions, which
+    // the client shows as its empty-tabs view.
+    let fresh = if auto_replace {
+        db.archive_chat_session_ensuring_active(chat_session_id, &workspace_id)
+            .map_err(|e| e.to_string())?
+    } else {
+        db.archive_chat_session_only(chat_session_id)
+            .map_err(|e| e.to_string())?;
+        None
+    };
     if let Some(fresh) = fresh {
         return serde_json::to_value(fresh).map_err(|e| e.to_string());
     }
@@ -1917,5 +2123,33 @@ fn resolve_extra_claude_flags(
             tracing::warn!(target: "claudette::ws", error = %msg, "claude flag discovery failed");
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restored_session_without_a_process_is_not_reset_for_env_drift() {
+        let mut current = claudette::env_provider::types::EnvMap::default();
+        current.insert("PATH".into(), Some("/usr/bin".into()));
+        let empty = claudette::env_provider::types::EnvMap::default();
+        // After a server restart the entry is rebuilt from the DB with an
+        // empty env snapshot and no process: resume, don't reset.
+        assert!(!env_drift_requires_reset(false, 3, &empty, &current));
+        // A running process with stale env does need a respawn.
+        assert!(env_drift_requires_reset(true, 3, &empty, &current));
+        assert!(!env_drift_requires_reset(true, 3, &current, &current));
+    }
+
+    #[test]
+    fn agent_stream_payload_carries_both_session_keys() {
+        let payload = agent_stream_payload("ws-1", "chat-1", &AgentEvent::ProcessExited(Some(0)));
+        assert_eq!(payload["workspace_id"], "ws-1");
+        // Desktop reads `chat_session_id`; mobile reads `session_id`.
+        assert_eq!(payload["chat_session_id"], "chat-1");
+        assert_eq!(payload["session_id"], "chat-1");
+        assert_eq!(payload["event"]["ProcessExited"], 0);
     }
 }

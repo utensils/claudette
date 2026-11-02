@@ -4,6 +4,8 @@ import type {
   DiscoveredServer,
 } from "../../types";
 import type { RemoteInitialData } from "../../types/remote";
+import type { Repository } from "../../types/repository";
+import type { Workspace } from "../../types/workspace";
 import type { McpStatusSnapshot } from "../../types/mcp";
 import type { DetectedApp } from "../../types/apps";
 import type { AppState } from "../useAppStore";
@@ -13,6 +15,9 @@ export interface RemoteSlice {
   remoteConnections: RemoteConnectionInfo[];
   discoveredServers: DiscoveredServer[];
   activeRemoteIds: string[];
+  /** Saved connections with an automatic (re)connect attempt pending. */
+  reconnectingRemoteIds: string[];
+  setRemoteReconnecting: (id: string, reconnecting: boolean) => void;
   setRemoteConnections: (conns: RemoteConnectionInfo[]) => void;
   addRemoteConnection: (conn: RemoteConnectionInfo) => void;
   removeRemoteConnection: (id: string) => void;
@@ -22,6 +27,14 @@ export interface RemoteSlice {
   removeActiveRemoteId: (id: string) => void;
   mergeRemoteData: (connectionId: string, data: RemoteInitialData) => void;
   clearRemoteData: (connectionId: string) => void;
+  /** Replace the local repositories, workspaces and default branches,
+   *  keeping every paired server's rows. A remote connection can be
+   *  adopted before the local initial load lands (e.g. on webview reload). */
+  replaceLocalData: (data: {
+    repositories: Repository[];
+    workspaces: Workspace[];
+    defaultBranches: Record<string, string>;
+  }) => void;
 
   // Local Server
   localServerRunning: boolean;
@@ -48,6 +61,17 @@ export const createRemoteSlice: StateCreator<
   remoteConnections: [],
   discoveredServers: [],
   activeRemoteIds: [],
+  reconnectingRemoteIds: [],
+  setRemoteReconnecting: (id, reconnecting) =>
+    set((s) => {
+      const has = s.reconnectingRemoteIds.includes(id);
+      if (has === reconnecting) return s;
+      return {
+        reconnectingRemoteIds: reconnecting
+          ? [...s.reconnectingRemoteIds, id]
+          : s.reconnectingRemoteIds.filter((rid) => rid !== id),
+      };
+    }),
   setRemoteConnections: (conns) => set({ remoteConnections: conns }),
   addRemoteConnection: (conn) =>
     set((s) => ({ remoteConnections: [...s.remoteConnections, conn] })),
@@ -55,6 +79,7 @@ export const createRemoteSlice: StateCreator<
     set((s) => ({
       remoteConnections: s.remoteConnections.filter((c) => c.id !== id),
       activeRemoteIds: s.activeRemoteIds.filter((rid) => rid !== id),
+      reconnectingRemoteIds: s.reconnectingRemoteIds.filter((rid) => rid !== id),
     })),
   setDiscoveredServers: (servers) => set({ discoveredServers: servers }),
   setActiveRemoteIds: (ids) => set({ activeRemoteIds: ids }),
@@ -127,6 +152,26 @@ export const createRemoteSlice: StateCreator<
           (w) => w.remote_connection_id !== connectionId,
         ),
         defaultBranches: prunedDefaults,
+      };
+    }),
+
+  replaceLocalData: ({ repositories, workspaces, defaultBranches }) =>
+    set((s) => {
+      const remoteRepos = s.repositories.filter((r) => r.remote_connection_id);
+      const remoteRepoIds = new Set(remoteRepos.map((r) => r.id));
+      const remoteDefaults = Object.fromEntries(
+        Object.entries(s.defaultBranches).filter(([id]) => remoteRepoIds.has(id)),
+      );
+      return {
+        repositories: [
+          ...repositories.map((r) => ({ ...r, remote_connection_id: null })),
+          ...remoteRepos,
+        ],
+        workspaces: [
+          ...workspaces.map((w) => ({ ...w, remote_connection_id: null })),
+          ...s.workspaces.filter((w) => w.remote_connection_id),
+        ],
+        defaultBranches: { ...defaultBranches, ...remoteDefaults },
       };
     }),
 

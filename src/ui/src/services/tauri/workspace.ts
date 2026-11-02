@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { sendRemoteCommand } from "./remote";
+import { remoteConnectionForWorkspace } from "./remoteRouting";
 import type { Workspace } from "../../types";
 import type { CreateWorkspaceResult, SetupResult } from "../../types/repository";
 import type { WorkspaceEnvTrustNeededPayload } from "../../types/env";
@@ -48,7 +50,15 @@ export function archiveWorkspace(id: string, skipArchiveScript?: boolean): Promi
   return invoke("archive_workspace", { id, skipArchiveScript: skipArchiveScript ?? false });
 }
 
-export function restoreWorkspace(id: string): Promise<string> {
+/** Restore an archived workspace; resolves to its recreated worktree path. */
+export async function restoreWorkspace(id: string): Promise<string> {
+  const connectionId = remoteConnectionForWorkspace(id);
+  if (connectionId) {
+    const result = (await sendRemoteCommand(connectionId, "restore_workspace", {
+      workspace_id: id,
+    })) as { worktree_path: string };
+    return result.worktree_path;
+  }
   return invoke("restore_workspace", { id });
 }
 

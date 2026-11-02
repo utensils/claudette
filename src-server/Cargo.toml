@@ -42,6 +42,7 @@ hex = "0.4"
 # installs its own subscriber via `claudette::logging::init` in
 # `main.rs`.
 tracing = "0.1"
+async-trait = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

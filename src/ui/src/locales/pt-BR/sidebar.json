@@ -82,5 +82,12 @@
   "no_repos": "Ainda não há repositórios locais — adicione um na barra de ferramentas abaixo.",
   "no_workspaces": "Ainda não há workspaces.",
   "no_workspaces_repo_filter": "Nenhum workspace corresponde a este filtro de repositório.",
-  "nothing_to_show": "Nada para mostrar."
+  "nothing_to_show": "Nada para mostrar.",
+  "remote_connection_lost": "Conexão com {{name}} perdida",
+  "remote_reconnected": "Reconectado a {{name}}",
+  "remote_certificate_changed": "{{name}} tem um novo certificado — emparelhe novamente com o token",
+  "remote_action_failed": "A ação remota falhou: {{error}}",
+  "remote_needs_repair": "{{name}} não aceita mais este dispositivo — emparelhe novamente com o token",
+  "remote_cancel_reconnect": "Parar de reconectar",
+  "remote_revoke_failed": "{{name}} foi removido, mas não foi possível revogar o acesso lá ({{error}}). Use \"{{reset}}\" nessa máquina para revogá-lo."
 }

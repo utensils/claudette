@@ -1,26 +1,42 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ChatSession } from "../../types";
+import {
+  remoteConnectionForWorkspace,
+  viaSession,
+  viaWorkspace,
+} from "./remoteRouting";
 
 export function listChatSessions(
   workspaceId: string,
   includeArchived: boolean = false,
 ): Promise<ChatSession[]> {
-  return invoke("list_chat_sessions", { workspaceId, includeArchived });
+  return viaWorkspace(
+    workspaceId,
+    "list_chat_sessions",
+    { include_archived: includeArchived },
+    () => invoke("list_chat_sessions", { workspaceId, includeArchived }),
+  );
 }
 
 export function getChatSession(sessionId: string): Promise<ChatSession> {
-  return invoke("get_chat_session", { sessionId });
+  return viaSession(sessionId, "get_chat_session", {}, () =>
+    invoke("get_chat_session", { sessionId }),
+  );
 }
 
 export function createChatSession(workspaceId: string): Promise<ChatSession> {
-  return invoke("create_chat_session", { workspaceId });
+  return viaWorkspace(workspaceId, "create_chat_session", {}, () =>
+    invoke("create_chat_session", { workspaceId }),
+  );
 }
 
 export function renameChatSession(
   sessionId: string,
   name: string,
 ): Promise<void> {
-  return invoke("rename_chat_session", { sessionId, name });
+  return viaSession(sessionId, "rename_chat_session", { name }, () =>
+    invoke("rename_chat_session", { sessionId, name }),
+  );
 }
 
 export function setSessionCliInvocation(
@@ -42,6 +58,9 @@ export function reorderChatSessions(
   workspaceId: string,
   sessionIds: string[],
 ): Promise<void> {
+  // Tab order is only persisted for local sessions; a remote workspace's
+  // reorder stays in this window's store.
+  if (remoteConnectionForWorkspace(workspaceId)) return Promise.resolve();
   return invoke("reorder_chat_sessions", { workspaceId, sessionIds });
 }
 
@@ -68,5 +87,10 @@ export function archiveChatSession(
   sessionId: string,
   autoReplace: boolean = true,
 ): Promise<ChatSession | null> {
-  return invoke("archive_chat_session", { sessionId, autoReplace });
+  return viaSession(
+    sessionId,
+    "archive_chat_session",
+    { autoReplace },
+    () => invoke("archive_chat_session", { sessionId, autoReplace }),
+  );
 }

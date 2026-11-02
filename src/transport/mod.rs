@@ -1,7 +1,7 @@
 pub mod ws;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 /// A server-pushed event received over the transport.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,8 +10,11 @@ pub struct ServerEvent {
     pub payload: serde_json::Value,
 }
 
+/// Event a server sends in place of events a client fell too far behind to
+/// receive. Clients resync (initial data, pending approvals) on it.
+pub const EVENTS_DROPPED_EVENT: &str = "server-events-dropped";
+
 /// Transport-agnostic connection to a remote claudette-server.
-#[allow(dead_code)]
 // async_trait's expansion marks the boxed futures `#[must_use]`, which newer
 // clippy flags as `double_must_use` on the generated trait methods.
 #[allow(clippy::double_must_use)]
@@ -28,4 +31,8 @@ pub trait Transport: Send + Sync + 'static {
 
     /// Check whether the transport is still alive.
     fn is_connected(&self) -> bool;
+
+    /// Watch channel that flips to `true` when the underlying connection
+    /// drops (server restart, network loss, explicit close).
+    fn closed(&self) -> watch::Receiver<bool>;
 }

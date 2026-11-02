@@ -1,8 +1,5 @@
 //! Integration tests for the `get_chat_snapshot` RPC handler. Tests call
-//! `snapshot::build` directly — the public `handle_request` entrypoint
-//! takes an `Arc<Writer>` (a real TLS-wrapped WebSocket sink) which can't
-//! be constructed without a live handshake. Same pattern as
-//! `interactive_controls.rs`.
+//! `snapshot::build` directly so they can assert on the typed snapshot.
 //!
 //! These tests pin: the unknown-session error shape, the limit clamp's
 //! boundary behavior, that `pending_controls` round-trips the in-memory
@@ -125,6 +122,7 @@ fn empty_session(workspace_id: &str) -> AgentSessionState {
         persistent_session: None,
         pending_permissions: HashMap::new(),
         pending_message_queue: VecDeque::new(),
+        spawn_signature: String::new(),
     }
 }
 

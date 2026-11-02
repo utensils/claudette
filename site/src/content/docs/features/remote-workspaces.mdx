@@ -13,19 +13,18 @@ Agents started on a remote Claudette server run under whatever Claude credential
 
 ## Sharing from the Desktop App
 
-Click **Share this machine** in the sidebar. The server starts automatically as a subprocess — no separate installation required. The server is embedded in the Claudette binary (gated behind the default-enabled `server` feature).
+Click **Share this machine** in the sidebar. The desktop app starts serving on port 7683 from inside the app itself. Paired devices drive the same command core as the local window, so:
 
-The **Share this machine** modal also renders the connection string as a QR code so you can pair the [Claudette mobile app](/claudette/features/mobile-app/) by scanning with your phone.
+- sessions started from another device show up live in this window, and the other way round;
+- remote turns use the same agent backends, models, permission modes, MCP servers, env providers, and system prompt as local turns.
 
-On startup the server prints a connection string:
+The **Share this machine** modal shows the connection string and renders it as a QR code so you can pair the [Claudette mobile app](/claudette/features/mobile-app/) by scanning with your phone:
 
 ```
-claudette-server v0.8.0 listening on wss://0.0.0.0:7683
-Name: Work Laptop
-
-Connection string (paste into Claudette):
-  claudette://work-laptop.local:7683/aBcDeFgH1234...
+claudette://work-laptop.local:7683/aBcDeFgH1234...
 ```
+
+**Stop sharing** closes the server and disconnects every paired device. **Reset pairing** issues a new connection string and revokes every paired device; each one has to pair again. Use it if a device is lost or the string leaked.
 
 ## Headless Server (Standalone)
 
@@ -39,15 +38,48 @@ cargo install --path src-server
 claudette-server
 ```
 
+On startup it prints the connection string:
+
+```
+claudette-server v0.28.0 listening on wss://0.0.0.0:7683
+Name: Work Laptop
+
+Connection string (paste into Claudette):
+  claudette://work-laptop.local:7683/aBcDeFgH1234...
+```
+
+The standalone server reads the same database as the desktop app on that machine. Add repositories with the desktop app (or the [`claudette` CLI](/claudette/features/cli-client/)) on the server machine; remote clients can't add repositories yet. At startup the standalone server also captures the user's login-shell environment, so agents and terminals get the same `PATH` and toolchains as an interactive shell.
+
 ## Connecting from the Local App
 
 ### Automatic (LAN)
 
-If both machines are on the same network, the server appears automatically in the sidebar under **Nearby**. Click **Connect** and enter the pairing token when prompted.
+If both machines are on the same network, the server appears automatically in the sidebar under **Nearby**. Click **Connect** and enter the pairing token, which is the last part of the server's connection string. Before sending the token, Claudette checks that the server's TLS certificate matches the fingerprint it advertised on the network. If it doesn't match, pairing is refused and the token is never sent.
 
 ### Manual
 
-Click **+ Add remote** in the sidebar footer and paste the full connection string. Claudette authenticates, stores a session token, and reconnects automatically on future launches.
+Click **+ Add remote** in the sidebar footer and paste the full connection string. Claudette authenticates and stores a session token. The token stays on the Rust side and is never handed to the webview.
+
+### Staying connected
+
+- **Auto-connect.** Paired servers reconnect automatically each time Claudette launches. Clicking **×** (disconnect) on a server turns this off for that server, and connecting again turns it back on.
+- **Reconnect.** If a connection drops (server restart, sleep, network change), Claudette shows a toast and keeps retrying in the background. A connection that goes silent without closing is treated as dropped after about 45 seconds. If the connection drops, or a server stops answering a request for 10 minutes, the request fails with an error saying the server may still have completed it; Claudette never resends it on its own. Retries start after 1 second and back off to every 30 seconds. The server's status dot shows when a retry is pending; click **…** to stop retrying.
+- **Pair again.** Claudette stops retrying and asks you to pair again when the server no longer accepts this device (its pairing was reset or this device's session was revoked) or when its certificate changes. A certificate can change because the server was reinstalled or its config was reset, but a mismatch can also mean someone is impersonating the server. Pairing again with the server's token updates the saved entry instead of adding a duplicate.
+- **Missed updates.** Plan approvals and agent questions raised while you were disconnected appear when you reconnect or open that chat. When you reconnect, or a busy connection falls behind and drops events, Claudette reloads that server's workspaces and each loaded chat's status and transcript, so a turn that finished in the meantime no longer shows as running.
+- **Removing a server** (the **X** on a server that isn't connected, including one that is retrying) revokes this device's session on that server, connecting briefly to do so. If the server can't be reached, the entry is still removed and Claudette tells you the session is still valid; use **Reset pairing** on that machine to revoke it.
+
+## What works on a remote workspace
+
+| Works remotely | Local-only for now |
+|---|---|
+| Chat: send, stop, queue, and history | File tree, @-file mentions, and the file editor |
+| Session tabs: create, rename, archive | SCM / pull-request panel |
+| Plan approvals, `AskUserQuestion`, and tool approvals | Attachments in the composer |
+| Terminals (the shell runs on the remote machine) | Mid-turn steering (falls back to the queue) |
+| Diff file list, per-file diffs, and commit diffs | Checkpoints, rollback, and forking |
+| Create, archive, and restore workspaces | `!` shell commands and repository settings |
+
+Terminals opened on a remote workspace get IDs of their own on your machine, so they never collide with local terminals or with terminals from another server.
 
 ## Server Management
 
@@ -69,6 +101,8 @@ claudette-server --no-mdns
 
 All traffic is encrypted with **TLS**. The local app pins the server's certificate fingerprint on first connection (**trust-on-first-use**), similar to SSH's `known_hosts`. This means:
 
-- The first connection requires manual verification of the pairing token
-- Subsequent connections are authenticated automatically via the pinned certificate
-- If the server's certificate changes, you'll be prompted to re-verify
+- The first connection requires the pairing token. When pairing from **Nearby**, the certificate is also checked against the fingerprint advertised over mDNS.
+- Later connections authenticate with the saved session token, and only if the server presents the pinned certificate.
+- If the server's certificate changes, the connection is refused until you pair again.
+
+A paired device has full control of the server's workspaces, including running agents with whatever permission level it chooses. Treat the connection string like a password.

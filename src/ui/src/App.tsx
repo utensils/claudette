@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { findPendingPlaceholderForCreatedWorkspace } from "./stores/slices/workspacesSlice";
-import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, bootOk, reportBootStage, getClaudeAuthStatus } from "./services/tauri";
+import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, bootOk, reportBootStage, getClaudeAuthStatus } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -19,6 +19,7 @@ import type { WorkspaceOrderModeByRepo } from "./utils/workspaceOrdering";
 import { useCiAutoFixSession } from "./hooks/useCiAutoFixSession";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { useChatSessionCreatedEvent } from "./hooks/useChatSessionCreatedEvent";
+import { useRemoteConnectionLifecycle } from "./hooks/useRemoteConnectionLifecycle";
 import { useUsageInsightsPoller } from "./hooks/useUsageInsightsPoller";
 import {
   hydratePersistedViewState,
@@ -46,20 +47,16 @@ function workspaceOrderModesFromRepoIds(
 }
 
 function App() {
-  const setRepositories = useAppStore((s) => s.setRepositories);
-  const setWorkspaces = useAppStore((s) => s.setWorkspaces);
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const setDefaultTerminalAppId = useAppStore((s) => s.setDefaultTerminalAppId);
   const setWorkspaceAppsMenuShown = useAppStore(
     (s) => s.setWorkspaceAppsMenuShown,
   );
-  const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
   const setLastMessages = useAppStore((s) => s.setLastMessages);
   const hydrateWorkspaceScmLinks = useAppStore(
     (s) => s.hydrateWorkspaceScmLinks,
   );
-  const setRemoteConnections = useAppStore((s) => s.setRemoteConnections);
   const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
   const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
@@ -124,6 +121,7 @@ function App() {
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
   useChatSessionCreatedEvent();
+  useRemoteConnectionLifecycle();
   useUsageInsightsPoller();
   useCiAutoFixSession();
 
@@ -169,15 +167,17 @@ function App() {
           ...w,
           remote_connection_id: null,
         }));
-        setRepositories(
-          data.repositories.map((r) => ({ ...r, remote_connection_id: null }))
-        );
-        setWorkspaces(localWorkspaces);
+        // Keeps paired servers' rows: a connection re-adopted after a
+        // webview reload can land before this load does.
+        useAppStore.getState().replaceLocalData({
+          repositories: data.repositories,
+          workspaces: localWorkspaces,
+          defaultBranches: data.default_branches,
+        });
         setManualWorkspaceOrderByRepo(
           workspaceOrderModesFromRepoIds(data.manual_workspace_order_repo_ids),
         );
         setWorktreeBaseDir(data.worktree_base_dir);
-        setDefaultBranches(data.default_branches);
         // Index last messages by workspace_id for dashboard display.
         const msgMap: Record<string, (typeof data.last_messages)[0]> = {};
         for (const msg of data.last_messages) {
@@ -324,9 +324,8 @@ function App() {
     // the Rust side — components consult this to hide Browse
     // buttons rather than gambling on a crash.
     useAppStore.getState().fetchFileDialogCapability();
-    listRemoteConnections()
-      .then(setRemoteConnections)
-      .catch((err) => console.error("Failed to load remote connections:", err));
+    // Saved remote connections load in useRemoteConnectionLifecycle, which
+    // also resyncs live ones and auto-connects.
     // Poll discovered servers every 5s so the Nearby list stays current.
     const refreshDiscoveredServers = () => {
       listDiscoveredServers()
@@ -751,9 +750,32 @@ function App() {
       kind: "created" | "archived" | "restored" | "deleted" | "renamed";
       workspace_id: string;
       workspace: import("./types/workspace").Workspace | null;
+      /** Set by the Rust remote forwarder when the event came from a
+       *  paired server rather than this machine. */
+      remote_connection_id?: string;
     }>("workspaces-changed", (event) => {
-      const { kind, workspace_id, workspace } = event.payload;
+      const { kind, workspace_id, workspace, remote_connection_id } =
+        event.payload;
       const store = useAppStore.getState();
+      if (remote_connection_id) {
+        // A paired server's workspace changed (from this window or another
+        // client). Keep the row tagged with its connection — stamping it
+        // local would route every later call to this machine — and never
+        // fall back to a local reload, which only knows local rows.
+        if (!store.activeRemoteIds.includes(remote_connection_id)) return;
+        if (kind === "deleted") {
+          store.removeWorkspace(workspace_id);
+          if (store.selectedWorkspaceId === workspace_id) store.selectWorkspace(null);
+        } else if (workspace) {
+          store.addWorkspace({ ...workspace, remote_connection_id });
+        } else if (kind === "archived") {
+          store.updateWorkspace(workspace_id, {
+            status: "Archived",
+            agent_status: "Stopped",
+          });
+        }
+        return;
+      }
       if (kind === "deleted") {
         store.removeWorkspace(workspace_id);
         if (store.selectedWorkspaceId === workspace_id) store.selectWorkspace(null);
@@ -822,9 +844,8 @@ function App() {
       // The Rust `claudette::model::Workspace` doesn't include the
       // UI-only `remote_connection_id` field. Stamp it as `null` here so
       // downstream code that strict-checks `=== null` (rather than
-      // `!= null` or truthy) doesn't trip on `undefined`. All
-      // `workspaces-changed` events come from local ops by definition
-      // (the WS server doesn't emit them), so null is correct.
+      // `!= null` or truthy) doesn't trip on `undefined`. Remote events
+      // returned above, so this row is local.
       const stamped = { ...workspace, remote_connection_id: null };
 
       // Untangle the optimistic-create / optimistic-fork placeholder
@@ -953,7 +974,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteMcpEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
+  }, [setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setTerminalFontSize, setLastMessages, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteMcpEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

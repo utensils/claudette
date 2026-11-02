@@ -14,6 +14,7 @@ import { extractCompactionEvents } from "../../utils/compactionSentinel";
 import { extractLatestCallUsage } from "../../utils/extractLatestCallUsage";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import { useAppStore } from "../../stores/useAppStore";
+import { hydrateRemotePendingControls } from "./remotePendingControls";
 import type { useChatPanelStore } from "./useChatPanelStore";
 
 type ChatPanelStore = ReturnType<typeof useChatPanelStore>;
@@ -192,7 +193,8 @@ export function useChatHistoryLoader({
         }
       }
     } else {
-      sendRemoteCommand(currentWs!.remote_connection_id!, "load_chat_history", {
+      const connectionId = currentWs!.remote_connection_id!;
+      sendRemoteCommand(connectionId, "load_chat_history", {
         chat_session_id: sessionId,
       })
         .then((data) => {
@@ -200,6 +202,8 @@ export function useChatHistoryLoader({
             (data as { messages?: ChatMessage[] })?.messages ??
             (data as ChatMessage[]);
           onMessages(msgs);
+          // After the messages, which plan approvals read the plan path from.
+          return hydrateRemotePendingControls(connectionId, sessionId);
         })
         .catch((e) => console.error("Failed to load chat history:", e));
     }

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { setRemoteRoutingResolver } from "../services/tauri/remoteRouting";
 import {
   createAgentInteractionSlice,
   type AgentApproval,
@@ -162,6 +163,28 @@ export const selectActiveFileTabPath = (s: AppState): string | null => {
   if (!wsId) return null;
   return s.activeFileTabByWorkspace[wsId] ?? null;
 };
+
+// Let service wrappers route calls for remote workspaces / sessions to the
+// paired server without importing the store (which would be a cycle).
+setRemoteRoutingResolver({
+  connectionForWorkspace: (workspaceId) =>
+    useAppStore.getState().workspaces.find((w) => w.id === workspaceId)
+      ?.remote_connection_id ?? null,
+  connectionForSession: (sessionId) => {
+    const state = useAppStore.getState();
+    for (const [workspaceId, sessions] of Object.entries(
+      state.sessionsByWorkspace,
+    )) {
+      if (sessions.some((s) => s.id === sessionId)) {
+        return (
+          state.workspaces.find((w) => w.id === workspaceId)
+            ?.remote_connection_id ?? null
+        );
+      }
+    }
+    return null;
+  },
+});
 
 // Expose store on window in dev builds for debug_eval_js access.
 if (import.meta.env.DEV && typeof window !== "undefined") {

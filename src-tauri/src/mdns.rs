@@ -9,7 +9,7 @@ use crate::state::AppState;
 const SERVICE_TYPE: &str = "_claudette._tcp.local.";
 
 /// Start an mDNS browser that discovers claudette-server instances on the LAN.
-pub fn start_mdns_browser(app: &AppHandle, saved_fingerprints: Vec<String>) -> Result<(), String> {
+pub fn start_mdns_browser(app: &AppHandle) -> Result<(), String> {
     let mdns = ServiceDaemon::new().map_err(|e| format!("Failed to start mDNS daemon: {e}"))?;
     let receiver = mdns
         .browse(SERVICE_TYPE)
@@ -20,7 +20,6 @@ pub fn start_mdns_browser(app: &AppHandle, saved_fingerprints: Vec<String>) -> R
     tauri::async_runtime::spawn(async move {
         // Keep mdns alive for the lifetime of the task.
         let _mdns = mdns;
-        let _fingerprints = saved_fingerprints;
 
         // Track fullname → (host, port) for reliable removal.
         let mut fullname_map: HashMap<String, (String, u16)> = HashMap::new();
@@ -39,7 +38,6 @@ pub fn start_mdns_browser(app: &AppHandle, saved_fingerprints: Vec<String>) -> R
                     let host = info.get_hostname().trim_end_matches('.').to_string();
                     let port = info.get_port();
                     let fullname = info.get_fullname().to_string();
-                    let is_paired = _fingerprints.iter().any(|fp| fp.starts_with(&fingerprint));
 
                     fullname_map.insert(fullname, (host.clone(), port));
 
@@ -48,7 +46,8 @@ pub fn start_mdns_browser(app: &AppHandle, saved_fingerprints: Vec<String>) -> R
                         host,
                         port,
                         cert_fingerprint_prefix: fingerprint,
-                        is_paired,
+                        // Filled in per request by `list_discovered_servers`.
+                        is_paired: false,
                     };
 
                     let state = app_handle.state::<AppState>();

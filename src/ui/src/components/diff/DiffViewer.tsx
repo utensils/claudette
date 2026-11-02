@@ -154,8 +154,19 @@ export function DiffViewer() {
     const version = ++loadVersionRef.current;
     setDiffLoading(true);
     const load = diffSelectedCommitHash
-      ? loadCommitFileDiff(ws.worktree_path, diffSelectedCommitHash, diffSelectedFile)
-      : loadFileDiff(ws.worktree_path, diffMergeBase!, diffSelectedFile, diffSelectedLayer ?? undefined);
+      ? loadCommitFileDiff(
+          ws.worktree_path,
+          diffSelectedCommitHash,
+          diffSelectedFile,
+          ws.id,
+        )
+      : loadFileDiff(
+          ws.worktree_path,
+          diffMergeBase!,
+          diffSelectedFile,
+          diffSelectedLayer ?? undefined,
+          ws.id,
+        );
     load
       .then((content) => {
         if (version !== loadVersionRef.current) return;
@@ -172,6 +183,7 @@ export function DiffViewer() {
     diffSelectedLayer,
     diffSelectedCommitHash,
     ws?.worktree_path,
+    ws?.id,
     diffMergeBase,
     setDiffContent,
     setDiffLoading,

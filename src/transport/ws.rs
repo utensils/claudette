@@ -1,31 +1,65 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::{ServerEvent, Transport};
 
+/// Deadlines that keep a silently broken link from looking connected.
+#[derive(Debug, Clone, Copy)]
+pub struct Timeouts {
+    /// Limit on the TCP + TLS + WebSocket handshake.
+    pub connect: Duration,
+    /// Backstop on waiting for a response from a server that is alive (it
+    /// answers pings) but never replies. Generous because some requests
+    /// legitimately run long (`create_workspace` runs the setup script); a
+    /// dead link is caught by `liveness` instead. On expiry the request's
+    /// outcome is unknown, so callers get an error saying so and nothing is
+    /// retried automatically.
+    pub request: Duration,
+    /// How often the connection pings the server.
+    pub heartbeat: Duration,
+    /// A connection that has received nothing (not even a pong) for this
+    /// long is treated as dead, so sleep or a network change can't leave
+    /// it "connected" with requests hanging.
+    pub liveness: Duration,
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            connect: Duration::from_secs(15),
+            request: Duration::from_secs(10 * 60),
+            heartbeat: Duration::from_secs(15),
+            liveness: Duration::from_secs(45),
+        }
+    }
+}
+
 /// WebSocket transport connecting to a remote claudette-server over WSS.
 pub struct WebSocketTransport {
-    writer: Arc<
-        Mutex<
-            futures_util::stream::SplitSink<
-                tokio_tungstenite::WebSocketStream<
-                    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-                >,
-                Message,
-            >,
-        >,
-    >,
+    writer: Arc<Writer>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
     next_id: AtomicU64,
+    request_timeout: Duration,
     event_tx: broadcast::Sender<ServerEvent>,
     connected: Arc<AtomicBool>,
+    /// Flips to `true` once the reader task observes the socket closing.
+    /// Lets owners react to a dropped connection without polling.
+    closed_rx: watch::Receiver<bool>,
     _reader_task: tokio::task::JoinHandle<()>,
+    heartbeat_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for WebSocketTransport {
+    fn drop(&mut self) {
+        self.heartbeat_task.abort();
+    }
 }
 
 /// Certificate fingerprint (SHA-256 hex) obtained during connection.
@@ -44,6 +78,16 @@ impl WebSocketTransport {
         port: u16,
         expected_fingerprint: Option<&str>,
     ) -> Result<ConnectionResult, String> {
+        Self::connect_with(host, port, expected_fingerprint, Timeouts::default()).await
+    }
+
+    /// [`Self::connect`] with explicit [`Timeouts`].
+    pub async fn connect_with(
+        host: &str,
+        port: u16,
+        expected_fingerprint: Option<&str>,
+        timeouts: Timeouts,
+    ) -> Result<ConnectionResult, String> {
         let url = format!("wss://{host}:{port}");
 
         // Shared slot to capture the cert fingerprint from the TLS verifier callback.
@@ -54,17 +98,20 @@ impl WebSocketTransport {
         // We do our own fingerprint verification (TOFU).
         let tls_config = rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(FingerprintCapturingVerifier {
-                fingerprint: Arc::clone(&fingerprint_slot),
-            }))
+            .with_custom_certificate_verifier(Arc::new(FingerprintCapturingVerifier::new(
+                Arc::clone(&fingerprint_slot),
+            )))
             .with_no_client_auth();
 
         let connector = tokio_tungstenite::Connector::Rustls(Arc::new(tls_config));
 
-        let (ws_stream, _response) =
-            tokio_tungstenite::connect_async_tls_with_config(&url, None, false, Some(connector))
-                .await
-                .map_err(|e| format!("WebSocket connection failed: {e}"))?;
+        let (ws_stream, _response) = tokio::time::timeout(
+            timeouts.connect,
+            tokio_tungstenite::connect_async_tls_with_config(&url, None, false, Some(connector)),
+        )
+        .await
+        .map_err(|_| format!("WebSocket connection failed: timed out connecting to {url}"))?
+        .map_err(|e| format!("WebSocket connection failed: {e}"))?;
 
         // Read the fingerprint captured during the TLS handshake.
         let cert_fingerprint = fingerprint_slot
@@ -89,6 +136,7 @@ impl WebSocketTransport {
             Arc::new(Mutex::new(HashMap::new()));
         let (event_tx, _) = broadcast::channel(256);
         let connected = Arc::new(AtomicBool::new(true));
+        let (closed_tx, closed_rx) = watch::channel(false);
 
         // Spawn reader task.
         let pending_clone = Arc::clone(&pending);
@@ -96,7 +144,22 @@ impl WebSocketTransport {
         let connected_clone = Arc::clone(&connected);
         let reader_task = tokio::spawn(async move {
             let mut read = read;
-            while let Some(msg_result) = read.next().await {
+            let mut last_heard = tokio::time::Instant::now();
+            loop {
+                let msg_result = tokio::select! {
+                    msg = read.next() => match msg {
+                        Some(msg) => msg,
+                        None => break,
+                    },
+                    _ = tokio::time::sleep_until(last_heard + timeouts.liveness) => {
+                        tracing::warn!(
+                            target: "claudette::transport",
+                            "no traffic from server within the liveness timeout; closing"
+                        );
+                        break;
+                    }
+                };
+                last_heard = tokio::time::Instant::now();
                 match msg_result {
                     Ok(Message::Text(text)) => {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -116,10 +179,8 @@ impl WebSocketTransport {
                             }
                         }
                     }
-                    Ok(Message::Ping(data)) => {
-                        // Respond with pong — handled by tungstenite automatically.
-                        let _ = data;
-                    }
+                    // Pings are answered by tungstenite; pongs only count
+                    // as traffic (above).
                     Ok(Message::Close(_)) => break,
                     Err(_) => break,
                     _ => {}
@@ -131,19 +192,34 @@ impl WebSocketTransport {
             let mut pending = pending_clone.lock().await;
             for (_, tx) in pending.drain() {
                 let _ = tx.send(serde_json::json!({
-                    "error": {"code": -3, "message": "Connection closed"}
+                    "error": {
+                        "code": -3,
+                        "message": "Connection closed before the server responded; \
+                                    the request may still have completed"
+                    }
                 }));
             }
+            drop(pending);
+            let _ = closed_tx.send(true);
         });
+
+        let heartbeat_task = tokio::spawn(heartbeat(
+            Arc::clone(&writer),
+            Arc::clone(&connected),
+            timeouts.heartbeat,
+        ));
 
         Ok(ConnectionResult {
             transport: WebSocketTransport {
                 writer,
                 pending,
                 next_id: AtomicU64::new(1),
+                request_timeout: timeouts.request,
                 event_tx,
                 connected,
+                closed_rx,
                 _reader_task: reader_task,
+                heartbeat_task,
             },
             cert_fingerprint,
         })
@@ -220,6 +296,37 @@ impl WebSocketTransport {
     }
 }
 
+type Writer = Mutex<
+    futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        Message,
+    >,
+>;
+
+/// Ping the server every `period` so the reader hears back (a pong) at
+/// least that often while the link is alive.
+async fn heartbeat(writer: Arc<Writer>, connected: Arc<AtomicBool>, period: Duration) {
+    let mut interval = tokio::time::interval(period);
+    interval.tick().await;
+    loop {
+        interval.tick().await;
+        if !connected.load(Ordering::Relaxed) {
+            break;
+        }
+        if writer
+            .lock()
+            .await
+            .send(Message::Ping(Vec::new().into()))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
 pub struct AuthResult {
     pub session_token: Option<String>,
     pub server_name: String,
@@ -237,19 +344,36 @@ impl Transport for WebSocketTransport {
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
+            // Checked under the `pending` lock: the reader task drains
+            // `pending` under the same lock after clearing `connected`, so a
+            // request inserted here is either drained or rejected — never
+            // parked forever on a dead socket.
+            if !self.connected.load(Ordering::Relaxed) {
+                return Err("Connection closed".to_string());
+            }
             pending.insert(id, tx);
         }
 
         let text = serde_json::to_string(&req).map_err(|e| e.to_string())?;
         {
             let mut writer = self.writer.lock().await;
-            writer
-                .send(Message::Text(text.into()))
-                .await
-                .map_err(|e| format!("Failed to send: {e}"))?;
+            if let Err(e) = writer.send(Message::Text(text.into())).await {
+                self.pending.lock().await.remove(&id);
+                return Err(format!("Failed to send: {e}"));
+            }
         }
 
-        rx.await.map_err(|_| "Response channel closed".to_string())
+        match tokio::time::timeout(self.request_timeout, rx).await {
+            Ok(response) => response.map_err(|_| "Response channel closed".to_string()),
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                Err(format!(
+                    "No response from the server within {}s; it may still have \
+                     completed the request",
+                    self.request_timeout.as_secs()
+                ))
+            }
+        }
     }
 
     fn event_stream(&self) -> broadcast::Receiver<ServerEvent> {
@@ -269,13 +393,35 @@ impl Transport for WebSocketTransport {
     fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
     }
+
+    fn closed(&self) -> watch::Receiver<bool> {
+        self.closed_rx.clone()
+    }
 }
 
-/// TLS certificate verifier that accepts all certificates but captures the
-/// server's certificate fingerprint (SHA-256) for TOFU verification.
+/// TLS certificate verifier that accepts any certificate (servers are
+/// self-signed) but captures its SHA-256 fingerprint for TOFU pinning.
+///
+/// Handshake signatures are still verified against the presented
+/// certificate's public key. Without that, a peer could present a copy of
+/// the pinned certificate while holding a different private key and the
+/// fingerprint check would pass.
 #[derive(Debug)]
 struct FingerprintCapturingVerifier {
     fingerprint: Arc<std::sync::Mutex<Option<String>>>,
+    /// Explicit rather than `CryptoProvider::get_default()`: clients never
+    /// install a process default (only the embedded server does).
+    algorithms: rustls::crypto::WebPkiSupportedAlgorithms,
+}
+
+impl FingerprintCapturingVerifier {
+    fn new(fingerprint: Arc<std::sync::Mutex<Option<String>>>) -> Self {
+        Self {
+            fingerprint,
+            algorithms: rustls::crypto::aws_lc_rs::default_provider()
+                .signature_verification_algorithms,
+        }
+    }
 }
 
 impl rustls::client::danger::ServerCertVerifier for FingerprintCapturingVerifier {
@@ -298,35 +444,23 @@ impl rustls::client::danger::ServerCertVerifier for FingerprintCapturingVerifier
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::RSA_PSS_SHA384,
-            rustls::SignatureScheme::RSA_PSS_SHA512,
-            rustls::SignatureScheme::ED25519,
-            rustls::SignatureScheme::ED448,
-        ]
+        self.algorithms.supported_schemes()
     }
 }

@@ -84,5 +84,12 @@
   "no_repos": "Noch keine lokalen Repositories — füge eins über die Toolbar unten hinzu.",
   "no_workspaces": "Noch keine Workspaces.",
   "no_workspaces_repo_filter": "Keine Workspaces passen zu diesem Repo-Filter.",
-  "nothing_to_show": "Nichts anzuzeigen."
+  "nothing_to_show": "Nichts anzuzeigen.",
+  "remote_connection_lost": "Verbindung zu {{name}} verloren",
+  "remote_reconnected": "Wieder mit {{name}} verbunden",
+  "remote_certificate_changed": "{{name}} hat ein neues Zertifikat – mit dem Token erneut koppeln",
+  "remote_action_failed": "Remote-Aktion fehlgeschlagen: {{error}}",
+  "remote_needs_repair": "{{name}} akzeptiert dieses Gerät nicht mehr – mit dem Token erneut koppeln",
+  "remote_cancel_reconnect": "Neu verbinden abbrechen",
+  "remote_revoke_failed": "{{name}} entfernt, aber der Zugriff dort konnte nicht widerrufen werden ({{error}}). Nutze dort „{{reset}}“, um ihn zu widerrufen."
 }

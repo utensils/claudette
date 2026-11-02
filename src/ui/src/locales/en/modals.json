@@ -3,7 +3,6 @@
   "delete_workspace_warning": "Are you sure you want to delete <strong>{{name}}</strong>? The branch and any unmerged commits will be permanently deleted.",
   "delete_workspace_deleting": "Deleting...",
   "delete_workspace_confirm": "Delete",
-
   "add_repo_title": "Add repository",
   "add_repo_tab_open": "Open existing",
   "add_repo_tab_create": "Create new",
@@ -17,33 +16,28 @@
   "add_repo_create_name_placeholder": "my-project",
   "add_repo_creating": "Creating...",
   "add_repo_create_confirm": "Create",
-
   "add_remote_title": "Add remote server",
   "add_remote_conn_label": "Connection string",
   "add_remote_conn_placeholder": "claudette://hostname:7683/pairing-token",
   "add_remote_conn_hint": "Paste the connection string shown by claudette-server on the remote machine.",
   "add_remote_connecting": "Connecting...",
   "add_remote_confirm": "Connect",
-
   "rollback_title": "Roll back conversation",
   "rollback_clear_all": "Clear the entire conversation and start fresh?",
   "rollback_to_before": "Roll back to before this message? All messages after this point will be removed.",
   "rollback_restore_files": "Also restore files to this checkpoint",
   "rollback_rolling_back": "Rolling back...",
   "rollback_confirm": "Roll Back",
-
   "nightly_title": "Switch to nightly channel?",
   "nightly_warning": "Nightly builds are untested pre-releases built from the latest <strong>main</strong> branch. They may contain bugs or break features. You can switch back to Stable at any time.",
   "nightly_switching": "Switching...",
   "nightly_confirm": "Switch to Nightly",
-
   "relink_title": "Re-link repository",
   "relink_warning": "Path for <strong>{{name}}</strong> is no longer valid. Provide the new location.",
   "relink_new_path_label": "New path",
   "relink_new_path_placeholder": "/new/path/to/repository",
   "relink_relinking": "Re-linking...",
   "relink_confirm": "Re-link",
-
   "remove_repo_title": "Remove repository",
   "remove_repo_warning": "Are you sure you want to remove <strong>{{name}}</strong>? This will not delete the repository from disk, only unregister it.",
   "remove_repo_will_destroy_pre": "Will permanently destroy:",
@@ -53,16 +47,14 @@
   "remove_repo_workspaces": "workspaces",
   "remove_repo_removing": "Removing...",
   "remove_repo_confirm": "Remove",
-
   "share_title": "Share this machine",
   "share_conn_label": "Connection string",
-  "share_conn_hint": "Share this string with others so they can connect to your workspaces from their Claudette app.",
+  "share_conn_hint": "Paste this into Claudette on your other devices to work in this machine's workspaces. Anyone with it can run agents here under your account — share it only with your own devices.",
   "share_qr_label": "Pair with iPhone",
   "share_qr_hint": "Scan this QR code in the Claudette iOS app to pair your phone with this machine. The encoded value is the same connection string above.",
   "share_qr_alt": "QR code encoding the connection string",
   "share_stop": "Stop sharing",
   "share_done": "Done",
-
   "setup_script_title": "Review setup script",
   "setup_script_warning": "This workspace has a setup script from <strong>{{source}}</strong> that will be executed. Please review it before proceeding.",
   "setup_script_source_repo_settings": "repo settings",
@@ -71,7 +63,6 @@
   "setup_script_skip": "Skip",
   "setup_script_running": "Running...",
   "setup_script_confirm": "Run Script",
-
   "archive_script_title": "Review archive script",
   "archive_script_warning": "This workspace has an archive script from <strong>{{source}}</strong> that will be executed before the worktree is removed. Please review it before proceeding.",
   "archive_script_label": "Script",
@@ -79,7 +70,6 @@
   "archive_script_skip": "Archive without running",
   "archive_script_running": "Running...",
   "archive_script_confirm": "Run & Archive",
-
   "import_worktrees_title": "Import worktrees",
   "import_worktrees_scanning": "Scanning for existing worktrees...",
   "import_worktrees_none_found": "No existing worktrees found for this repository.",
@@ -92,7 +82,6 @@
   "import_worktrees_delete_confirm": "Permanently delete this worktree and all its files?\n\n{{path}}",
   "import_worktrees_delete_confirm_button": "Delete from disk",
   "import_worktrees_deleting": "Deleting...",
-
   "mcp_servers_title": "MCP servers",
   "mcp_servers_detecting": "Detecting MCP servers...",
   "mcp_servers_none_found": "No non-portable MCP servers detected for this repository.",
@@ -100,13 +89,11 @@
   "mcp_servers_detected_desc": "These MCP servers are configured for this project but won't be automatically available in workspaces. Select which to include:",
   "mcp_servers_saving": "Saving...",
   "mcp_servers_confirm": "Save Selections",
-
   "missing_cli_title": "{{name}} not installed",
   "missing_cli_platform_pre": "Detected platform:",
   "missing_cli_no_guidance": "No installation guidance is available for this tool — please consult its documentation.",
   "missing_cli_copy": "Copy",
   "missing_cli_copied": "Copied",
-
   "env_trust_title": "Environment trust needed",
   "env_trust_intro": "One or more env-provider plugins need your permission before they can run for this project. Until you decide, the agent will spawn without their tools and variables.",
   "env_trust_repo_label": "Project",
@@ -129,7 +116,6 @@
   "env_trust_details_hide": "Hide raw error",
   "env_trust_cancel": "Decide later",
   "env_trust_done": "Close",
-
   "bulk_cleanup_title": "Clean up archived workspaces in {{repo}}",
   "bulk_cleanup_title_all": "Clean up archived workspaces across all repositories",
   "bulk_cleanup_title_fallback_repo": "this project",
@@ -163,5 +149,12 @@
   "bulk_cleanup_row_deleted": "Deleted",
   "bulk_cleanup_row_failed": "Failed",
   "bulk_cleanup_row_cancelled": "Skipped",
-  "bulk_cleanup_pending_archive": "Still archiving — will be selectable in a moment"
+  "bulk_cleanup_pending_archive": "Still archiving — will be selectable in a moment",
+  "pair_remote_title": "Pair with {{name}}",
+  "pair_remote_token_label": "Pairing token",
+  "pair_remote_hint": "The token is the last part of the connection string shown by Share this machine (or claudette-server) on {{host}}.",
+  "pair_remote_confirm": "Pair",
+  "share_reset": "Reset pairing",
+  "share_reset_hint": "Reset pairing issues a new connection string and disconnects every paired device; each must pair again.",
+  "share_reset_done": "Pairing reset — paired devices were disconnected"
 }

@@ -3,8 +3,7 @@
 //! Mirrors the pattern in `interactive_controls.rs`: build a real
 //! [`ServerState`] over a tempdir, set up a real on-disk git repo,
 //! drive the workspace through `ops::workspace::{create, archive}`, then
-//! exercise `handle_restore_workspace` directly so we don't have to
-//! stand up a TLS WebSocket Writer.
+//! exercise `handle_restore_workspace` directly.
 
 use std::path::Path;
 use std::sync::Arc;

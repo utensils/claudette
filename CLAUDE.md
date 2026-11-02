@@ -92,7 +92,7 @@ Five crates in a Cargo workspace:
 |---|---|---|
 | `claudette` | `src/` (workspace root) | Core library — models, db, git, diff, agent logic, WSS transport. No UI or Tauri dependencies. |
 | `claudette-tauri` | `src-tauri/` | Tauri binary (`claudette-app`). Thin `#[tauri::command]` wrappers that call into `claudette`. |
-| `claudette-server` | `src-server/` | WebSocket server for remote access. Also embeddable in the Tauri binary. Uses `PersistentSession` so interactive controls (AskUserQuestion / ExitPlanMode) work over WSS. |
+| `claudette-server` | `src-server/` | WebSocket server for remote access: TLS, pairing, and the WSS transport behind an `RpcHost` trait. The standalone binary serves its own handlers (`StandaloneHost`, using `PersistentSession` so AskUserQuestion / ExitPlanMode work over WSS); the desktop's Share this machine runs it in-process with the app's command core as the host. |
 | `claudette-cli` | `src-cli/` | Command-line client (`claudette` binary) that drives the running GUI over a local IPC socket. |
 | `claudette-mobile` | `src-mobile/` | Tauri 2 iOS / Android client — thin WSS remote-control app. Pairs with a running desktop or headless server; doesn't run agents locally. See `src-mobile/README.md` for the `cargo tauri ios init` setup. |
 
@@ -154,8 +154,12 @@ src-tauri/              — Tauri binary crate
   src/state.rs          — managed AppState (db_path, agents, PTYs)
   src/pty.rs            — PTY management via portable-pty
   src/tray.rs           — system tray: icon/menu/tooltip, notifications
-  src/remote.rs         — embedded remote server wiring
-  src/mdns.rs           — mDNS advertisement for remote discovery
+  src/remote.rs         — client side of paired servers: connections, event forwarding,
+                          connection-lost detection
+  src/remote_host.rs    — "Share this machine": in-process RpcHost over the app's command core
+                          (reuses `ipc::dispatch_method`), mirrors local events to paired clients
+  src/remote_pty.rs     — local alias IDs for terminals running on a paired server
+  src/mdns.rs           — mDNS browser for Nearby servers (advertising lives in src-server)
   src/pty_tracker.rs    — PTY foreground-process-group polling for the sidebar command indicator (Unix-only; replaced OSC 133)
 src-server/             — Standalone + embeddable remote server
 plugins/                — bundled Lua plugins (compiled in via include_str!)

@@ -17,6 +17,9 @@ mod platform_speech;
 mod pty;
 mod pty_tracker;
 mod remote;
+#[cfg(feature = "server")]
+mod remote_host;
+mod remote_pty;
 mod state;
 mod subprocess_cleanup;
 mod tail_backoff;
@@ -569,15 +572,6 @@ fn main() {
         }
     };
 
-    // Load saved certificate fingerprints for mDNS pairing detection.
-    let saved_fingerprints: Vec<String> = Database::open(&db_path)
-        .ok()
-        .and_then(|db| db.list_remote_connections().ok())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|c| c.cert_fingerprint)
-        .collect();
-
     // Initialize plugin registry: seed bundled plugins, then discover.
     let plugin_dir = claudette::path::claudette_home().join("plugins");
     let _ = std::fs::create_dir_all(&plugin_dir);
@@ -776,7 +770,7 @@ fn main() {
             boot_probation::start_monitor(app.handle().clone(), boot_state, data_dir.clone());
 
             // Start mDNS browser to discover nearby claudette-server instances.
-            if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
+            if let Err(e) = mdns::start_mdns_browser(app.handle()) {
                 tracing::warn!(target: "claudette::mdns", error = %e, "failed to start browser");
             }
 
@@ -1373,6 +1367,8 @@ fn main() {
             commands::remote::list_discovered_servers,
             commands::remote::add_remote_connection,
             commands::remote::send_remote_command,
+            commands::remote::list_active_remote_connections,
+            commands::remote::set_remote_auto_connect,
             // Usage
             commands::usage::get_claude_code_usage,
             commands::usage::get_session_usage,
@@ -1442,6 +1438,7 @@ fn main() {
             // Local server
             commands::remote::start_local_server,
             commands::remote::stop_local_server,
+            commands::remote::reset_local_server_pairing,
             commands::remote::get_local_server_status,
             // Debug (dev builds only — cfg-gated in commands/debug.rs)
             #[cfg(debug_assertions)]
@@ -1591,9 +1588,8 @@ fn shutdown_runtime_handler(_app: &tauri::AppHandle, _event: tauri::RunEvent) {
 
             // try_write avoids blocking if another thread holds the lock
             // during shutdown — in that case Drop will still fire.
-            // Dropping `srv` triggers LocalServerState::drop which
-            // calls kill_process_sync(pid). Taking it out of the
-            // Option ensures cleanup runs exactly once.
+            // Dropping `srv` triggers LocalServerState::drop, which stops
+            // the in-process share server and its mDNS advertisement.
             if let Ok(mut guard) = app_state.local_server.try_write()
                 && let Some(srv) = guard.take()
             {

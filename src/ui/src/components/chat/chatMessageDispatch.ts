@@ -77,8 +77,10 @@ export async function dispatchChatMessage({
     if (workspace.remote_connection_id) {
       await sendRemoteCommand(workspace.remote_connection_id, "send_chat_message", {
         chat_session_id: sessionId,
+        message_id: messageId,
         content: trimmed,
         mentioned_files: mentionedFiles,
+        attachments: attachments ?? null,
         permission_level: permissionLevel,
         model: selectedModel,
         backend_id: selectedProvider,

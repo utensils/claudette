@@ -5,6 +5,7 @@ import type {
   DiffLayer,
   StagedDiffFiles,
 } from "../../types/diff";
+import { viaWorkspace } from "./remoteRouting";
 
 export interface DiffFilesResult {
   files: DiffFile[];
@@ -14,29 +15,67 @@ export interface DiffFilesResult {
 }
 
 export function loadDiffFiles(workspaceId: string): Promise<DiffFilesResult> {
-  return invoke("load_diff_files", { workspaceId });
+  return viaWorkspace(workspaceId, "load_diff_files", {}, () =>
+    invoke("load_diff_files", { workspaceId }),
+  );
 }
 
+/**
+ * Load one file's diff. Pass `workspaceId` so a remote workspace's diff is
+ * read on its own machine (the worktree path is a path over there).
+ */
 export function loadFileDiff(
   worktreePath: string,
   mergeBase: string,
   filePath: string,
   diffLayer?: DiffLayer,
+  workspaceId?: string,
 ): Promise<FileDiff> {
-  return invoke("load_file_diff", {
-    worktreePath,
-    mergeBase,
-    filePath,
-    diffLayer: diffLayer ?? null,
-  });
+  const local = () =>
+    invoke<FileDiff>("load_file_diff", {
+      worktreePath,
+      mergeBase,
+      filePath,
+      diffLayer: diffLayer ?? null,
+    });
+  if (!workspaceId) return local();
+  return viaWorkspace(
+    workspaceId,
+    "load_file_diff",
+    {
+      worktree_path: worktreePath,
+      merge_base: mergeBase,
+      file_path: filePath,
+      diff_layer: diffLayer ?? null,
+    },
+    local,
+  );
 }
 
+/** One file's diff within a commit; `workspaceId` routes it like `loadFileDiff`. */
 export function loadCommitFileDiff(
   worktreePath: string,
   commitHash: string,
   filePath: string,
+  workspaceId?: string,
 ): Promise<FileDiff> {
-  return invoke("load_commit_file_diff", { worktreePath, commitHash, filePath });
+  const local = () =>
+    invoke<FileDiff>("load_commit_file_diff", {
+      worktreePath,
+      commitHash,
+      filePath,
+    });
+  if (!workspaceId) return local();
+  return viaWorkspace(
+    workspaceId,
+    "load_commit_file_diff",
+    {
+      worktree_path: worktreePath,
+      commit_hash: commitHash,
+      file_path: filePath,
+    },
+    local,
+  );
 }
 
 export function revertFile(

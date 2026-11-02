@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod handler;
+pub mod host;
 pub mod mdns;
 pub mod snapshot;
 pub mod tls;
@@ -11,6 +12,11 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use crate::auth::ServerConfig;
+pub use crate::host::{RpcHost, StandaloneHost};
+
+/// Revocation notices buffered per connection. A connection that lags
+/// re-checks its token against the config instead.
+const REVOCATION_CHANNEL_CAPACITY: usize = 64;
 
 /// Default WebSocket port for claudette-server.
 pub const DEFAULT_PORT: u16 = 7683;
@@ -22,6 +28,8 @@ pub struct ServerOptions {
     pub name: Option<String>,
     pub no_mdns: bool,
     pub config_path: Option<PathBuf>,
+    /// Where `cert.pem` / `key.pem` live. Defaults to [`config_dir`].
+    pub tls_dir: Option<PathBuf>,
 }
 
 impl Default for ServerOptions {
@@ -32,6 +40,7 @@ impl Default for ServerOptions {
             name: None,
             no_mdns: false,
             config_path: None,
+            tls_dir: None,
         }
     }
 }
@@ -50,12 +59,47 @@ pub fn db_path() -> PathBuf {
     claudette::path::data_dir().join("claudette.db")
 }
 
-/// Run the claudette-server with the given options. Blocks indefinitely,
-/// accepting WebSocket connections over TLS.
-///
-/// Prints the connection string to stdout before entering the accept loop
-/// (the Tauri parent process reads this to extract the connection string).
-pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error>> {
+/// A running server's public details plus the means to stop it.
+pub struct ServerHandle {
+    /// `claudette://host:port/pairing-token` for pairing new clients.
+    pub connection_string: String,
+    /// SHA-256 hex of the TLS certificate (what clients pin).
+    pub cert_fingerprint: String,
+    pub server_name: String,
+    pub bind: String,
+    pub port: u16,
+    shutdown: tokio::sync::watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ServerHandle {
+    /// Stop accepting connections, close every established one, and drop
+    /// the mDNS advertisement. Idempotent.
+    pub fn stop(&mut self) {
+        let _ = self.shutdown.send(true);
+    }
+
+    /// [`Self::stop`], then wait until the listener is closed and every
+    /// connection task has ended. After this returns the port can be bound
+    /// again and no connection can still save the pairing config.
+    pub async fn stop_and_wait(&mut self) {
+        self.stop();
+        if !self.task.is_finished() {
+            let _ = (&mut self.task).await;
+        }
+    }
+
+    /// Wait for the accept loop to end (it only ends on [`Self::stop`] or a
+    /// listener error).
+    pub async fn wait(self) {
+        let _ = self.task.await;
+    }
+}
+
+/// Bind the WSS listener, start mDNS, and serve `host` in a background task.
+/// Returns once the listener is bound, so a returned handle is always
+/// accepting connections.
+pub async fn start(options: ServerOptions, host: Arc<dyn RpcHost>) -> Result<ServerHandle, String> {
     // Install the default crypto provider for rustls. When both `aws-lc-rs` and
     // `ring` features are active (e.g. embedded in the Tauri binary where
     // tauri-plugin-updater pulls in ring), rustls cannot auto-detect and panics.
@@ -64,17 +108,18 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
     let config_path = options.config_path.unwrap_or_else(default_config_path);
 
     // Load or create config, applying overrides.
-    let mut config = ServerConfig::load_or_create(&config_path)?;
+    let mut config = ServerConfig::load_or_create(&config_path).map_err(|e| e.to_string())?;
     config.server.port = options.port;
     config.server.bind = options.bind.clone();
     if let Some(ref name) = options.name {
         config.server.name = name.clone();
     }
-    config.save(&config_path)?;
+    config.save(&config_path).map_err(|e| e.to_string())?;
 
     // Load or generate TLS certificate.
-    let tls_config = tls::load_or_generate_tls(&config_dir())?;
-    let fingerprint = tls::cert_fingerprint(&config_dir())?;
+    let tls_dir = options.tls_dir.clone().unwrap_or_else(config_dir);
+    let tls_config = tls::load_or_generate_tls(&tls_dir).map_err(|e| e.to_string())?;
+    let fingerprint = tls::cert_fingerprint(&tls_dir).map_err(|e| e.to_string())?;
 
     // Wrap config in shared state so all connections see session mutations.
     let pairing_token = config.auth.pairing_token.clone();
@@ -82,9 +127,110 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
     let config = Arc::new(tokio::sync::Mutex::new(config));
     let config_path = Arc::new(config_path);
 
-    // Set up database.
+    let addr: std::net::SocketAddr = format!("{}:{}", options.bind, options.port)
+        .parse()
+        .map_err(|e| format!("invalid bind address: {e}"))?;
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|e| format!("failed to bind {addr}: {e}"))?;
+    // Report the bound port, which differs from the requested one when the
+    // caller asked for port 0.
+    let port = listener
+        .local_addr()
+        .map(|a| a.port())
+        .unwrap_or(options.port);
+    let acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
+
+    let mdns = if options.no_mdns {
+        None
+    } else {
+        let short_fp = &fingerprint[..fingerprint.len().min(16)];
+        match mdns::advertise(&server_name, port, short_fp) {
+            Ok(daemon) => Some(daemon),
+            Err(e) => {
+                // Pairing by connection string still works without mDNS.
+                tracing::warn!(target: "claudette::ws", error = %e, "mDNS advertisement failed");
+                None
+            }
+        }
+    };
+
+    let hostname = gethostname::gethostname().to_string_lossy().to_string();
+    let connection_string = format!("claudette://{}:{}/{}", hostname, port, pairing_token);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let ctx = ws::ConnectionContext {
+        host,
+        config,
+        config_path,
+        revocations: tokio::sync::broadcast::channel(REVOCATION_CHANNEL_CAPACITY).0,
+        shutdown: shutdown_rx.clone(),
+    };
+    let mut accept_shutdown = shutdown_rx;
+    let task = tokio::spawn(async move {
+        // Owned here so stopping waits for every connection, including ones
+        // still handshaking or authenticating, not just the listener.
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
+                // Reap finished connections so the set doesn't grow forever.
+                Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+                _ = async { accept_shutdown.wait_for(|stop| *stop).await.is_ok() } => break,
+            };
+            let (stream, peer_addr) = match accepted {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::warn!(target: "claudette::ws", error = %e, "accept failed");
+                    continue;
+                }
+            };
+            connections.spawn(ws::handle_connection(
+                ctx.clone(),
+                acceptor.clone(),
+                stream,
+                peer_addr,
+            ));
+        }
+        drop(listener);
+        while connections.join_next().await.is_some() {}
+        if let Some(daemon) = mdns {
+            let _ = daemon.shutdown();
+        }
+        tracing::info!(target: "claudette::ws", "server stopped");
+    });
+
+    Ok(ServerHandle {
+        connection_string,
+        cert_fingerprint: fingerprint,
+        server_name,
+        bind: options.bind,
+        port,
+        shutdown: shutdown_tx,
+        task,
+    })
+}
+
+/// Build the standalone host: the server's own DB-backed state, plugin
+/// registry, and shell-env capture.
+pub fn standalone_host() -> Arc<StandaloneHost> {
     let db_path = db_path();
     let _ = claudette::db::Database::open(&db_path);
+
+    // Capture the user's interactive shell env so agents and terminals see
+    // the same PATH/toolchains they'd get from a terminal. The desktop app
+    // does this at launch; a headless server has to do it itself.
+    let shell_env_denylist: Vec<String> = claudette::db::Database::open(&db_path)
+        .ok()
+        .and_then(|db| db.get_app_setting("shell_env:denylist").ok().flatten())
+        .map(|s| {
+            s.lines()
+                .map(str::to_string)
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    claudette::env::prewarm_shell_env(shell_env_denylist);
 
     let worktree_base_dir = {
         let default = claudette::path::claudette_home().join("workspaces");
@@ -130,68 +276,45 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
         hydrate_plugin_registry_from_db(&plugins, &db);
     }
 
-    let state = Arc::new(ws::ServerState::new_with_plugins(
-        db_path,
-        worktree_base_dir,
-        plugins,
-    ));
+    Arc::new(StandaloneHost {
+        state: Arc::new(ws::ServerState::new_with_plugins(
+            db_path,
+            worktree_base_dir,
+            plugins,
+        )),
+    })
+}
 
-    // Bind TCP listener before printing the connection string so the parent
-    // process never sees `claudette://` unless we're actually listening.
-    let addr: std::net::SocketAddr = format!("{}:{}", options.bind, options.port).parse()?;
-    let listener = TcpListener::bind(addr).await?;
-    let acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
+/// Run the standalone claudette-server until the process is killed.
+///
+/// Prints the connection string to stdout once the listener is bound.
+pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let no_mdns = options.no_mdns;
+    let handle = start(options, standalone_host()).await?;
 
-    // Start mDNS advertisement.
-    if !options.no_mdns {
-        let short_fp = &fingerprint[..fingerprint.len().min(16)];
-        let _mdns = mdns::advertise(&server_name, options.port, short_fp)?;
+    if !no_mdns {
         println!(
             "mDNS: advertising as _claudette._tcp on port {}",
-            options.port
+            handle.port
         );
     }
-
-    let host = gethostname::gethostname().to_string_lossy().to_string();
     println!(
         "claudette-server v{} listening on wss://{}:{}",
         env!("CARGO_PKG_VERSION"),
-        options.bind,
-        options.port,
+        handle.bind,
+        handle.port,
     );
-    println!("Name: {server_name}");
+    println!("Name: {}", handle.server_name);
     println!();
     println!("Connection string (paste into Claudette):");
-    println!("  claudette://{}:{}/{}", host, options.port, pairing_token);
+    println!("  {}", handle.connection_string);
     println!();
-    println!("Certificate fingerprint: {fingerprint}");
+    println!("Certificate fingerprint: {}", handle.cert_fingerprint);
     println!();
     println!("Ready for connections.\n");
 
-    loop {
-        let (stream, peer_addr) = listener.accept().await?;
-        let acceptor = acceptor.clone();
-        let state = Arc::clone(&state);
-        let config = Arc::clone(&config);
-        let config_path = Arc::clone(&config_path);
-
-        tokio::spawn(async move {
-            match acceptor.accept(stream).await {
-                Ok(tls_stream) => {
-                    ws::handle_tls_connection(state, config, config_path, tls_stream, peer_addr)
-                        .await;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        target: "claudette::ws",
-                        peer = %peer_addr,
-                        error = %e,
-                        "TLS handshake failed"
-                    );
-                }
-            }
-        });
-    }
+    handle.wait().await;
+    Ok(())
 }
 
 fn hydrate_plugin_registry_from_db(

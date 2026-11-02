@@ -303,6 +303,137 @@ function isContentDeltaEvent(agentEvent: AgentStreamPayload["event"]): boolean {
   );
 }
 
+/** Payload of the `agent-permission-prompt` event. */
+export interface AgentPermissionPromptPayload {
+  workspace_id?: string;
+  chat_session_id: string;
+  tool_use_id: string;
+  tool_name: string;
+  input: unknown;
+}
+
+/**
+ * Show the approval card for a CLI `can_use_tool` request. Driven by the
+ * live `agent-permission-prompt` event, and by session snapshots that
+ * recover prompts raised while this window wasn't listening (a remote
+ * server before connecting, or events lost to a disconnect or lag).
+ * `cachedPlanFilePath` is the plan path last seen in the stream, if any.
+ */
+export function applyAgentPermissionPrompt(
+  payload: AgentPermissionPromptPayload,
+  cachedPlanFilePath: string | null = null,
+): void {
+  const {
+    setAgentApproval,
+    setAgentQuestion,
+    setPlanApproval,
+    updateChatSession,
+  } = useAppStore.getState();
+  const {
+    chat_session_id: sessionId,
+    tool_use_id: toolUseId,
+    tool_name: toolName,
+    input,
+  } = payload;
+  if (toolName === ASK_USER_QUESTION_TOOL) {
+    // The CLI guarantees `input` is the validated tool-input object —
+    // narrow before handing it to the parser.
+    if (input && typeof input === "object") {
+      try {
+        const questions = parseAskUserQuestion(input as Record<string, unknown>);
+        if (questions.length > 0) {
+          setAgentQuestion({ sessionId, toolUseId, questions });
+          // Keep the ChatSession row in sync so the tab icon + sidebar
+          // aggregate reflect the pending attention without a reload.
+          updateChatSession(sessionId, {
+            needs_attention: true,
+            attention_kind: "Ask",
+          });
+        }
+      } catch {
+        // Malformed input — ignore (CLI will eventually time out and we
+        // auto-deny on session cleanup).
+      }
+    }
+  } else if (toolName === "ExitPlanMode") {
+    const inputObj =
+      input && typeof input === "object"
+        ? (input as Record<string, unknown>)
+        : null;
+    const codexPlanContent =
+      typeof inputObj?.codexPlanContent === "string"
+        ? inputObj.codexPlanContent
+        : null;
+    const isCodexSyntheticPlan =
+      inputObj?.codexSyntheticPlan === true && codexPlanContent !== null;
+    // Claude's ExitPlanMode tool means the agent is leaving plan mode now.
+    // Codex's synthetic plan approval is client-side: keep plan mode on
+    // until the user chooses "Approve plan".
+    if (!isCodexSyntheticPlan) {
+      debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "agent-permission-prompt" });
+      void setPlanModeAndPersist(sessionId, false);
+    }
+    let allowedPrompts: Array<{ tool: string; prompt: string }> = [];
+    if (inputObj && "allowedPrompts" in inputObj) {
+      const ap = inputObj.allowedPrompts;
+      if (Array.isArray(ap)) {
+        allowedPrompts = ap as Array<{ tool: string; prompt: string }>;
+      }
+    }
+    // Reuse the same plan-file-path discovery the old content_block_stop
+    // path used: assistant text, then streaming text, then tool inputs/
+    // results, then the cached EnterPlanMode result path.
+    const planPathRe = /(\/[^\s)"`]+\/\.claude\/plans\/[^\s)"`]+\.md)/;
+    const messages = useAppStore.getState().chatMessages[sessionId] || [];
+    let planFilePath: string | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i].content.match(planPathRe);
+      if (m) { planFilePath = m[1]; break; }
+    }
+    if (!planFilePath) {
+      const streaming = useAppStore.getState().streamingContent[sessionId] || "";
+      const m = streaming.match(planPathRe);
+      if (m) planFilePath = m[1];
+    }
+    if (!planFilePath) {
+      const allActivities = useAppStore.getState().toolActivities[sessionId] || [];
+      for (const act of allActivities) {
+        const m = (act.inputJson + act.resultText).match(planPathRe);
+        if (m) { planFilePath = m[1]; break; }
+      }
+    }
+    if (!planFilePath) planFilePath = cachedPlanFilePath;
+    setPlanApproval({
+      sessionId,
+      toolUseId,
+      planFilePath,
+      allowedPrompts,
+      source: isCodexSyntheticPlan ? "codex" : "claude",
+      planContent: codexPlanContent,
+    });
+    updateChatSession(sessionId, {
+      needs_attention: true,
+      attention_kind: "Plan",
+    });
+  } else if (isCodexApprovalTool(toolName)) {
+    if (input && typeof input === "object") {
+      const approval = parseCodexApproval(
+        sessionId,
+        toolUseId,
+        toolName,
+        input as Record<string, unknown>,
+      );
+      if (approval) {
+        setAgentApproval(approval);
+        updateChatSession(sessionId, {
+          needs_attention: true,
+          attention_kind: "Ask",
+        });
+      }
+    }
+  }
+}
+
 function isCodexApprovalTool(toolName: string): boolean {
   return (
     toolName === CODEX_COMMAND_APPROVAL_TOOL ||
@@ -438,7 +569,6 @@ export function useAgentStream() {
   const updateChatSession = useAppStore((s) => s.updateChatSession);
   const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
-  const setAgentApproval = useAppStore((s) => s.setAgentApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
   const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
 
@@ -1199,123 +1329,16 @@ export function useAgentStream() {
     }>("agent-permission-prompt", (event) => {
       if (!active) return;
       deltaBuffer.flush();
-      const {
-        chat_session_id: sessionId,
-        tool_use_id: toolUseId,
-        tool_name: toolName,
-        input,
-      } = event.payload;
-      if (toolName === ASK_USER_QUESTION_TOOL) {
-        // The CLI guarantees `input` is the validated tool-input object —
-        // narrow before handing it to the parser.
-        if (input && typeof input === "object") {
-          try {
-            const questions = parseAskUserQuestion(input as Record<string, unknown>);
-            if (questions.length > 0) {
-              setAgentQuestion({ sessionId, toolUseId, questions });
-              // Keep the ChatSession row in sync so the tab icon + sidebar
-              // aggregate reflect the pending attention without a reload.
-              updateChatSession(sessionId, {
-                needs_attention: true,
-                attention_kind: "Ask",
-              });
-            }
-          } catch {
-            // Malformed input — ignore (CLI will eventually time out and we
-            // auto-deny on session cleanup).
-          }
-        }
-      } else if (toolName === "ExitPlanMode") {
-        const inputObj =
-          input && typeof input === "object"
-            ? (input as Record<string, unknown>)
-            : null;
-        const codexPlanContent =
-          typeof inputObj?.codexPlanContent === "string"
-            ? inputObj.codexPlanContent
-            : null;
-        const isCodexSyntheticPlan =
-          inputObj?.codexSyntheticPlan === true && codexPlanContent !== null;
-        // Claude's ExitPlanMode tool means the agent is leaving plan mode now.
-        // Codex's synthetic plan approval is client-side: keep plan mode on
-        // until the user chooses "Approve plan".
-        if (!isCodexSyntheticPlan) {
-          debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "agent-permission-prompt" });
-          void setPlanModeAndPersist(sessionId, false);
-        }
-        let allowedPrompts: Array<{ tool: string; prompt: string }> = [];
-        if (inputObj && "allowedPrompts" in inputObj) {
-          const ap = inputObj.allowedPrompts;
-          if (Array.isArray(ap)) {
-            allowedPrompts = ap as Array<{ tool: string; prompt: string }>;
-          }
-        }
-        // Reuse the same plan-file-path discovery the old content_block_stop
-        // path used: assistant text, then streaming text, then tool inputs/
-        // results, then the cached EnterPlanMode result path.
-        const planPathRe = /(\/[^\s)"`]+\/\.claude\/plans\/[^\s)"`]+\.md)/;
-        const messages = useAppStore.getState().chatMessages[sessionId] || [];
-        let planFilePath: string | null = null;
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const m = messages[i].content.match(planPathRe);
-          if (m) { planFilePath = m[1]; break; }
-        }
-        if (!planFilePath) {
-          const streaming = useAppStore.getState().streamingContent[sessionId] || "";
-          const m = streaming.match(planPathRe);
-          if (m) planFilePath = m[1];
-        }
-        if (!planFilePath) {
-          const allActivities = useAppStore.getState().toolActivities[sessionId] || [];
-          for (const act of allActivities) {
-            const m = (act.inputJson + act.resultText).match(planPathRe);
-            if (m) { planFilePath = m[1]; break; }
-          }
-        }
-        if (!planFilePath && planFilePathRef.current[sessionId]) {
-          planFilePath = planFilePathRef.current[sessionId];
-        }
-        setPlanApproval({
-          sessionId,
-          toolUseId,
-          planFilePath,
-          allowedPrompts,
-          source: isCodexSyntheticPlan ? "codex" : "claude",
-          planContent: codexPlanContent,
-        });
-        updateChatSession(sessionId, {
-          needs_attention: true,
-          attention_kind: "Plan",
-        });
-      } else if (isCodexApprovalTool(toolName)) {
-        if (input && typeof input === "object") {
-          const approval = parseCodexApproval(
-            sessionId,
-            toolUseId,
-            toolName,
-            input as Record<string, unknown>,
-          );
-          if (approval) {
-            setAgentApproval(approval);
-            updateChatSession(sessionId, {
-              needs_attention: true,
-              attention_kind: "Ask",
-            });
-          }
-        }
-      }
+      applyAgentPermissionPrompt(
+        event.payload,
+        planFilePathRef.current[event.payload.chat_session_id] ?? null,
+      );
     });
     return () => {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [
-    deltaBuffer,
-    setAgentApproval,
-    setAgentQuestion,
-    setPlanApproval,
-    updateChatSession,
-  ]);
+  }, [deltaBuffer]);
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);

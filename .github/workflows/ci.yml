@@ -158,7 +158,7 @@ jobs:
 
   frontend-smoke:
     name: Frontend Bundle Smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: frontend
     defaults:
       run:

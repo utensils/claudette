@@ -13,13 +13,14 @@ use claudette::env_provider::types::EnvMap;
 use claudette::plugin_runtime::PluginRegistry;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 use tokio_rustls::server::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::auth::ServerConfig;
 use crate::handler;
+use crate::host::RpcHost;
 
 /// Server-side application state — mirrors src-tauri's AppState but without Tauri dependencies.
 pub struct ServerState {
@@ -46,7 +47,16 @@ pub struct ServerState {
     /// attempted"; `Some(Ok(_))` / `Some(Err(_))` cache the result so
     /// repeated turns don't re-spawn `claude --help`.
     pub claude_flag_defs: RwLock<Option<Result<Vec<ClaudeFlagDef>, String>>>,
+    /// Server-pushed events (`{"event", "payload"}` envelopes). Every
+    /// authenticated connection subscribes, so activity started from one
+    /// client (desktop, phone) is visible on all of them.
+    pub events: broadcast::Sender<serde_json::Value>,
 }
+
+/// Capacity of [`ServerState::events`]. Agent streams are bursty; a
+/// connection that falls further behind than this skips events (logged)
+/// rather than stalling every other client.
+const EVENT_CHANNEL_CAPACITY: usize = 4096;
 
 pub struct AgentSessionState {
     /// The workspace this session belongs to.
@@ -78,10 +88,12 @@ pub struct AgentSessionState {
     /// `AgentSessionState::pending_permissions`.
     pub pending_permissions: HashMap<String, PendingPermission>,
     /// Queue of additional user messages submitted while a turn is in flight.
-    /// `steer_queued_chat_message` either appends here (turn active) or
-    /// writes directly to stdin (turn idle). Drained on `Result` /
-    /// `ProcessExited` events.
+    /// `steer_queued_chat_message` appends here; the head is dispatched as
+    /// the next turn when the current one ends (`Result` / `ProcessExited`).
     pub pending_message_queue: VecDeque<QueuedMessage>,
+    /// Spawn-time agent flags of `persistent_session` (see
+    /// `handler::spawn_signature`); a change restarts the CLI.
+    pub spawn_signature: String,
 }
 
 /// Snapshot of a `can_use_tool` request waiting for a client response.
@@ -97,6 +109,10 @@ pub struct PendingPermission {
 #[derive(Debug, Clone)]
 pub struct QueuedMessage {
     pub content: String,
+    /// Client's id for the message, so the persisted row matches its
+    /// optimistic copy.
+    pub message_id: Option<String>,
+    pub mentioned_files: Vec<String>,
 }
 
 pub struct PtyHandle {
@@ -119,6 +135,7 @@ impl ServerState {
             plugins: None,
             env_cache: Arc::new(EnvCache::new()),
             claude_flag_defs: RwLock::new(None),
+            events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
         }
     }
 
@@ -140,7 +157,14 @@ impl ServerState {
             plugins: Some(RwLock::new(plugins)),
             env_cache: Arc::new(EnvCache::new()),
             claude_flag_defs: RwLock::new(None),
+            events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
         }
+    }
+
+    /// Broadcast an `{"event", "payload"}` envelope to every connected
+    /// client. A send with no subscribers is not an error.
+    pub fn emit(&self, envelope: serde_json::Value) {
+        let _ = self.events.send(envelope);
     }
 
     pub fn next_pty_id(&self) -> u64 {
@@ -159,38 +183,137 @@ pub async fn send_message(writer: &Writer, value: &serde_json::Value) {
     let _ = w.send(Message::Text(text.into())).await;
 }
 
-/// Accept a TLS connection and upgrade it to WebSocket.
-pub async fn handle_tls_connection(
-    state: std::sync::Arc<ServerState>,
-    config: std::sync::Arc<tokio::sync::Mutex<ServerConfig>>,
-    config_path: std::sync::Arc<PathBuf>,
-    tls_stream: TlsStream<TcpStream>,
+async fn close_socket(writer: &Writer) {
+    let mut w = writer.lock().await;
+    let _ = w.send(Message::Close(None)).await;
+    let _ = w.close().await;
+}
+
+/// Record terminals a connection opens (`spawn_pty`) and closes
+/// (`close_pty`) so the rest can be closed when it disconnects.
+fn track_connection_ptys(
+    opened: &Mutex<std::collections::HashSet<u64>>,
+    method: &str,
+    closing_pty: Option<u64>,
+    result: &Result<serde_json::Value, String>,
+) {
+    let Ok(mut set) = opened.lock() else { return };
+    match (method, result) {
+        ("spawn_pty", Ok(value)) => {
+            if let Some(pty_id) = value.get("pty_id").and_then(|v| v.as_u64()) {
+                set.insert(pty_id);
+            }
+        }
+        ("close_pty", _) => {
+            if let Some(pty_id) = closing_pty {
+                set.remove(&pty_id);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Everything a connection task shares with the server that spawned it.
+#[derive(Clone)]
+pub struct ConnectionContext {
+    pub host: Arc<dyn RpcHost>,
+    pub config: Arc<tokio::sync::Mutex<ServerConfig>>,
+    pub config_path: Arc<PathBuf>,
+    /// Session tokens revoked on this server. Every connection listens so
+    /// one revocation ends all connections authenticated with that token.
+    pub revocations: broadcast::Sender<String>,
+    pub shutdown: tokio::sync::watch::Receiver<bool>,
+}
+
+/// How long a new connection gets to finish the TLS + WebSocket handshakes
+/// and authenticate before it is dropped.
+const AUTH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+const MAX_AUTH_ATTEMPTS: u32 = 3;
+
+type Reader = futures_util::stream::SplitStream<WebSocketStream<TlsStream<TcpStream>>>;
+
+/// Resolves once the server is told to stop (or its handle is dropped).
+async fn stopped(shutdown: &mut tokio::sync::watch::Receiver<bool>) {
+    // Map to `()` so the non-`Send` watch guard isn't held across awaits.
+    let _ = shutdown.wait_for(|stop| *stop).await.map(|_| ());
+}
+
+/// Serve one TCP connection: TLS and WebSocket handshakes, authentication,
+/// then the command loop.
+///
+/// Shutdown is observed at every phase, not just after authentication. The
+/// server waits for every connection task to end before
+/// [`crate::ServerHandle::stop_and_wait`] returns, so once it does, no
+/// connection still holds (and can save) the pre-stop pairing config.
+pub async fn handle_connection(
+    ctx: ConnectionContext,
+    acceptor: tokio_rustls::TlsAcceptor,
+    stream: TcpStream,
     addr: SocketAddr,
 ) {
+    let mut shutdown = ctx.shutdown.clone();
+    let established = tokio::select! {
+        result = tokio::time::timeout(AUTH_DEADLINE, establish(&ctx, acceptor, stream, addr)) => {
+            match result {
+                Ok(Some(established)) => established,
+                Ok(None) => return,
+                Err(_) => {
+                    tracing::warn!(target: "claudette::ws", peer = %addr, "authentication timed out");
+                    return;
+                }
+            }
+        }
+        _ = stopped(&mut shutdown) => return,
+    };
+    serve_authenticated(ctx, established, addr).await;
+}
+
+struct Established {
+    read: Reader,
+    writer: Arc<Writer>,
+    /// The session token this connection authenticated as (or was issued),
+    /// so `revoke_session` knows what to forget.
+    session_token: String,
+}
+
+/// Handshake and authenticate. `None` means the connection was dropped.
+///
+/// Cancellation-safe at every await: config mutations and their `save`
+/// happen together under the lock, with no await in between.
+async fn establish(
+    ctx: &ConnectionContext,
+    acceptor: tokio_rustls::TlsAcceptor,
+    stream: TcpStream,
+    addr: SocketAddr,
+) -> Option<Established> {
+    let tls_stream = match acceptor.accept(stream).await {
+        Ok(tls) => tls,
+        Err(e) => {
+            tracing::warn!(target: "claudette::ws", peer = %addr, error = %e, "TLS handshake failed");
+            return None;
+        }
+    };
     let ws_stream = match tokio_tungstenite::accept_async(tls_stream).await {
         Ok(ws) => ws,
         Err(e) => {
             tracing::warn!(target: "claudette::ws", peer = %addr, error = %e, "WebSocket handshake failed");
-            return;
+            return None;
         }
     };
 
     tracing::info!(target: "claudette::ws", peer = %addr, "new connection");
 
     let (write, mut read) = ws_stream.split();
-    let writer = std::sync::Arc::new(tokio::sync::Mutex::new(write));
+    let writer = Arc::new(tokio::sync::Mutex::new(write));
 
-    // Phase 1: Authentication (max 3 attempts).
     let mut auth_attempts = 0;
-    let max_attempts = 3;
-    let mut authenticated = false;
-
-    while auth_attempts < max_attempts {
+    while auth_attempts < MAX_AUTH_ATTEMPTS {
         let msg = match read.next().await {
             Some(Ok(Message::Text(text))) => text,
             Some(Ok(Message::Close(_))) | None => {
-                println!("[ws] Connection closed during auth from {addr}");
-                return;
+                tracing::info!(target: "claudette::ws", peer = %addr, "connection closed during auth");
+                return None;
             }
             _ => continue,
         };
@@ -227,9 +350,9 @@ pub async fn handle_tls_connection(
 
         // Try session token first, then pairing token.
         if let Some(session_token) = params.get("session_token").and_then(|t| t.as_str()) {
-            let mut cfg = config.lock().await;
+            let mut cfg = ctx.config.lock().await;
             if cfg.validate_session(session_token) {
-                let _ = cfg.save(&config_path);
+                let _ = cfg.save(&ctx.config_path);
                 let server_name = cfg.server.name.clone();
                 drop(cfg);
 
@@ -238,8 +361,11 @@ pub async fn handle_tls_connection(
                     "result": {"server_name": server_name}
                 });
                 send_message(&writer, &resp).await;
-                authenticated = true;
-                break;
+                return Some(Established {
+                    read,
+                    writer,
+                    session_token: session_token.to_string(),
+                });
             }
             drop(cfg);
         }
@@ -250,9 +376,9 @@ pub async fn handle_tls_connection(
                 .and_then(|n| n.as_str())
                 .unwrap_or("Unknown client");
 
-            let mut cfg = config.lock().await;
+            let mut cfg = ctx.config.lock().await;
             if let Some(session_token) = cfg.pair(pairing_token, client_name) {
-                let _ = cfg.save(&config_path);
+                let _ = cfg.save(&ctx.config_path);
                 let server_name = cfg.server.name.clone();
                 drop(cfg);
 
@@ -264,8 +390,11 @@ pub async fn handle_tls_connection(
                     }
                 });
                 send_message(&writer, &resp).await;
-                authenticated = true;
-                break;
+                return Some(Established {
+                    read,
+                    writer,
+                    session_token,
+                });
             }
             drop(cfg);
         }
@@ -277,27 +406,106 @@ pub async fn handle_tls_connection(
                 "code": -2,
                 "message": format!(
                     "Authentication failed ({}/{})",
-                    auth_attempts, max_attempts
+                    auth_attempts, MAX_AUTH_ATTEMPTS
                 )
             }
         });
         send_message(&writer, &err).await;
     }
 
-    if !authenticated {
-        tracing::warn!(
-            target: "claudette::ws",
-            peer = %addr,
-            attempts = max_attempts,
-            "auth failed, dropping connection"
-        );
-        return;
-    }
+    tracing::warn!(
+        target: "claudette::ws",
+        peer = %addr,
+        attempts = MAX_AUTH_ATTEMPTS,
+        "auth failed, dropping connection"
+    );
+    None
+}
+
+/// The command loop for an authenticated connection.
+async fn serve_authenticated(ctx: ConnectionContext, established: Established, addr: SocketAddr) {
+    let ConnectionContext {
+        host,
+        config,
+        config_path,
+        revocations,
+        mut shutdown,
+    } = ctx;
+    let Established {
+        mut read,
+        writer,
+        session_token,
+    } = established;
 
     tracing::info!(target: "claudette::ws", peer = %addr, "authenticated connection");
 
-    // Phase 2: Command loop.
-    while let Some(msg_result) = read.next().await {
+    // Phase 2: Command loop. Subscribe before reading the first request so
+    // no event emitted by that request can slip past this connection.
+    let mut events = host.subscribe();
+    let mut revoked = revocations.subscribe();
+    let mut revocations_open = true;
+    // A revocation that landed between authenticating and subscribing
+    // would otherwise be missed.
+    if !config.lock().await.has_session(&session_token) {
+        return;
+    }
+    // Terminals opened by this connection, closed when it ends.
+    let opened_ptys: std::sync::Arc<Mutex<std::collections::HashSet<u64>>> =
+        std::sync::Arc::new(Mutex::new(std::collections::HashSet::new()));
+    loop {
+        let msg_result = tokio::select! {
+            _ = stopped(&mut shutdown) => {
+                close_socket(&writer).await;
+                break;
+            }
+            notice = revoked.recv(), if revocations_open => {
+                let still_valid = match notice {
+                    Ok(token) => token != session_token,
+                    // Missed some: ask the config directly.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        config.lock().await.has_session(&session_token)
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        revocations_open = false;
+                        true
+                    }
+                };
+                if still_valid {
+                    continue;
+                }
+                tracing::info!(target: "claudette::ws", peer = %addr, "session revoked; closing connection");
+                close_socket(&writer).await;
+                break;
+            }
+            msg = read.next() => match msg {
+                Some(msg) => msg,
+                None => break,
+            },
+            event = events.recv() => {
+                match event {
+                    Ok(envelope) => send_message(&writer, &envelope).await,
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            target: "claudette::ws",
+                            peer = %addr,
+                            skipped,
+                            "client fell behind; events dropped"
+                        );
+                        // Tell the client so it can resync from snapshots.
+                        send_message(
+                            &writer,
+                            &serde_json::json!({
+                                "event": claudette::transport::EVENTS_DROPPED_EVENT,
+                                "payload": { "skipped": skipped },
+                            }),
+                        )
+                        .await;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+                continue;
+            }
+        };
         let text = match msg_result {
             Ok(Message::Text(text)) => text,
             Ok(Message::Close(_)) => {
@@ -328,13 +536,60 @@ pub async fn handle_tls_connection(
             }
         };
 
-        let state = std::sync::Arc::clone(&state);
+        // Connection-level: a client un-pairing itself. Handled here because
+        // it touches auth state, not the host.
+        if request.get("method").and_then(|m| m.as_str()) == Some("revoke_session") {
+            let id = request
+                .get("id")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let revoked = {
+                let mut cfg = config.lock().await;
+                let revoked = cfg.revoke_session(&session_token);
+                let _ = cfg.save(&config_path);
+                revoked
+            };
+            // End every other connection still using this token.
+            let _ = revocations.send(session_token.clone());
+            send_message(
+                &writer,
+                &handler::rpc_envelope(id, Ok(serde_json::json!({ "revoked": revoked }))),
+            )
+            .await;
+            tracing::info!(target: "claudette::ws", peer = %addr, "client revoked its session");
+            break;
+        }
+
+        let host = std::sync::Arc::clone(&host);
         let writer = std::sync::Arc::clone(&writer);
+        let opened_ptys = std::sync::Arc::clone(&opened_ptys);
         tokio::spawn(async move {
-            let response = handler::handle_request(&state, &writer, &request).await;
-            send_message(&writer, &response).await;
+            let id = request
+                .get("id")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            let params = request.get("params").cloned().unwrap_or_default();
+            let closing_pty = (method == "close_pty")
+                .then(|| params.get("pty_id").and_then(|v| v.as_u64()))
+                .flatten();
+            let result = host.dispatch(method, params).await;
+            track_connection_ptys(&opened_ptys, method, closing_pty, &result);
+            send_message(&writer, &handler::rpc_envelope(id, result)).await;
         });
     }
 
-    println!("[ws] Disconnected: {addr}");
+    // Shells this client opened would otherwise outlive it: after a drop or
+    // reconnect the client has forgotten their IDs and can't close them.
+    let leftover: Vec<u64> = opened_ptys
+        .lock()
+        .map(|mut set| set.drain().collect())
+        .unwrap_or_default();
+    for pty_id in leftover {
+        let _ = host
+            .dispatch("close_pty", serde_json::json!({ "pty_id": pty_id }))
+            .await;
+    }
+
+    tracing::info!(target: "claudette::ws", peer = %addr, "disconnected");
 }
