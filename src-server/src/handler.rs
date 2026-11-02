@@ -356,7 +356,13 @@ pub async fn dispatch(
         }
         "archive_chat_session" => {
             let chat_session_id = param_chat_session_id(&params);
-            handle_archive_chat_session(state, &chat_session_id).await
+            // Same casing the desktop IPC reads; absent means replace.
+            let auto_replace = params
+                .get("autoReplace")
+                .or_else(|| params.get("auto_replace"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            handle_archive_chat_session(state, &chat_session_id, auto_replace).await
         }
         "refresh_claude_flags" => {
             // Drop the cache so the next `cached_claude_flag_defs` call
@@ -2029,6 +2035,7 @@ fn handle_rename_chat_session(
 async fn handle_archive_chat_session(
     state: &ServerState,
     chat_session_id: &str,
+    auto_replace: bool,
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
     let session = db
@@ -2049,9 +2056,16 @@ async fn handle_archive_chat_session(
         let _ = agent::stop_agent(pid).await;
     }
 
-    let fresh = db
-        .archive_chat_session_ensuring_active(chat_session_id, &workspace_id)
-        .map_err(|e| e.to_string())?;
+    // Without replacement the workspace may be left with no sessions, which
+    // the client shows as its empty-tabs view.
+    let fresh = if auto_replace {
+        db.archive_chat_session_ensuring_active(chat_session_id, &workspace_id)
+            .map_err(|e| e.to_string())?
+    } else {
+        db.archive_chat_session_only(chat_session_id)
+            .map_err(|e| e.to_string())?;
+        None
+    };
     if let Some(fresh) = fresh {
         return serde_json::to_value(fresh).map_err(|e| e.to_string());
     }

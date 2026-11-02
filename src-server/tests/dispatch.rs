@@ -157,6 +157,24 @@ async fn session_crud_round_trips_through_dispatch() {
     .await
     .unwrap();
     assert_eq!(active.as_array().unwrap().len(), 1);
+
+    // Closing the last tab without replacement leaves no sessions.
+    let replacement = dispatch(
+        &f.state,
+        "archive_chat_session",
+        json!({"chat_session_id": default_session_id, "autoReplace": false}),
+    )
+    .await
+    .unwrap();
+    assert!(replacement.is_null(), "{replacement}");
+    let active = dispatch(
+        &f.state,
+        "list_chat_sessions",
+        json!({"workspace_id": workspace_id}),
+    )
+    .await
+    .unwrap();
+    assert!(active.as_array().unwrap().is_empty(), "{active}");
 }
 
 #[tokio::test]
