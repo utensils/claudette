@@ -71,9 +71,9 @@ export function scheduleReconnect(
         return;
       }
       try {
-        await connectRemoteConnection(id);
+        const adopted = await connectRemoteConnection(id);
         stopReconnecting(id);
-        if (announce) {
+        if (adopted && announce) {
           state.addToast(t("remote_reconnected", { name: connectionName(id) }));
         }
       } catch (e) {

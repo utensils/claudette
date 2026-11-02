@@ -38,17 +38,70 @@ function adoptConnection(id: string, data: RemoteInitialData | null): void {
   hydrateConnectionPendingControls(id);
 }
 
-export async function connectRemoteConnection(id: string): Promise<void> {
+/**
+ * The latest connect / disconnect / remove / pair for each connection. A
+ * connect attempt that finishes after a newer action is stale: Rust may
+ * register its socket after a disconnect already ran, so the attempt must
+ * not adopt it (and closes it when the user no longer wants to be
+ * connected).
+ */
+interface ConnectionIntent {
+  generation: number;
+  wantsConnected: boolean;
+}
+const intents = new Map<string, ConnectionIntent>();
+
+function recordIntent(id: string, wantsConnected: boolean): number {
+  const generation = (intents.get(id)?.generation ?? 0) + 1;
+  intents.set(id, { generation, wantsConnected });
+  return generation;
+}
+
+function isSuperseded(id: string, generation: number): boolean {
+  return intents.get(id)?.generation !== generation;
+}
+
+/** In-flight connect per connection. Attempts run one at a time so two
+ *  `connect_remote` calls can't race to register a socket. */
+const inFlightConnects = new Map<string, Promise<boolean>>();
+
+/** Connect a saved server. Resolves to whether this attempt's connection
+ *  was adopted; false when a newer action superseded it. */
+export function connectRemoteConnection(id: string): Promise<boolean> {
   userDisconnected.delete(id);
-  const data = await connectRemote(id);
-  adoptConnection(id, data);
-  rememberAutoConnect(id, true);
+  const generation = recordIntent(id, true);
+  const previous = inFlightConnects.get(id);
+  const attempt = (async () => {
+    if (previous) await previous.catch(() => undefined);
+    if (isSuperseded(id, generation)) return false;
+    const data = await connectRemote(id);
+    if (isSuperseded(id, generation)) {
+      // A newer connect will replace this socket; after a disconnect or
+      // removal nothing will, so close it.
+      if (!intents.get(id)?.wantsConnected) {
+        await disconnectRemote(id).catch((e) =>
+          console.error("Failed to close superseded remote connection:", e),
+        );
+      }
+      return false;
+    }
+    adoptConnection(id, data);
+    rememberAutoConnect(id, true);
+    return true;
+  })();
+  inFlightConnects.set(id, attempt);
+  const forget = () => {
+    if (inFlightConnects.get(id) === attempt) inFlightConnects.delete(id);
+  };
+  attempt.then(forget, forget);
+  return attempt;
 }
 
 /** A manual disconnect also stops the server auto-connecting at launch;
  *  connecting again turns it back on. */
 export async function disconnectRemoteConnection(id: string): Promise<void> {
   userDisconnected.add(id);
+  recordIntent(id, false);
   await disconnectRemote(id);
   dropConnectionState(id);
   rememberAutoConnect(id, false);
@@ -72,6 +125,7 @@ function rememberAutoConnect(id: string, autoConnect: boolean): void {
  *  entry is removed even when revocation fails; the result says so. */
 export async function forgetRemoteConnection(id: string): Promise<RemoveResult> {
   userDisconnected.add(id);
+  recordIntent(id, false);
   const result = await removeRemoteConnection(id);
   dropConnectionState(id);
   useAppStore.getState().removeRemoteConnection(id);
@@ -100,6 +154,7 @@ export function adoptPairResult(result: PairResult): void {
   const state = useAppStore.getState();
   const id = result.connection.id;
   userDisconnected.delete(id);
+  recordIntent(id, true);
   if (state.remoteConnections.some((c) => c.id === id)) {
     state.setRemoteConnections(
       state.remoteConnections.map((c) => (c.id === id ? result.connection : c)),

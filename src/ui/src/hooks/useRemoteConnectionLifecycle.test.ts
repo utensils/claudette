@@ -45,7 +45,7 @@ describe("scheduleReconnect", () => {
   it("backs off between failed attempts and stops once connected", async () => {
     actions.connectRemoteConnection
       .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce(true);
 
     scheduleReconnect("c1", t, { announce: false });
     expect(useAppStore.getState().reconnectingRemoteIds).toEqual(["c1"]);
