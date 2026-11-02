@@ -19,6 +19,7 @@ import {
   connectRemoteConnection,
   disconnectRemoteConnection,
   forgetRemoteConnection,
+  resyncActiveConnection,
 } from "./remoteConnectionActions";
 
 const CONN = {
@@ -104,5 +105,25 @@ describe("connectRemoteConnection", () => {
     expect(tauri.connectRemote).toHaveBeenCalledTimes(2);
     expect(tauri.disconnectRemote).not.toHaveBeenCalled();
     expect(useAppStore.getState().activeRemoteIds).toEqual(["c1"]);
+  });
+});
+
+describe("resyncActiveConnection", () => {
+  beforeEach(() => {
+    tauri.sendRemoteCommand.mockReset();
+    useAppStore.setState({ remoteConnections: [CONN], activeRemoteIds: [] });
+  });
+
+  it("collapses requests made mid-resync into one more pass", async () => {
+    let finish!: (value: unknown) => void;
+    tauri.sendRemoteCommand
+      .mockImplementationOnce(() => new Promise((r) => (finish = r)))
+      .mockResolvedValue(EMPTY_DATA);
+    const first = resyncActiveConnection("c1");
+    resyncActiveConnection("c1");
+    resyncActiveConnection("c1");
+    finish(EMPTY_DATA);
+    await first;
+    expect(tauri.sendRemoteCommand).toHaveBeenCalledTimes(2);
   });
 });

@@ -169,14 +169,34 @@ export function adoptPairResult(result: PairResult): void {
  * Re-adopt a connection the Rust side still holds: after a webview reload
  * (the store is empty but the socket is up) or after events were lost.
  */
-export async function resyncActiveConnection(id: string): Promise<void> {
-  const data = (await sendRemoteCommand(
-    id,
-    "load_initial_data",
-    {},
-  )) as RemoteInitialData | null;
-  adoptConnection(id, data);
+export function resyncActiveConnection(id: string): Promise<void> {
+  // A lagging connection reports lost events repeatedly; requests that
+  // arrive mid-resync collapse into one more pass instead of piling up.
+  const running = resyncs.get(id);
+  if (running) {
+    resyncAgain.add(id);
+    return running;
+  }
+  const run = (async () => {
+    do {
+      resyncAgain.delete(id);
+      const data = (await sendRemoteCommand(
+        id,
+        "load_initial_data",
+        {},
+      )) as RemoteInitialData | null;
+      adoptConnection(id, data);
+    } while (resyncAgain.has(id));
+  })().finally(() => {
+    resyncs.delete(id);
+    resyncAgain.delete(id);
+  });
+  resyncs.set(id, run);
+  return run;
 }
+
+const resyncs = new Map<string, Promise<void>>();
+const resyncAgain = new Set<string>();
 
 /** Clear a connection's live state (on disconnect or loss). */
 export function dropConnectionState(id: string): void {

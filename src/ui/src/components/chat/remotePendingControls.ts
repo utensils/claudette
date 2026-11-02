@@ -2,6 +2,10 @@ import { sendRemoteCommand } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { applyAgentPermissionPrompt } from "../../hooks/useAgentStream";
 import type { ChatMessage, ChatSession, SessionAgentStatus } from "../../types";
+import {
+  clearPromptStartTimeIfWorkspaceIdle,
+  syncWorkspaceTurnStatus,
+} from "./chatTurnLifecycle";
 
 /** One entry of a `get_chat_snapshot` response's `pending_controls`. */
 export interface PendingAgentControl {
@@ -134,6 +138,11 @@ export async function hydrateRemotePendingControls(
   }
   if (statusChanged) {
     store.updateChatSession(sessionId, { agent_status: serverStatus });
+    const workspaceId = findSession(sessionId)?.workspace_id;
+    if (workspaceId) {
+      syncWorkspaceTurnStatus(workspaceId);
+      clearPromptStartTimeIfWorkspaceIdle(workspaceId);
+    }
   }
   if (history) {
     const messages = Array.isArray(history) ? history : (history.messages ?? []);

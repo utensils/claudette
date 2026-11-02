@@ -132,14 +132,31 @@ describe("hydrateRemotePendingControls", () => {
       chatMessages: { [SESSION]: [prompt] },
       streamingContent: { [SESSION]: "partial" },
       toolActivities: {},
+      completedTurns: {},
+      promptStartTime: {},
     });
   });
 
   it("closes out a turn whose end was lost", async () => {
+    useAppStore.getState().setToolActivities(SESSION, [
+      {
+        toolUseId: "tool-1",
+        toolName: "Read",
+        inputJson: "{}",
+        resultText: "ok",
+        collapsed: true,
+        summary: "",
+      },
+    ]);
+    useAppStore.getState().setPromptStartTime("remote-ws", 1);
     serverHas("Idle", [prompt, reply]);
     await hydrateRemotePendingControls("conn-1", SESSION);
     const s = useAppStore.getState();
     expect(sessionStatus()).toBe("Idle");
+    // The turn's tool calls are kept as a completed turn.
+    expect(s.toolActivities[SESSION] ?? []).toEqual([]);
+    expect(s.completedTurns[SESSION]?.[0]?.activities.map((a) => a.toolUseId)).toEqual(["tool-1"]);
+    expect(s.promptStartTime["remote-ws"]).toBeUndefined();
     expect(s.chatMessages[SESSION].map((m) => m.id)).toEqual(["m1", "m2"]);
     expect(s.streamingContent[SESSION] ?? "").toBe("");
   });
