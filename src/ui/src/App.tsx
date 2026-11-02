@@ -47,14 +47,11 @@ function workspaceOrderModesFromRepoIds(
 }
 
 function App() {
-  const setRepositories = useAppStore((s) => s.setRepositories);
-  const setWorkspaces = useAppStore((s) => s.setWorkspaces);
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const setDefaultTerminalAppId = useAppStore((s) => s.setDefaultTerminalAppId);
   const setWorkspaceAppsMenuShown = useAppStore(
     (s) => s.setWorkspaceAppsMenuShown,
   );
-  const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
   const setLastMessages = useAppStore((s) => s.setLastMessages);
   const hydrateWorkspaceScmLinks = useAppStore(
@@ -170,15 +167,17 @@ function App() {
           ...w,
           remote_connection_id: null,
         }));
-        setRepositories(
-          data.repositories.map((r) => ({ ...r, remote_connection_id: null }))
-        );
-        setWorkspaces(localWorkspaces);
+        // Keeps paired servers' rows: a connection re-adopted after a
+        // webview reload can land before this load does.
+        useAppStore.getState().replaceLocalData({
+          repositories: data.repositories,
+          workspaces: localWorkspaces,
+          defaultBranches: data.default_branches,
+        });
         setManualWorkspaceOrderByRepo(
           workspaceOrderModesFromRepoIds(data.manual_workspace_order_repo_ids),
         );
         setWorktreeBaseDir(data.worktree_base_dir);
-        setDefaultBranches(data.default_branches);
         // Index last messages by workspace_id for dashboard display.
         const msgMap: Record<string, (typeof data.last_messages)[0]> = {};
         for (const msg of data.last_messages) {
@@ -975,7 +974,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteMcpEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
+  }, [setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setTerminalFontSize, setLastMessages, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteMcpEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

@@ -4,6 +4,8 @@ import type {
   DiscoveredServer,
 } from "../../types";
 import type { RemoteInitialData } from "../../types/remote";
+import type { Repository } from "../../types/repository";
+import type { Workspace } from "../../types/workspace";
 import type { McpStatusSnapshot } from "../../types/mcp";
 import type { DetectedApp } from "../../types/apps";
 import type { AppState } from "../useAppStore";
@@ -25,6 +27,14 @@ export interface RemoteSlice {
   removeActiveRemoteId: (id: string) => void;
   mergeRemoteData: (connectionId: string, data: RemoteInitialData) => void;
   clearRemoteData: (connectionId: string) => void;
+  /** Replace the local repositories, workspaces and default branches,
+   *  keeping every paired server's rows. A remote connection can be
+   *  adopted before the local initial load lands (e.g. on webview reload). */
+  replaceLocalData: (data: {
+    repositories: Repository[];
+    workspaces: Workspace[];
+    defaultBranches: Record<string, string>;
+  }) => void;
 
   // Local Server
   localServerRunning: boolean;
@@ -142,6 +152,26 @@ export const createRemoteSlice: StateCreator<
           (w) => w.remote_connection_id !== connectionId,
         ),
         defaultBranches: prunedDefaults,
+      };
+    }),
+
+  replaceLocalData: ({ repositories, workspaces, defaultBranches }) =>
+    set((s) => {
+      const remoteRepos = s.repositories.filter((r) => r.remote_connection_id);
+      const remoteRepoIds = new Set(remoteRepos.map((r) => r.id));
+      const remoteDefaults = Object.fromEntries(
+        Object.entries(s.defaultBranches).filter(([id]) => remoteRepoIds.has(id)),
+      );
+      return {
+        repositories: [
+          ...repositories.map((r) => ({ ...r, remote_connection_id: null })),
+          ...remoteRepos,
+        ],
+        workspaces: [
+          ...workspaces.map((w) => ({ ...w, remote_connection_id: null })),
+          ...s.workspaces.filter((w) => w.remote_connection_id),
+        ],
+        defaultBranches: { ...defaultBranches, ...remoteDefaults },
       };
     }),
 
