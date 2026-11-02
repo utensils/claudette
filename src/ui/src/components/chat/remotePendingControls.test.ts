@@ -44,6 +44,14 @@ describe("reconcilePendingControls", () => {
     expect(cardId()).toBe("t2");
   });
 
+  it("does not restore a card answered while the snapshot was in flight", () => {
+    reconcilePendingControls(SESSION, [askControl("t1")], null);
+    // Snapshot requested while t1 showed; the user answered before it landed.
+    useAppStore.getState().clearAgentQuestion(SESSION);
+    reconcilePendingControls(SESSION, [askControl("t1")], "t1");
+    expect(cardId()).toBeUndefined();
+  });
+
   it("does not re-apply a card that is already showing", () => {
     reconcilePendingControls(SESSION, [askControl("t1")], null);
     const before = useAppStore.getState().agentQuestions[SESSION];

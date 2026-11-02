@@ -30,9 +30,10 @@ function clearCard(sessionId: string): void {
  * Reconcile a session's approval card with the server's pending controls.
  *
  * `cardBefore` is the card's `toolUseId` when the snapshot was requested.
- * A card that appeared after that came from a live event newer than the
- * snapshot, so it is left alone; a card that was already showing and is no
- * longer pending was answered elsewhere and is cleared.
+ * If the card changed while the snapshot was in flight (a live prompt
+ * arrived, or the user answered and cleared it), the snapshot is older than
+ * what's showing and is ignored. Otherwise a card that is no longer pending
+ * was answered elsewhere and is cleared.
  */
 export function reconcilePendingControls(
   sessionId: string,
@@ -40,7 +41,7 @@ export function reconcilePendingControls(
   cardBefore: string | null,
 ): void {
   const current = cardToolUseId(sessionId);
-  if (current && current !== cardBefore) return;
+  if (current !== cardBefore) return;
   if (current && !controls.some((c) => c.tool_use_id === current)) {
     clearCard(sessionId);
   }
