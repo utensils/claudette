@@ -89,6 +89,15 @@ async fn setup() -> Fixture {
     )
     .await
     .unwrap();
+    // Port 0 binds an ephemeral port; the pairing string must carry it.
+    assert!(
+        handle
+            .connection_string
+            .contains(&format!(":{}/", handle.port)),
+        "{} does not advertise port {}",
+        handle.connection_string,
+        handle.port
+    );
     let pairing_token = handle
         .connection_string
         .rsplit('/')
