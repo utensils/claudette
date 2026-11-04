@@ -19,6 +19,7 @@ import {
 } from "../../services/tauri";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ, FolderSearch, MessageSquare } from "lucide-react";
+import { SchedulerButton } from "./SchedulerButton";
 import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
 import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
@@ -884,6 +885,7 @@ export const Sidebar = memo(function Sidebar() {
           >
             <LayoutDashboard size={12} />
           </button>
+          <SchedulerButton />
           <div className={styles.filterDropdown} ref={filterDropdownRef}>
             <button
               className={styles.filterToggle}

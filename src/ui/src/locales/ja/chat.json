@@ -102,6 +102,8 @@
   "model_picker_no_results": "一致するモデルがありません",
   "model_picker_clear_search": "検索をクリア",
   "you_label": "あなた",
+  "scheduled_badge": "スケジュール",
+  "scheduled_badge_title": "このプロンプトはスケジュールタスクによって送信されました（サイドバーの時計アイコン）。",
   "agent_question_title": "エージェントからの質問",
   "agent_question_submit_answer": "回答を送信",
   "agent_question_or_type": "または下に返答を入力",

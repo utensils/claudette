@@ -2,18 +2,68 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::db::Database;
-use claudette::scheduling::{ScheduledTask, ScheduledTaskKind, cron_to_human};
+use claudette::model::{ChatMessage, ChatRole};
+use claudette::scheduling::{
+    ScheduleTarget, ScheduledTask, ScheduledTaskKind, ScheduledTaskRun, cron_to_human,
+    resume_fire_time,
+};
 
 use crate::state::AppState;
+
+/// Frontend event fired whenever the set of scheduled tasks — or any task's
+/// state (next fire, last run, failure, pause) — changes. Payload-less: the
+/// listener re-reads `list_scheduled_routines`.
+pub const SCHEDULED_TASKS_CHANGED_EVENT: &str = "scheduled-tasks-changed";
+
+/// Wake the scheduler loop (so it re-reads the next fire time) and tell the
+/// frontend to refresh. Call after every mutation of `agent_scheduled_tasks`.
+pub(crate) fn notify_schedules_changed(app: &AppHandle) {
+    app.state::<AppState>().scheduler_notify.notify_waiters();
+    let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
+}
+
+/// Resolve the GUI/IPC command arguments into a [`ScheduleTarget`].
+///
+/// `create_new_session` requires a `workspace_id` (the scheduler makes a fresh
+/// session there each fire); otherwise a concrete `session_id` is reused.
+fn build_schedule_target(
+    session_id: Option<String>,
+    workspace_id: Option<String>,
+    create_new_session: Option<bool>,
+) -> Result<ScheduleTarget, String> {
+    if create_new_session.unwrap_or(false) {
+        let ws = workspace_id
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or("workspace_id is required when create_new_session is set")?;
+        Ok(ScheduleTarget::NewSessionInWorkspace(ws))
+    } else {
+        let sid = session_id
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        match sid {
+            Some(sid) => Ok(ScheduleTarget::Session(sid)),
+            // A caller that supplied only a workspace likely meant new-session.
+            None if workspace_id.is_some() => Err(
+                "session_id is required, or set create_new_session: true to target a workspace"
+                    .to_string(),
+            ),
+            None => Err("session_id is required".to_string()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ScheduledTaskView {
     #[serde(flatten)]
     pub task: ScheduledTask,
     pub human_schedule: Option<String>,
+    /// Most recent fire, if any — lets the UI jump to the session the last
+    /// run landed in (a different one each fire for new-session tasks).
+    pub last_run: Option<ScheduledTaskRun>,
 }
 
 impl From<ScheduledTask> for ScheduledTaskView {
@@ -22,54 +72,112 @@ impl From<ScheduledTask> for ScheduledTaskView {
         Self {
             task,
             human_schedule,
+            last_run: None,
+        }
+    }
+}
+
+impl ScheduledTaskView {
+    fn with_last_run(task: ScheduledTask, db: &Database) -> Self {
+        let last_run = db
+            .list_agent_scheduled_task_runs(Some(&task.id), 1)
+            .ok()
+            .and_then(|runs| runs.into_iter().next());
+        Self {
+            last_run,
+            ..task.into()
         }
     }
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn schedule_wakeup(
-    session_id: String,
+    session_id: Option<String>,
+    workspace_id: Option<String>,
+    create_new_session: Option<bool>,
     delay_seconds: Option<i64>,
     fire_at: Option<String>,
     prompt: String,
     reason: Option<String>,
+    backend_id: Option<String>,
+    model: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ScheduledTaskView, String> {
     if prompt.trim().is_empty() {
         return Err("prompt is required".to_string());
     }
+    let target = build_schedule_target(session_id, workspace_id, create_new_session)?;
     let fire_at = resolve_fire_at(delay_seconds, fire_at.as_deref())?;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let task = db
-        .create_agent_wakeup(&session_id, fire_at, prompt.trim(), reason.as_deref())
+        .create_agent_wakeup(
+            &target,
+            fire_at,
+            prompt.trim(),
+            reason.as_deref(),
+            backend_id.as_deref(),
+            model.as_deref(),
+        )
         .map_err(|e| e.to_string())?;
-    state.scheduler_notify.notify_waiters();
+    notify_schedules_changed(&app);
+    post_creation_note(
+        &app,
+        &state.db_path,
+        &task.workspace_id,
+        task.chat_session_id.as_deref(),
+        format!(
+            "Scheduled wakeup for {}. Manage it from the scheduler (clock icon in the sidebar).",
+            fire_at.to_rfc3339()
+        ),
+    );
     Ok(task.into())
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_cron_routine(
-    session_id: String,
+    session_id: Option<String>,
+    workspace_id: Option<String>,
+    create_new_session: Option<bool>,
     name: Option<String>,
     cron_expr: String,
     prompt: String,
     recurring: Option<bool>,
+    backend_id: Option<String>,
+    model: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ScheduledTaskView, String> {
     if prompt.trim().is_empty() {
         return Err("prompt is required".to_string());
     }
+    let target = build_schedule_target(session_id, workspace_id, create_new_session)?;
+    let cron_expr = cron_expr.trim().to_string();
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let task = db
         .create_agent_cron_task(
-            &session_id,
+            &target,
             name.as_deref(),
-            cron_expr.trim(),
+            &cron_expr,
             prompt.trim(),
             recurring.unwrap_or(true),
+            backend_id.as_deref(),
+            model.as_deref(),
         )
         .map_err(|e| e.to_string())?;
-    state.scheduler_notify.notify_waiters();
+    notify_schedules_changed(&app);
+    post_creation_note(
+        &app,
+        &state.db_path,
+        &task.workspace_id,
+        task.chat_session_id.as_deref(),
+        format!(
+            "Looping (`{cron_expr}` — {}). Manage it from the scheduler (clock icon in the sidebar).",
+            cron_to_human(&cron_expr)
+        ),
+    );
     Ok(task.into())
 }
 
@@ -79,20 +187,75 @@ pub async fn list_scheduled_routines(
 ) -> Result<Vec<ScheduledTaskView>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let rows = db.list_agent_scheduled_tasks().map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().map(Into::into).collect())
+    Ok(rows
+        .into_iter()
+        .map(|task| ScheduledTaskView::with_last_run(task, &db))
+        .collect())
 }
 
 #[tauri::command]
 pub async fn delete_scheduled_routine(
     id: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let deleted = db
         .delete_agent_scheduled_task(&id)
         .map_err(|e| e.to_string())?;
-    state.scheduler_notify.notify_waiters();
+    notify_schedules_changed(&app);
     Ok(serde_json::json!({ "deleted": deleted }))
+}
+
+/// Stop a task from firing until it's resumed. Accepts an id or name.
+#[tauri::command]
+pub async fn pause_scheduled_routine(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ScheduledTaskView, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let task = db
+        .pause_agent_scheduled_task(&id, Utc::now())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("scheduled routine not found: {id}"))?;
+    notify_schedules_changed(&app);
+    Ok(ScheduledTaskView::with_last_run(task, &db))
+}
+
+/// Re-arm a paused or auto-disabled task (clears its failure streak).
+#[tauri::command]
+pub async fn resume_scheduled_routine(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ScheduledTaskView, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let task = db
+        .find_agent_scheduled_task(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("scheduled routine not found: {id}"))?;
+    let now = Utc::now();
+    let next = resume_fire_time(&task, now)?;
+    let task = db
+        .resume_agent_scheduled_task(&task.id, next, now)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("scheduled routine not found: {id}"))?;
+    notify_schedules_changed(&app);
+    Ok(ScheduledTaskView::with_last_run(task, &db))
+}
+
+/// Newest-first fire history for one task, or across every task when
+/// `task_id` is omitted.
+#[tauri::command]
+pub async fn list_scheduled_task_runs(
+    task_id: Option<String>,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ScheduledTaskRun>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.list_agent_scheduled_task_runs(task_id.as_deref(), limit.unwrap_or(50).min(500) as usize)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -109,7 +272,10 @@ pub async fn run_scheduled_routine(
             .find(|task| task.id == id || task.name.as_deref() == Some(id.as_str()))
             .ok_or_else(|| format!("scheduled routine not found: {id}"))?
     };
-    dispatch_task_prompt(app, task, "manual").await?;
+    let result = dispatch_task_prompt(app.clone(), task, "manual").await;
+    // The run was recorded either way; refresh the "last run" column.
+    let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
+    result?;
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -148,6 +314,7 @@ async fn run_due_tasks_once(app: AppHandle) -> Duration {
                     count,
                     "paused scheduled tasks for unavailable workspaces"
                 );
+                let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
             }
             Ok(_) => {}
             Err(err) => {
@@ -198,7 +365,7 @@ async fn mark_and_dispatch_due_task(
             return Ok(());
         }
     }
-    match dispatch_task_prompt(app.clone(), task.clone(), "scheduled").await {
+    let result = match dispatch_task_prompt(app.clone(), task.clone(), "scheduled").await {
         Ok(()) => Ok(()),
         Err(err) => {
             let state = app.state::<AppState>();
@@ -224,7 +391,11 @@ async fn mark_and_dispatch_due_task(
             }
             Err(err)
         }
-    }
+    };
+    // After any failure bookkeeping above, so the refresh sees the advanced
+    // fire times *and* the updated failure streak / disable reason.
+    let _ = app.emit(SCHEDULED_TASKS_CHANGED_EVENT, ());
+    result
 }
 
 pub async fn dispatch_task_prompt(
@@ -232,35 +403,234 @@ pub async fn dispatch_task_prompt(
     task: ScheduledTask,
     source: &str,
 ) -> Result<(), String> {
-    let prompt = build_dispatch_prompt(&task, source);
-    dispatch_prompt_to_session(app, task.chat_session_id, prompt).await
+    let task_id = task.id.clone();
+    let (session_id, result) = dispatch_task_prompt_inner(app.clone(), task, source).await;
+    let recorded = Database::open(&app.state::<AppState>().db_path).and_then(|db| {
+        db.record_agent_scheduled_task_run(
+            &task_id,
+            session_id.as_deref(),
+            source,
+            Utc::now(),
+            result.as_ref().err().map(String::as_str),
+        )
+    });
+    if let Err(err) = recorded {
+        tracing::warn!(
+            target: "claudette::scheduling",
+            task_id = %task_id,
+            error = %err,
+            "failed to record scheduled task run"
+        );
+    }
+    result
 }
 
+/// Fire a task and report which session took the prompt (`None` when the
+/// fire failed before a session accepted it).
+async fn dispatch_task_prompt_inner(
+    app: AppHandle,
+    task: ScheduledTask,
+    source: &str,
+) -> (Option<String>, Result<(), String>) {
+    let prompt = build_dispatch_prompt(&task, source);
+    // Resolve where this fire lands. `create_new_session` rows make a fresh
+    // session in the target workspace on every fire (so a recurring cron gets
+    // a clean session per run); reuse rows dispatch into their stored session.
+    if task.create_new_session {
+        let state = app.state::<AppState>();
+        let session = match Database::open(&state.db_path)
+            .and_then(|db| db.create_chat_session(&task.workspace_id))
+        {
+            Ok(session) => session,
+            Err(err) => return (None, Err(err.to_string())),
+        };
+        let session_id = session.id.clone();
+        let result = dispatch_prompt_to_session_inner(
+            app.clone(),
+            session_id.clone(),
+            prompt,
+            task.backend_id,
+            task.model,
+            Some(task.id),
+            // Announce the fresh session to the frontend so its tab appears
+            // before the live `chat-message` lands.
+            Some(session),
+        )
+        .await;
+        if result.is_err()
+            && let Ok(db) = Database::open(&app.state::<AppState>().db_path)
+        {
+            // The fire never started — roll back the empty session we made so
+            // a persistently-failing cron doesn't accrete blank tabs.
+            let _ = db.archive_chat_session(&session_id);
+            return (None, result);
+        }
+        (Some(session_id), result)
+    } else {
+        let Some(session_id) = task.chat_session_id.clone() else {
+            return (
+                None,
+                Err("scheduled task has no target session".to_string()),
+            );
+        };
+        // Forward the row's pinned backend / model so a cron created from a
+        // Codex chat fires on the same runtime it was scheduled under.
+        // Either being `None` keeps the existing global-default fallback.
+        let result = dispatch_prompt_to_session_inner(
+            app,
+            session_id.clone(),
+            prompt,
+            task.backend_id,
+            task.model,
+            Some(task.id),
+            None,
+        )
+        .await;
+        (Some(session_id), result)
+    }
+}
+
+/// Dispatch a backend-originated prompt into a session (used by the agent
+/// `Monitor` tool). Renders the injected prompt like any other backend-origin
+/// send — see [`dispatch_prompt_to_session_inner`].
 pub async fn dispatch_prompt_to_session(
     app: AppHandle,
     chat_session_id: String,
     prompt: String,
 ) -> Result<(), String> {
+    dispatch_prompt_to_session_inner(app, chat_session_id, prompt, None, None, None, None).await
+}
+
+/// Run the turn via `send_chat_message` (which persists the user row by the
+/// `message_id` we pass, carrying `scheduled_task_id` for the "Scheduled"
+/// badge), then — only on success — emit the user message as a `chat-message`
+/// so a focused session renders it live, the same way Claude Remote Control
+/// surfaces remote-origin prompts that skip the GUI's optimistic insert.
+///
+/// Emitting *after* `send_chat_message` returns `Ok` (it persists + spawns the
+/// stream task, then returns) avoids leaving a phantom badged prompt on screen
+/// when send fails before persisting (e.g. an unresolvable pinned backend).
+/// When `announce_session` is set (a freshly created new-session fire), its
+/// `chat-session-created` event is emitted first so the tab exists before the
+/// message arrives.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_prompt_to_session_inner(
+    app: AppHandle,
+    chat_session_id: String,
+    prompt: String,
+    backend_id: Option<String>,
+    model: Option<String>,
+    scheduled_task_id: Option<String>,
+    announce_session: Option<claudette::model::ChatSession>,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
-    crate::commands::chat::send::send_chat_message(
-        chat_session_id,
-        None,
-        prompt,
-        None,
-        None,
-        None,
-        None,
+    let message_id = uuid::Uuid::new_v4().to_string();
+
+    let result = crate::commands::chat::send::send_chat_message(
+        chat_session_id.clone(),
+        Some(message_id.clone()),
+        prompt.clone(),
         None,
         None,
-        None,
+        model,
         None,
         None,
         None,
         None,
+        None,
+        None,
+        backend_id,
+        None,
+        scheduled_task_id.clone(),
         app.clone(),
         state,
     )
-    .await
+    .await;
+
+    if result.is_ok() {
+        if let Some(session) = announce_session {
+            let _ = app.emit("chat-session-created", &session);
+        }
+        // The row is already persisted by `send_chat_message` (via
+        // `prepare_user_send`) under `message_id`; this emit just mirrors it
+        // into the live store. Best-effort: a focused session renders it, and
+        // a reload reads the same persisted row.
+        if let Ok(db) = Database::open(&app.state::<AppState>().db_path)
+            && let Ok(Some(session)) = db.get_chat_session(&chat_session_id)
+        {
+            let user_msg = ChatMessage {
+                id: message_id,
+                workspace_id: session.workspace_id,
+                chat_session_id,
+                role: ChatRole::User,
+                content: prompt,
+                cost_usd: None,
+                duration_ms: None,
+                created_at: crate::commands::chat::now_iso(),
+                thinking: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                scheduled_task_id,
+            };
+            let _ = app.emit("chat-message", &user_msg);
+        }
+    }
+
+    result
+}
+
+/// Append a system-role chat message announcing that a wakeup / cron was
+/// scheduled, and emit `chat-system-message` so the chat panel renders it
+/// inline. Persisted to the DB so it survives reloads (and is visible
+/// across all backends without any frontend per-backend code) — replaces
+/// the prior frontend `addLocalMessage` which evaporated on refresh.
+/// Best-effort: a failure here doesn't unwind the scheduling itself.
+fn post_creation_note(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    workspace_id: &str,
+    chat_session_id: Option<&str>,
+    content: String,
+) {
+    // New-session tasks have no session at schedule time — there's nowhere to
+    // post the confirmation, so skip it. The task still appears in the
+    // scheduler view.
+    let Some(chat_session_id) = chat_session_id else {
+        return;
+    };
+    let message = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
+        role: ChatRole::System,
+        content,
+        cost_usd: None,
+        duration_ms: None,
+        // Match the format every other Tauri-emitted chat message uses
+        // (Unix-seconds string from `now_iso()`). Mixing formats breaks
+        // the frontend's string-sort over `created_at`.
+        created_at: crate::commands::chat::now_iso(),
+        thinking: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+        scheduled_task_id: None,
+    };
+    match Database::open(db_path).and_then(|db| db.insert_chat_message(&message)) {
+        Ok(()) => {
+            let _ = app.emit("chat-system-message", &message);
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "claudette::scheduling",
+                error = %err,
+                "failed to persist schedule confirmation message"
+            );
+        }
+    }
 }
 
 fn build_dispatch_prompt(task: &ScheduledTask, source: &str) -> String {
@@ -312,8 +682,9 @@ mod tests {
     fn task(kind: ScheduledTaskKind) -> ScheduledTask {
         ScheduledTask {
             id: "task-1".into(),
-            chat_session_id: "chat-1".into(),
+            chat_session_id: Some("chat-1".into()),
             workspace_id: "ws-1".into(),
+            create_new_session: false,
             kind,
             name: Some("morning".into()),
             prompt: "Check the PR".into(),
@@ -330,6 +701,8 @@ mod tests {
             last_failed_at: None,
             last_error: None,
             disabled_reason: None,
+            backend_id: None,
+            model: None,
         }
     }
 

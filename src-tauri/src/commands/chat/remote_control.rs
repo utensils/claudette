@@ -20,10 +20,7 @@ use crate::state::{
     AgentSessionState, AppState, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
 };
 
-use super::{
-    AgentStreamPayload, build_agent_hook_bridge, now_iso, start_bridge_and_inject_mcp,
-    start_chat_bridge,
-};
+use super::{AgentStreamPayload, build_agent_hook_bridge, now_iso, start_bridge_and_inject_mcp};
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -472,9 +469,6 @@ async fn ensure_persistent_session_for_remote_control(
             super::send::team_agent_session_tabs_enabled(&db),
         )
     };
-    // send_to_user (default on) + the experimental interaction tools share one
-    // MCP server; inject it when either is enabled (nudges stay independent).
-    let claudette_server_enabled = send_to_user_enabled || interaction_enabled;
     let instructions = {
         let from_config = repo.as_ref().and_then(|r| {
             let path = r.path.clone();
@@ -485,6 +479,9 @@ async fn ensure_persistent_session_for_remote_control(
         });
         from_config.or_else(|| repo.as_ref().and_then(|r| r.custom_instructions.clone()))
     };
+    // Scheduling/Monitor guidance is always on (the MCP server is injected
+    // unconditionally); the send_to_user and interaction sections are gated
+    // on their own toggles. Mirrors the spawn path in `commands/chat/send.rs`.
     let nudge = claudette::agent_mcp::compose_mcp_nudge(send_to_user_enabled, interaction_enabled);
     // Remote-control sessions always launch through Claude CLI, so the
     // Claude-Code MCP rule block applies; it steers to our interaction tools
@@ -492,7 +489,7 @@ async fn ensure_persistent_session_for_remote_control(
     let claude_mcp_rules = claudette::agent_mcp::claude_code_mcp_rules(interaction_enabled);
     let custom_instructions = claudette::global_prompt::compose_system_prompt(
         instructions.as_deref(),
-        nudge.as_deref(),
+        Some(nudge.as_str()),
         Some(claude_mcp_rules.as_str()),
     );
     let level = launch_options.permission_level.as_deref().unwrap_or("full");
@@ -573,7 +570,13 @@ async fn ensure_persistent_session_for_remote_control(
         hook_bridge: None,
         extra_claude_flags,
     };
-    let bridge = if claudette_server_enabled {
+    // Inject the Claudette MCP server unconditionally — it carries the
+    // always-on scheduling tools (ScheduleWakeup / Cron*) and `Monitor`.
+    // The `send_to_user_enabled` toggle gates only that tool's nudge
+    // (above) and the call itself (in `agent_mcp_sink::handle_payload`),
+    // not the whole server. Same wiring as the spawn / respawn blocks in
+    // `chat::send::send_chat_message`.
+    let bridge = {
         let (bridge, mcp_with_claudette) = start_bridge_and_inject_mcp(
             app,
             &state.db_path,
@@ -585,8 +588,6 @@ async fn ensure_persistent_session_for_remote_control(
         .await?;
         agent_settings.mcp_config = mcp_with_claudette;
         bridge
-    } else {
-        start_chat_bridge(app, &state.db_path, &workspace_id, &chat_session_id).await?
     };
     agent_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
 
@@ -946,6 +947,7 @@ async fn ensure_remote_control_monitor(
                     output_tokens: None,
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
+                    scheduled_task_id: None,
                 };
                 if let Ok(db) = Database::open(&db_path) {
                     let _ = db.insert_chat_message(&msg);
@@ -1030,6 +1032,7 @@ async fn ensure_remote_control_monitor(
                     output_tokens: None,
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
+                    scheduled_task_id: None,
                 };
                 let _ = db.insert_chat_message(&msg);
             }
@@ -1380,6 +1383,7 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            scheduled_task_id: None,
         }
     }
 

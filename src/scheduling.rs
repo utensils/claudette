@@ -30,11 +30,29 @@ impl std::str::FromStr for ScheduledTaskKind {
     }
 }
 
+/// Where a scheduled task dispatches when it fires. Chosen at creation and
+/// recorded on the row (`chat_session_id` + `create_new_session`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleTarget {
+    /// Reuse an existing chat session; its workspace is derived at creation.
+    Session(String),
+    /// Create a fresh chat session in this workspace each time the task fires
+    /// (so a recurring cron gets a clean session per run).
+    NewSessionInWorkspace(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledTask {
     pub id: String,
-    pub chat_session_id: String,
+    /// Target session for reuse-mode tasks. `None` when `create_new_session`
+    /// is true — those rows have no session until the scheduler makes a fresh
+    /// one in `workspace_id` at fire time.
+    pub chat_session_id: Option<String>,
     pub workspace_id: String,
+    /// When true, the scheduler creates a brand-new chat session in
+    /// `workspace_id` each time the task fires (so a recurring cron gets a
+    /// clean session per run) instead of dispatching into `chat_session_id`.
+    pub create_new_session: bool,
     pub kind: ScheduledTaskKind,
     pub name: Option<String>,
     pub prompt: String,
@@ -51,6 +69,61 @@ pub struct ScheduledTask {
     pub last_failed_at: Option<String>,
     pub last_error: Option<String>,
     pub disabled_reason: Option<String>,
+    /// Backend the task was scheduled under. The scheduler passes this
+    /// through to `send_chat_message` so a Codex-chat cron fires
+    /// on its own backend instead of falling through to the global
+    /// `default_agent_backend` app setting. `None` for legacy rows and
+    /// for agent-callable scheduling that chose not to pin a backend —
+    /// those keep the prior global-default behavior.
+    pub backend_id: Option<String>,
+    /// Model id captured at schedule time. Forwarded to
+    /// `send_chat_message` like [`Self::backend_id`].
+    pub model: Option<String>,
+}
+
+/// One recorded fire of a [`ScheduledTask`] — scheduled or manual ("Run
+/// now"). `chat_session_id` is the session the prompt landed in (a fresh one
+/// for new-session tasks); `None` when the fire failed before a session
+/// could take it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledTaskRun {
+    pub id: String,
+    pub task_id: String,
+    pub chat_session_id: Option<String>,
+    /// `"scheduled"` or `"manual"`.
+    pub source: String,
+    pub fired_at: String,
+    /// Dispatch error, when the fire didn't start a turn.
+    pub error: Option<String>,
+}
+
+/// `disabled_reason` written when a user pauses a task, so the UI can tell a
+/// deliberate pause apart from an automatic one (failure, archived workspace).
+pub const PAUSED_BY_USER_REASON: &str = "paused";
+
+/// When a paused or auto-disabled task should fire once resumed. Crons get
+/// their next match after `now`; a wakeup keeps its original fire time,
+/// firing right away if that passed while it was paused. A wakeup that
+/// already fired can't be resumed — "Run now" fires it again instead.
+pub fn resume_fire_time(task: &ScheduledTask, now: DateTime<Utc>) -> Result<DateTime<Utc>, String> {
+    match task.kind {
+        ScheduledTaskKind::Cron => task
+            .cron_expr
+            .as_deref()
+            .and_then(|expr| next_cron_run_utc(expr, now))
+            .ok_or_else(|| "cron expression has no upcoming fire time".to_string()),
+        ScheduledTaskKind::Wakeup => {
+            if task.last_fired_at.is_some() && task.disabled_reason.is_none() {
+                return Err("wakeup already fired; use Run now to fire it again".to_string());
+            }
+            Ok(task
+                .fire_at
+                .as_deref()
+                .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
+                .map(|dt| dt.with_timezone(&Utc).max(now))
+                .unwrap_or(now))
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

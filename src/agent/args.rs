@@ -169,6 +169,11 @@ pub fn build_claude_args(
         args.push("--mcp-config".to_string());
         args.push(mcp_json.clone());
     }
+    if let Some(disallow) = native_scheduling_disallow(settings.mcp_config.as_deref()) {
+        // `=` form: the flag is variadic, so a separate value token would
+        // also swallow any positional that follows it (the prompt).
+        args.push(format!("--disallowedTools={disallow}"));
+    }
 
     // Permission mode must be set on every turn — each `claude` invocation is
     // an independent process that doesn't inherit the previous turn's flags.
@@ -241,6 +246,25 @@ pub fn build_claude_args(
     }
 
     args
+}
+
+/// Claude Code's built-in scheduling tools. They keep their schedules inside
+/// the CLI process (session-only), so a wakeup or cron created through them
+/// never reaches Claudette's scheduler store and can't be monitored, paused,
+/// or survive a restart. The Claudette MCP server exposes durable tools under
+/// the same names (`mcp__claudette__ScheduleWakeup`, …).
+pub(crate) const NATIVE_SCHEDULING_TOOLS: &[&str] =
+    &["ScheduleWakeup", "CronCreate", "CronList", "CronDelete"];
+
+/// `--disallowedTools` value hiding [`NATIVE_SCHEDULING_TOOLS`] when the
+/// Claudette MCP server is part of `mcp_config`, so the model can only reach
+/// the durable variants. `None` when the server isn't injected — then the
+/// native tools are the only scheduling path and stay available.
+pub(super) fn native_scheduling_disallow(mcp_config: Option<&str>) -> Option<String> {
+    let cfg: serde_json::Value = serde_json::from_str(mcp_config?).ok()?;
+    cfg.get("mcpServers")?
+        .get(crate::agent_mcp::server::SERVER_NAME)?;
+    Some(NATIVE_SCHEDULING_TOOLS.join(","))
 }
 
 pub(super) fn build_settings_json(settings: &AgentSettings) -> Option<String> {
@@ -389,6 +413,20 @@ fn build_stdin_message_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_scheduling_disallow_requires_claudette_server() {
+        assert_eq!(native_scheduling_disallow(None), None);
+        assert_eq!(native_scheduling_disallow(Some("not json")), None);
+        assert_eq!(
+            native_scheduling_disallow(Some(r#"{"mcpServers":{"other":{}}}"#)),
+            None
+        );
+        assert_eq!(
+            native_scheduling_disallow(Some(r#"{"mcpServers":{"claudette":{}}}"#)).as_deref(),
+            Some("ScheduleWakeup,CronCreate,CronList,CronDelete")
+        );
+    }
 
     #[test]
     fn test_build_args_first_turn_no_tools() {

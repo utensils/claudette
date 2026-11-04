@@ -5,6 +5,7 @@ import settingsEn from "./locales/en/settings.json";
 import chatEn from "./locales/en/chat.json";
 import modalsEn from "./locales/en/modals.json";
 import sidebarEn from "./locales/en/sidebar.json";
+import schedulerEn from "./locales/en/scheduler.json";
 import commonEs from "./locales/es/common.json";
 import settingsEs from "./locales/es/settings.json";
 import chatEs from "./locales/es/chat.json";
@@ -25,11 +26,16 @@ import settingsZhCn from "./locales/zh-CN/settings.json";
 import chatZhCn from "./locales/zh-CN/chat.json";
 import modalsZhCn from "./locales/zh-CN/modals.json";
 import sidebarZhCn from "./locales/zh-CN/sidebar.json";
+import schedulerEs from "./locales/es/scheduler.json";
+import schedulerPtBr from "./locales/pt-BR/scheduler.json";
+import schedulerJa from "./locales/ja/scheduler.json";
+import schedulerZhCn from "./locales/zh-CN/scheduler.json";
 import commonDe from "./locales/de/common.json";
 import settingsDe from "./locales/de/settings.json";
 import chatDe from "./locales/de/chat.json";
 import modalsDe from "./locales/de/modals.json";
 import sidebarDe from "./locales/de/sidebar.json";
+import schedulerDe from "./locales/de/scheduler.json";
 
 export const SUPPORTED_LANGUAGES = ["en", "es", "pt-BR", "ja", "zh-CN", "de"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -42,7 +48,7 @@ void i18n.use(initReactI18next).init({
   lng: "en",
   fallbackLng: "en",
   initAsync: false,
-  ns: ["common", "settings", "chat", "modals", "sidebar"],
+  ns: ["common", "settings", "chat", "modals", "sidebar", "scheduler"],
   defaultNS: "common",
   resources: {
     en: {
@@ -51,6 +57,7 @@ void i18n.use(initReactI18next).init({
       chat: chatEn,
       modals: modalsEn,
       sidebar: sidebarEn,
+      scheduler: schedulerEn,
     },
     es: {
       common: commonEs,
@@ -58,6 +65,7 @@ void i18n.use(initReactI18next).init({
       chat: chatEs,
       modals: modalsEs,
       sidebar: sidebarEs,
+      scheduler: schedulerEs,
     },
     "pt-BR": {
       common: commonPtBr,
@@ -65,6 +73,7 @@ void i18n.use(initReactI18next).init({
       chat: chatPtBr,
       modals: modalsPtBr,
       sidebar: sidebarPtBr,
+      scheduler: schedulerPtBr,
     },
     ja: {
       common: commonJa,
@@ -72,6 +81,7 @@ void i18n.use(initReactI18next).init({
       chat: chatJa,
       modals: modalsJa,
       sidebar: sidebarJa,
+      scheduler: schedulerJa,
     },
     "zh-CN": {
       common: commonZhCn,
@@ -79,6 +89,7 @@ void i18n.use(initReactI18next).init({
       chat: chatZhCn,
       modals: modalsZhCn,
       sidebar: sidebarZhCn,
+      scheduler: schedulerZhCn,
     },
     de: {
       common: commonDe,
@@ -86,6 +97,7 @@ void i18n.use(initReactI18next).init({
       chat: chatDe,
       modals: modalsDe,
       sidebar: sidebarDe,
+      scheduler: schedulerDe,
     },
   },
   interpolation: {

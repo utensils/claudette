@@ -284,4 +284,24 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20261030161412_turn_tool_activity_agent_usage.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20261030150000_agent_scheduled_tasks_backend",
+        sql: include_str!("20261030150000_agent_scheduled_tasks_backend.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20261030150001_agent_scheduled_tasks_new_session",
+        sql: include_str!("20261030150001_agent_scheduled_tasks_new_session.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20261030150002_chat_message_scheduled_task",
+        sql: include_str!("20261030150002_chat_message_scheduled_task.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20261030150003_agent_scheduled_task_runs",
+        sql: include_str!("20261030150003_agent_scheduled_task_runs.sql"),
+        legacy_version: None,
+    },
 ];

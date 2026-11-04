@@ -88,6 +88,8 @@ const METHODS: &[&str] = &[
     "routine.list",
     "routine.delete",
     "routine.run",
+    "routine.pause",
+    "routine.resume",
     "plugin.list",
     "plugin.invoke",
     "scm.detect_provider",
@@ -443,6 +445,8 @@ pub(crate) async fn dispatch_method(
         "routine.list" => handle_routine_list(app).await,
         "routine.delete" => handle_routine_delete(app, params).await,
         "routine.run" => handle_routine_run(app, params).await,
+        "routine.pause" => handle_routine_pause(app, params).await,
+        "routine.resume" => handle_routine_resume(app, params).await,
         "plugin.list" => handle_plugin_list(app).await,
         "plugin.invoke" => handle_plugin_invoke(app, params).await,
         "scm.detect_provider" => handle_scm_detect_provider(app, params).await,
@@ -935,6 +939,8 @@ async fn handle_send_chat_message(
         parsed.disable_1m_context,
         parsed.backend_id,
         parsed.attachments,
+        // IPC / CLI sends are user-driven, never scheduler-fired.
+        None,
         app.clone(),
         state,
     )
@@ -948,7 +954,17 @@ async fn handle_schedule_wakeup(
 ) -> Result<serde_json::Value, String> {
     let session_id = string_param(params, "session_id")
         .or_else(|_| string_param(params, "chat_session_id"))
-        .or_else(|_| string_param(params, "session"))?;
+        .or_else(|_| string_param(params, "session"))
+        .ok();
+    let workspace_id = params
+        .get("workspace_id")
+        .or_else(|| params.get("workspaceId"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let create_new_session = params
+        .get("create_new_session")
+        .or_else(|| params.get("createNewSession"))
+        .and_then(|v| v.as_bool());
     let prompt = string_param(params, "prompt")?;
     let delay_seconds = params
         .get("delay_seconds")
@@ -963,13 +979,27 @@ async fn handle_schedule_wakeup(
         .get("reason")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned);
+    let backend_id = params
+        .get("backend_id")
+        .or_else(|| params.get("backendId"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let model = params
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
     let state = app_state(app)?;
     let value = crate::commands::scheduling::schedule_wakeup(
         session_id,
+        workspace_id,
+        create_new_session,
         delay_seconds,
         fire_at,
         prompt,
         reason,
+        backend_id,
+        model,
+        app.clone(),
         state,
     )
     .await?;
@@ -982,7 +1012,17 @@ async fn handle_routine_create(
 ) -> Result<serde_json::Value, String> {
     let session_id = string_param(params, "session_id")
         .or_else(|_| string_param(params, "chat_session_id"))
-        .or_else(|_| string_param(params, "session"))?;
+        .or_else(|_| string_param(params, "session"))
+        .ok();
+    let workspace_id = params
+        .get("workspace_id")
+        .or_else(|| params.get("workspaceId"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let create_new_session = params
+        .get("create_new_session")
+        .or_else(|| params.get("createNewSession"))
+        .and_then(|v| v.as_bool());
     let cron_expr = string_param(params, "cron_expr").or_else(|_| string_param(params, "cron"))?;
     let prompt = string_param(params, "prompt")?;
     let name = params
@@ -990,9 +1030,28 @@ async fn handle_routine_create(
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned);
     let recurring = params.get("recurring").and_then(|v| v.as_bool());
+    let backend_id = params
+        .get("backend_id")
+        .or_else(|| params.get("backendId"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let model = params
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
     let state = app_state(app)?;
     let value = crate::commands::scheduling::create_cron_routine(
-        session_id, name, cron_expr, prompt, recurring, state,
+        session_id,
+        workspace_id,
+        create_new_session,
+        name,
+        cron_expr,
+        prompt,
+        recurring,
+        backend_id,
+        model,
+        app.clone(),
+        state,
     )
     .await?;
     serde_json::to_value(value).map_err(|e| e.to_string())
@@ -1010,7 +1069,29 @@ async fn handle_routine_delete(
 ) -> Result<serde_json::Value, String> {
     let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
     let state = app_state(app)?;
-    crate::commands::scheduling::delete_scheduled_routine(id, state).await
+    crate::commands::scheduling::delete_scheduled_routine(id, app.clone(), state).await
+}
+
+async fn handle_routine_pause(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
+    let state = app_state(app)?;
+    let value =
+        crate::commands::scheduling::pause_scheduled_routine(id, app.clone(), state).await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+async fn handle_routine_resume(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
+    let state = app_state(app)?;
+    let value =
+        crate::commands::scheduling::resume_scheduled_routine(id, app.clone(), state).await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
 }
 
 async fn handle_routine_run(
@@ -1513,6 +1594,7 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            scheduled_task_id: None,
         }
     }
 

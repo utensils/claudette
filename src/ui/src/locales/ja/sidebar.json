@@ -31,6 +31,7 @@
   "add_repository": "リポジトリを追加",
   "add_remote": "リモートを追加",
   "back_to_dashboard": "ダッシュボードに戻る",
+  "scheduler": "ループとスケジュール",
   "expand_repo_aria": "{{name}} を展開",
   "collapse_repo_aria": "{{name}} を折りたたむ",
   "filter_workspaces": "ワークスペースを絞り込む",
@@ -89,5 +90,6 @@
   "remote_action_failed": "リモート操作に失敗しました: {{error}}",
   "remote_needs_repair": "{{name}} はこのデバイスを受け付けなくなりました。トークンで再ペアリングしてください",
   "remote_cancel_reconnect": "再接続を中止",
-  "remote_revoke_failed": "{{name}} を削除しましたが、そのマシンでのアクセスを取り消せませんでした（{{error}}）。そのマシンで「{{reset}}」を使って取り消してください。"
+  "remote_revoke_failed": "{{name}} を削除しましたが、そのマシンでのアクセスを取り消せませんでした（{{error}}）。そのマシンで「{{reset}}」を使って取り消してください。",
+  "scheduler_status": "ループ中 {{looping}} · 予定 {{scheduled}} · 要対応 {{attention}}"
 }

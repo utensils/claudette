@@ -102,6 +102,8 @@
   "model_picker_no_results": "Ningún modelo coincide",
   "model_picker_clear_search": "Borrar búsqueda",
   "you_label": "Tú",
+  "scheduled_badge": "Programado",
+  "scheduled_badge_title": "Esta indicación fue enviada por una tarea programada (icono de reloj en la barra lateral).",
   "agent_question_title": "Pregunta del agente",
   "agent_question_submit_answer": "Enviar respuesta",
   "agent_question_or_type": "O escribe tu respuesta abajo",

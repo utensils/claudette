@@ -31,6 +31,7 @@
   "add_repository": "Añadir repositorio",
   "add_remote": "Añadir remoto",
   "back_to_dashboard": "Volver al panel",
+  "scheduler": "Bucles y programados",
   "expand_repo_aria": "Expandir {{name}}",
   "collapse_repo_aria": "Contraer {{name}}",
   "filter_workspaces": "Filtrar espacios de trabajo",
@@ -89,5 +90,6 @@
   "remote_action_failed": "La acción remota falló: {{error}}",
   "remote_needs_repair": "{{name}} ya no acepta este dispositivo: vuelve a emparejar con su token",
   "remote_cancel_reconnect": "Dejar de reconectar",
-  "remote_revoke_failed": "Se quitó {{name}}, pero no se pudo revocar su acceso allí ({{error}}). Usa «{{reset}}» en esa máquina para revocarlo."
+  "remote_revoke_failed": "Se quitó {{name}}, pero no se pudo revocar su acceso allí ({{error}}). Usa «{{reset}}» en esa máquina para revocarlo.",
+  "scheduler_status": "{{looping}} en bucle · {{scheduled}} programadas · {{attention}} requieren atención"
 }

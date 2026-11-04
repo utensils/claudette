@@ -78,15 +78,14 @@ pub fn is_builtin_plugin_enabled(db: &crate::db::Database, name: &str) -> bool {
     }
 }
 
-/// System-prompt nudge appended to every fresh persistent session so the model
-/// is aware of the agent-MCP tool's purpose — the bare `tools/list` description
-/// isn't enough on its own (a model can see the tool listed and still default
-/// to "save to disk" when the user says "send me a screenshot").
-///
-/// Worded as a positive instruction with the supported-type allow-list and the
-/// failure-mode escape hatch both spelled out, so the model doesn't reach for
-/// `send_to_user` on types it can't deliver.
-pub const SYSTEM_PROMPT_NUDGE: &str = "\
+/// `send_to_user` nudge appended only when the Agent Attachments plugin is
+/// enabled. The bare `tools/list` description isn't enough on its own — a
+/// model can see the tool listed and still default to "save to disk" when
+/// the user says "send me a screenshot". Worded as a positive instruction
+/// with the supported-type allow-list and the failure-mode escape hatch
+/// both spelled out, so the model doesn't reach for `send_to_user` on types
+/// it can't deliver.
+pub const SEND_TO_USER_NUDGE: &str = "\
 Inline file delivery: this Claudette workspace exposes the MCP tool \
 `mcp__claudette__send_to_user` (server `claudette`, tool `send_to_user`). \
 When the user asks you to send / share / show them a file, call this tool \
@@ -99,16 +98,21 @@ Supported types: images (PNG/JPEG/GIF/WebP/SVG), PDF, plain text, CSV, \
 JSON, Markdown — each with its own size cap. For any other type \
 (binaries, archives, oversized files), do NOT call this tool; the call \
 will be rejected. Instead, tell the user the absolute path on disk so \
-they can open it manually.\n\
-\n\
-Native scheduling: this same server exposes `ScheduleWakeup`, `CronCreate`, \
+they can open it manually.";
+
+/// Scheduling + Monitor nudge for MCP-served harnesses (Claude / Codex).
+/// Always appended, regardless of the Agent Attachments toggle — the MCP
+/// server is now injected unconditionally, so scheduling discoverability
+/// must not regress when the user disables `send_to_user`.
+pub const MCP_SCHEDULING_NUDGE: &str = "\
+Native scheduling: this server exposes `ScheduleWakeup`, `CronCreate`, \
 `CronList`, `CronDelete`, and `Monitor`. Use `ScheduleWakeup` when you need \
 Claudette to wake this chat later with a prompt. Use the cron tools for \
 recurring routines. Use `Monitor` to subscribe to future output from a \
 background Bash task instead of polling.";
 
 /// System-prompt nudge for the interactive-prompt tools. Kept separate from
-/// [`SYSTEM_PROMPT_NUDGE`] so each feature's toggle gates only its own
+/// [`SEND_TO_USER_NUDGE`] so each feature's toggle gates only its own
 /// guidance — disabling Agent Attachments must not strip the interaction
 /// guidance, and vice versa.
 ///
@@ -135,26 +139,26 @@ shown to the user as a conclusion card. \
 `ask_user` and `request_review` block on the user, so only call them when you \
 genuinely need input — do not call them to narrate progress.";
 
-/// Build the combined system-prompt nudge for the Claudette MCP tools. The
-/// attachment section is gated on the `send_to_user` builtin toggle and the
-/// interaction section on the experimental `claudette_mcp_enabled` flag, so each
-/// is steered only when actually available. Returns `None` when neither is on.
-pub fn compose_mcp_nudge(
-    send_to_user_enabled: bool,
-    agent_interaction_enabled: bool,
-) -> Option<String> {
-    let mut parts: Vec<&str> = Vec::new();
+/// Build the combined system-prompt nudge for the Claudette MCP tools.
+/// [`MCP_SCHEDULING_NUDGE`] is always included — the server is injected
+/// unconditionally so scheduling stays discoverable regardless of toggles.
+/// The attachment section is gated on the `send_to_user` builtin toggle and
+/// the interaction section on the experimental `claudette_mcp_enabled` flag,
+/// so each is steered only when actually available.
+#[must_use]
+pub fn compose_mcp_nudge(send_to_user_enabled: bool, agent_interaction_enabled: bool) -> String {
+    let mut parts: Vec<&str> = vec![MCP_SCHEDULING_NUDGE];
     if send_to_user_enabled {
-        parts.push(SYSTEM_PROMPT_NUDGE);
+        parts.push(SEND_TO_USER_NUDGE);
     }
     if agent_interaction_enabled {
         parts.push(INTERACTION_PROMPT_NUDGE);
     }
-    (!parts.is_empty()).then(|| parts.join("\n\n"))
+    parts.join("\n\n")
 }
 
-/// Claude-CLI-only prompt rules, appended for Claude Code sessions only (Pi /
-/// Codex pass `None` — they don't expose these tools, and pointing a qwen / GPT
+/// Claude-CLI-only prompt rules, appended for Claude Code sessions only (Codex
+/// passes `None` — they don't expose these tools, and pointing a qwen / GPT
 /// model at tools that aren't registered confuses its capability self-model).
 ///
 /// The question / decision mandate is gated on `agent_interaction_enabled`
@@ -212,6 +216,32 @@ mod builtin_tests {
     }
 
     #[test]
+    fn nudge_with_send_to_user_enabled_contains_both_blocks() {
+        // Toggle on → scheduling + send_to_user, joined with a blank
+        // line. Splitting the two strings (rather than emitting one
+        // bundled `SYSTEM_PROMPT_NUDGE`) is what keeps scheduling
+        // discoverable when a user disables Agent Attachments.
+        let composed = compose_mcp_nudge(true, false);
+        assert!(composed.contains("ScheduleWakeup"));
+        assert!(composed.contains("Monitor"));
+        assert!(composed.contains("send_to_user"));
+        assert!(composed.contains("\n\n"));
+    }
+
+    #[test]
+    fn nudge_with_send_to_user_disabled_keeps_scheduling_block() {
+        // Toggle off → scheduling/Monitor guidance is still injected
+        // (the MCP server is unconditional), but the file-delivery
+        // paragraph is stripped. Pins the decoupling fix Copilot
+        // flagged on #980.
+        let composed = compose_mcp_nudge(false, false);
+        assert!(composed.contains("ScheduleWakeup"));
+        assert!(composed.contains("Monitor"));
+        assert!(!composed.contains("send_to_user"));
+        assert!(!composed.contains("Inline file delivery"));
+    }
+
+    #[test]
     fn key_format_is_stable() {
         assert_eq!(
             builtin_plugin_setting_key("send_to_user"),
@@ -250,21 +280,24 @@ mod builtin_tests {
     #[test]
     fn compose_mcp_nudge_gates_each_section_independently() {
         // Both on → both sections present.
-        let both = compose_mcp_nudge(true, true).expect("both enabled");
+        let both = compose_mcp_nudge(true, true);
         assert!(both.contains("send_to_user"));
         assert!(both.contains("ask_user"));
 
         // Only interaction → no attachment nudge.
-        let only_interaction = compose_mcp_nudge(false, true).expect("interaction enabled");
+        let only_interaction = compose_mcp_nudge(false, true);
         assert!(only_interaction.contains("ask_user"));
         assert!(!only_interaction.contains("Inline file delivery"));
 
         // Only attachments → no interaction nudge.
-        let only_attach = compose_mcp_nudge(true, false).expect("attachments enabled");
+        let only_attach = compose_mcp_nudge(true, false);
         assert!(only_attach.contains("send_to_user"));
         assert!(!only_attach.contains("Interactive user prompts"));
 
-        // Neither → no nudge at all.
-        assert!(compose_mcp_nudge(false, false).is_none());
+        // Neither → scheduling guidance only (the server is always injected).
+        let neither = compose_mcp_nudge(false, false);
+        assert!(neither.contains("ScheduleWakeup"));
+        assert!(!neither.contains("Inline file delivery"));
+        assert!(!neither.contains("Interactive user prompts"));
     }
 }

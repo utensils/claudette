@@ -24,6 +24,7 @@ use claudette::agent_mcp::tools::interaction;
 use claudette::agent_mcp::tools::send_to_user::policy;
 use claudette::db::Database;
 use claudette::model::{AgentConclusion, Attachment, AttachmentOrigin};
+use claudette::scheduling::ScheduleTarget;
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
@@ -109,6 +110,30 @@ async fn handle_payload(
             media_type,
             caption,
         } => {
+            // The Claudette MCP server is now injected unconditionally so
+            // its always-on scheduling tools reach every agent (see the
+            // wiring in commands/chat/send.rs + remote_control.rs). The
+            // "Agent Attachments" plugin toggle therefore can't gate the
+            // server's mere presence anymore — it has to gate the
+            // send_to_user call itself, here. Without this check,
+            // disabling the plugin would still let attachments through,
+            // breaking the Settings contract that turning it off removes
+            // the tool. Reusing the same `is_builtin_plugin_enabled` read
+            // the system-prompt nudge already consults.
+            let db_for_gate = match Database::open(&db_path) {
+                Ok(db) => db,
+                Err(err) => {
+                    return BridgeResponse::err(format!("open db: {err}"));
+                }
+            };
+            if !claudette::agent_mcp::is_builtin_plugin_enabled(&db_for_gate, "send_to_user") {
+                return BridgeResponse::err(
+                    "The Agent Attachments plugin is disabled. Enable it in Settings → \
+                     Plugins to deliver files inline."
+                        .to_string(),
+                );
+            }
+            drop(db_for_gate);
             send_attachment(
                 app,
                 db_path,
@@ -490,9 +515,21 @@ fn schedule_wakeup(
         Ok(db) => db,
         Err(err) => return BridgeResponse::err(format!("open db: {err}")),
     };
-    match db.create_agent_wakeup(&chat_session_id, fire_at, &prompt, reason.as_deref()) {
+    // Agent-callable scheduling doesn't pin a backend — the cron inherits
+    // the global default when it fires. Backend pinning is a frontend
+    // concern (toolbar choice via `/loop` / `/schedule`); the agent itself
+    // is already running on a backend and doesn't get to choose for the
+    // fired turn.
+    match db.create_agent_wakeup(
+        &ScheduleTarget::Session(chat_session_id),
+        fire_at,
+        &prompt,
+        reason.as_deref(),
+        None,
+        None,
+    ) {
         Ok(task) => {
-            app.state::<AppState>().scheduler_notify.notify_waiters();
+            crate::commands::scheduling::notify_schedules_changed(&app);
             BridgeResponse::data(
                 format!("Scheduled wakeup {} for {}.", task.id, fire_at.to_rfc3339()),
                 serde_json::to_value(task).unwrap_or(serde_json::Value::Null),
@@ -516,14 +553,16 @@ fn create_cron(
         Err(err) => return BridgeResponse::err(format!("open db: {err}")),
     };
     match db.create_agent_cron_task(
-        &chat_session_id,
+        &ScheduleTarget::Session(chat_session_id),
         name.as_deref(),
         &cron_expr,
         &prompt,
         recurring,
+        None,
+        None,
     ) {
         Ok(task) => {
-            app.state::<AppState>().scheduler_notify.notify_waiters();
+            crate::commands::scheduling::notify_schedules_changed(&app);
             BridgeResponse::data(
                 format!(
                     "Scheduled routine {} ({}).",
@@ -571,7 +610,7 @@ fn delete_cron(
     match db.delete_agent_scheduled_task_for_chat_session(&chat_session_id, &id) {
         Ok(0) => BridgeResponse::err(format!("No scheduled routine named {id:?}")),
         Ok(n) => {
-            app.state::<AppState>().scheduler_notify.notify_waiters();
+            crate::commands::scheduling::notify_schedules_changed(&app);
             BridgeResponse::message(format!("Deleted {n} scheduled routine(s)."))
         }
         Err(err) => BridgeResponse::err(format!("delete routine: {err}")),

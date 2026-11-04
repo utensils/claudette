@@ -57,6 +57,10 @@ import {
   type PendingChatPromptsSlice,
 } from "./slices/pendingChatPromptsSlice";
 import {
+  createSchedulingSlice,
+  type SchedulingSlice,
+} from "./slices/schedulingSlice";
+import {
   createSettingsSlice,
   type SettingsSlice,
 } from "./slices/settingsSlice";
@@ -112,6 +116,7 @@ export type AppState = RepositoriesSlice &
   UiSlice &
   PinnedPromptsSlice &
   PendingChatPromptsSlice &
+  SchedulingSlice &
   SettingsSlice &
   RemoteSlice &
   SystemSlice &
@@ -135,6 +140,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createUiSlice(...a),
   ...createPinnedPromptsSlice(...a),
   ...createPendingChatPromptsSlice(...a),
+  ...createSchedulingSlice(...a),
   ...createSettingsSlice(...a),
   ...createRemoteSlice(...a),
   ...createSystemSlice(...a),

@@ -609,7 +609,7 @@ export const createWorkspacesSlice: StateCreator<
     }),
   selectWorkspace: (id) =>
     set((s) => {
-      if (id === s.selectedWorkspaceId) return s;
+      if (id === s.selectedWorkspaceId && !s.schedulerOpen) return s;
       notifyBackendSelection(id);
       prewarmWorkspaceSelection(
         id,
@@ -649,6 +649,9 @@ export const createWorkspacesSlice: StateCreator<
 
       const updates: Partial<AppState> = {
         selectedWorkspaceId: id,
+        // Navigating to a workspace leaves the Loops-and-Schedules view, the
+        // same way it leaves the Dashboard.
+        schedulerOpen: false,
         // Selecting a workspace always wins over a project-scoped view.
         // We only clear when a workspace is being selected so explicit
         // `selectWorkspace(null)` (Back-to-Dashboard) preserves any
@@ -692,7 +695,11 @@ export const createWorkspacesSlice: StateCreator<
     }),
   selectRepository: (id) =>
     set((s) => {
-      if (id === s.selectedRepositoryId && (id === null || !s.selectedWorkspaceId)) {
+      if (
+        id === s.selectedRepositoryId &&
+        (id === null || !s.selectedWorkspaceId) &&
+        !s.schedulerOpen
+      ) {
         // No-op when we're already in this exact state — avoids a needless
         // store mutation that would re-render every subscriber.
         return s;
@@ -702,6 +709,7 @@ export const createWorkspacesSlice: StateCreator<
       if (id && s.selectedWorkspaceId) notifyBackendSelection(null);
       return {
         selectedRepositoryId: id,
+        schedulerOpen: false,
         // Picking a project clears any open workspace so the project-scoped
         // view actually surfaces. Clearing the selection (id === null) leaves
         // the workspace alone — that's just "exit project view" semantics.
@@ -710,11 +718,19 @@ export const createWorkspacesSlice: StateCreator<
     }),
   goToDashboard: () =>
     set((s) => {
-      if (s.selectedWorkspaceId === null && s.selectedRepositoryId === null) {
+      if (
+        s.selectedWorkspaceId === null &&
+        s.selectedRepositoryId === null &&
+        !s.schedulerOpen
+      ) {
         return s;
       }
       if (s.selectedWorkspaceId) notifyBackendSelection(null);
-      return { selectedWorkspaceId: null, selectedRepositoryId: null };
+      return {
+        selectedWorkspaceId: null,
+        selectedRepositoryId: null,
+        schedulerOpen: false,
+      };
     }),
   setWorkspaceEnvironment: (id, status, error) =>
     set((s) => {

@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { findPendingPlaceholderForCreatedWorkspace } from "./stores/slices/workspacesSlice";
-import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, bootOk, reportBootStage, getClaudeAuthStatus } from "./services/tauri";
+import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, bootOk, reportBootStage, getClaudeAuthStatus, SCHEDULED_TASKS_CHANGED_EVENT } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -953,6 +953,16 @@ function App() {
       store.addToast(msg);
     });
 
+    // Scheduled tasks (loops + wakeups): load the current list, then keep it
+    // live — the backend emits a change event on every create / delete /
+    // fire / failure / pause, whether it came from the GUI, the CLI, or an
+    // agent's MCP tool call. Shared by Settings → Automation, the sidebar
+    // badge, and the Loops-and-Schedules view.
+    void useAppStore.getState().loadScheduledTasks();
+    const unlistenScheduledTasks = listen(SCHEDULED_TASKS_CHANGED_EVENT, () => {
+      void useAppStore.getState().loadScheduledTasks();
+    });
+
     return () => {
       isActive = false;
       window.clearInterval(discoveredServersPollId);
@@ -973,6 +983,7 @@ function App() {
       unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
+      unlistenScheduledTasks.then((fn) => fn());
     };
   }, [setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setTerminalFontSize, setLastMessages, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteMcpEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
 

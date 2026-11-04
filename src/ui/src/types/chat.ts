@@ -14,6 +14,10 @@ export interface ChatMessage {
   output_tokens: number | null;
   cache_read_tokens: number | null;
   cache_creation_tokens: number | null;
+  /** Id of the scheduled task that injected this message (the scheduler fired
+   *  it rather than the user typing it). `null`/absent for ordinary prompts;
+   *  drives the "Scheduled" badge on the triggering user message. */
+  scheduled_task_id?: string | null;
 }
 
 export type SessionStatus = "Active" | "Archived";

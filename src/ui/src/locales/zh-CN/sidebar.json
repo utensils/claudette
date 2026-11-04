@@ -31,6 +31,7 @@
   "add_repository": "添加仓库",
   "add_remote": "添加远程",
   "back_to_dashboard": "返回仪表盘",
+  "scheduler": "循环与计划",
   "expand_repo_aria": "展开 {{name}}",
   "collapse_repo_aria": "折叠 {{name}}",
   "filter_workspaces": "筛选工作区",
@@ -89,5 +90,6 @@
   "remote_action_failed": "远程操作失败：{{error}}",
   "remote_needs_repair": "{{name}} 不再接受此设备，请使用令牌重新配对",
   "remote_cancel_reconnect": "停止重新连接",
-  "remote_revoke_failed": "已移除 {{name}}，但无法撤销其在该机器上的访问权限（{{error}}）。请在该机器上使用“{{reset}}”撤销。"
+  "remote_revoke_failed": "已移除 {{name}}，但无法撤销其在该机器上的访问权限（{{error}}）。请在该机器上使用“{{reset}}”撤销。",
+  "scheduler_status": "循环中 {{looping}} · 已计划 {{scheduled}} · 需要处理 {{attention}}"
 }

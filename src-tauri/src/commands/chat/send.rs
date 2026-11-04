@@ -36,7 +36,7 @@ use super::naming::{try_auto_rename, try_generate_session_name};
 use super::{
     ATTENTION_NOTIFY_DELAY_MS, AgentStreamPayload, AttachmentInput, AttachmentResponse,
     ChatHistoryPage, build_agent_hook_bridge, fire_completion_notification, now_iso,
-    start_bridge_and_inject_mcp, start_chat_bridge,
+    start_bridge_and_inject_mcp,
 };
 
 mod background_tasks;
@@ -332,6 +332,7 @@ fn post_agent_auth_failure_message(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id: None,
     };
 
     match Database::open(db_path).and_then(|db| db.insert_chat_message(&message)) {
@@ -789,6 +790,7 @@ fn prepare_user_send(
     message_id: Option<String>,
     content: &str,
     attachments: Option<&[AttachmentInput]>,
+    scheduled_task_id: Option<String>,
 ) -> Result<PreparedUserSend, String> {
     let user_msg = ChatMessage {
         id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
@@ -804,6 +806,7 @@ fn prepare_user_send(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        scheduled_task_id,
     };
 
     let mut att_models: Vec<claudette::model::Attachment> = Vec::new();
@@ -992,6 +995,8 @@ pub async fn steer_queued_chat_message(
         message_id,
         &content,
         attachments.as_deref(),
+        // Steering re-sends a user-edited prompt; never a scheduled fire.
+        None,
     )?;
 
     let anchor_msg_id = db
@@ -1045,7 +1050,7 @@ pub async fn steer_queued_chat_message(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
     target = "claudette::chat",
-    skip(content, mentioned_files, attachments, app, state),
+    skip(content, mentioned_files, attachments, scheduled_task_id, app, state),
     fields(
         chat_session_id = %session_id,
         message_id = message_id.as_deref(),
@@ -1071,6 +1076,10 @@ pub async fn send_chat_message(
     disable_1m_context: Option<bool>,
     backend_id: Option<String>,
     attachments: Option<Vec<AttachmentInput>>,
+    // Set by the scheduler when a scheduled task fires this prompt, so the
+    // persisted user message carries the task id for the "Scheduled" badge.
+    // `None` for ordinary user / IPC sends.
+    scheduled_task_id: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -1123,6 +1132,7 @@ pub async fn send_chat_message(
         message_id,
         &content,
         attachments.as_deref(),
+        scheduled_task_id,
     )?;
     // Resolve the backend runtime *before* persisting the user turn so
     // a harness/payload incompatibility (e.g. Pi + attachments) bails
@@ -1409,17 +1419,16 @@ pub async fn send_chat_message(
 
     // `send_to_user` is a Settings → Plugins toggle (default on); the
     // interaction tools are gated by the experimental "Claudette MCP" flag
-    // (Settings → Experimental, default OFF). They share one MCP server, so it's
-    // injected (further down, before spawn) when *either* is enabled; each
-    // feature's system-prompt nudge is gated independently.
+    // (Settings → Experimental, default OFF). They share one MCP server with the
+    // always-on scheduling tools, so it's injected unconditionally (further
+    // down, before spawn); each feature's nudge is gated independently.
     let send_to_user_enabled = claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user");
     let interaction_enabled = claudette::agent_mcp::claudette_mcp_enabled(&db);
-    let claudette_server_enabled = send_to_user_enabled || interaction_enabled;
 
     // Compose the system prompt for fresh spawns: bundled global prompt →
-    // MCP nudges (so the model reaches for `mcp__claudette__send_to_user` and
-    // the interaction tools when appropriate) → per-repo instructions. Resume
-    // turns reuse the persistent CLI process and never re-pass the prompt.
+    // MCP nudges (scheduling always; `send_to_user` and the interaction tools
+    // when their toggles are on) → per-repo instructions. Resume turns reuse
+    // the persistent CLI process and never re-pass the prompt.
     let nudge = claudette::agent_mcp::compose_mcp_nudge(send_to_user_enabled, interaction_enabled);
     // Claude CLI exposes the interactive tools via the Claudette MCP bridge, so
     // the rule block steers to ours (`mcp__claudette__ask_user`, …) when the
@@ -1428,7 +1437,7 @@ pub async fn send_chat_message(
     let claude_mcp_rules = claudette::agent_mcp::claude_code_mcp_rules(interaction_enabled);
     let custom_instructions = claudette::global_prompt::compose_system_prompt(
         session.custom_instructions.as_deref(),
-        nudge.as_deref(),
+        Some(nudge.as_str()),
         Some(claude_mcp_rules.as_str()),
     );
     session.turn_count += 1;
@@ -1855,6 +1864,7 @@ pub async fn send_chat_message(
                 output_tokens: None,
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
+                scheduled_task_id: None,
             };
             if let Err(err) = db.insert_chat_message(&warning) {
                 // Logging-only: a missing warning shouldn't block the turn.
@@ -2049,23 +2059,10 @@ pub async fn send_chat_message(
 
                 let mut respawn_settings = agent_settings.clone();
                 let bridge = match respawn_settings.backend_runtime.harness {
-                    AgentBackendRuntimeHarness::ClaudeCode => Some(if claudette_server_enabled {
-                        let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
-                            &app,
-                            &state.db_path,
-                            &workspace_id,
-                            &chat_session_id,
-                            agent_settings.mcp_config.clone(),
-                            interaction_enabled,
-                        )
-                        .await?;
-                        respawn_settings.mcp_config = mcp_with_claudette;
-                        b
-                    } else {
-                        start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id)
-                            .await?
-                    }),
-                    AgentBackendRuntimeHarness::CodexAppServer if claudette_server_enabled => {
+                    // Injected unconditionally for the same reason as the
+                    // spawn path above — scheduling tools ride this server.
+                    AgentBackendRuntimeHarness::ClaudeCode
+                    | AgentBackendRuntimeHarness::CodexAppServer => {
                         let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                             &app,
                             &state.db_path,
@@ -2078,7 +2075,6 @@ pub async fn send_chat_message(
                         respawn_settings.mcp_config = mcp_with_claudette;
                         Some(b)
                     }
-                    AgentBackendRuntimeHarness::CodexAppServer => None,
                 };
                 if let Some(bridge) = bridge.as_ref()
                     && matches!(
@@ -2231,28 +2227,23 @@ pub async fn send_chat_message(
         drop(agents);
 
         // Start the agent-MCP bridge and merge the synthetic `claudette`
-        // server entry into the spawn-time `--mcp-config` JSON when the
-        // built-in `send_to_user` plugin is enabled. The bridge is stored
-        // on the session below so it lives exactly as long as the
-        // persistent CLI process.
+        // server entry into the spawn-time `--mcp-config` JSON
+        // unconditionally for Claude / Codex — the server carries the
+        // always-on scheduling tools (ScheduleWakeup / Cron*) alongside
+        // the toggleable `send_to_user` tool, so injection cannot be
+        // gated on the Agent Attachments plugin without taking
+        // scheduling offline. The toggle now gates only that tool's
+        // call-time policy + prompt nudge, not the whole server. The
+        // bridge is stored on the session below so it lives exactly as
+        // long as the persistent CLI process.
         let mut spawn_settings = agent_settings.clone();
         let bridge = match spawn_settings.backend_runtime.harness {
-            AgentBackendRuntimeHarness::ClaudeCode => Some(if claudette_server_enabled {
-                let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
-                    &app,
-                    &state.db_path,
-                    &workspace_id,
-                    &chat_session_id,
-                    agent_settings.mcp_config.clone(),
-                    interaction_enabled,
-                )
-                .await?;
-                spawn_settings.mcp_config = mcp_with_claudette;
-                b
-            } else {
-                start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
-            }),
-            AgentBackendRuntimeHarness::CodexAppServer if claudette_server_enabled => {
+            // The Claudette MCP server carries always-on scheduling tools
+            // (ScheduleWakeup / Cron*) alongside the toggleable send_to_user
+            // tool, so it is injected unconditionally — the send_to_user
+            // plugin toggle gates that tool's prompt nudge (above), not the
+            // whole server. Codex consumes the same MCP server as Claude.
+            AgentBackendRuntimeHarness::ClaudeCode | AgentBackendRuntimeHarness::CodexAppServer => {
                 let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                     &app,
                     &state.db_path,
@@ -2265,7 +2256,6 @@ pub async fn send_chat_message(
                 spawn_settings.mcp_config = mcp_with_claudette;
                 Some(b)
             }
-            AgentBackendRuntimeHarness::CodexAppServer => None,
         };
         if let Some(bridge) = bridge.as_ref()
             && matches!(
@@ -2783,6 +2773,7 @@ pub async fn send_chat_message(
                     output_tokens: None,
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
+                    scheduled_task_id: None,
                 };
                 let _ = db.insert_chat_message(&msg);
             }
@@ -3382,6 +3373,7 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            scheduled_task_id: None,
         }
     }
 
