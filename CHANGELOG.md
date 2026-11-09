@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.29.0](https://github.com/utensils/claudette/compare/v0.28.0...v0.29.0) (2026-11-09)
+
+
+### Features
+
+* **chat:** subagent reporting, agent rollups, and transcript performance ([#1033](https://github.com/utensils/claudette/issues/1033)) ([cd6f91b](https://github.com/utensils/claudette/commit/cd6f91b79c26e32e17699867049098fbd4a9263c))
+* **models:** add Claude Fable 5.1 and make it the default Fable ([#1027](https://github.com/utensils/claudette/issues/1027)) ([68947f2](https://github.com/utensils/claudette/commit/68947f215e108ed3ca5c6d486a77e6d690afcf89))
+* **models:** add Claude Fable 5.2 and make it the default Fable ([#1034](https://github.com/utensils/claudette/issues/1034)) ([f9619cf](https://github.com/utensils/claudette/commit/f9619cfb54e5567b11c08196255478f0a4006524))
+* **models:** add Claude Opus 5.5 and GPT-6 Sol / Luna ([#1031](https://github.com/utensils/claudette/issues/1031)) ([a69a1fc](https://github.com/utensils/claudette/commit/a69a1fc496902084c4cc68c55f4038c1427dfcaf))
+* **remote:** revive remote workspaces and in-process sharing ([#1032](https://github.com/utensils/claudette/issues/1032)) ([12ed630](https://github.com/utensils/claudette/commit/12ed630d5c33e0f6f70a61b4c2472b9fc0519eca))
+* **scheduler:** monitor loops and schedules across agents ([#975](https://github.com/utensils/claudette/issues/975)) ([ea2f36b](https://github.com/utensils/claudette/commit/ea2f36b7c8fe68e29702939ae01582937d17ce64))
+
+
+### Bug Fixes
+
+* **env:** wait for shell probe before agent spawn ([#1006](https://github.com/utensils/claudette/issues/1006)) ([b663d47](https://github.com/utensils/claudette/commit/b663d47363d427f84c45a8257ea8892524da840b))
+
 ## [0.28.0](https://github.com/utensils/claudette/compare/v0.27.1...v0.28.0) (2026-08-30)
 
 
