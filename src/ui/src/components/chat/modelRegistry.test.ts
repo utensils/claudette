@@ -10,7 +10,7 @@ import {
 } from "./modelRegistry";
 
 /** Ids whose 1M window is native, so they carry no `[1m]` suffix to key off. */
-const NATIVELY_1M_IDS = ["opus", "claude-opus-5", "sonnet", "claude-fable-5-1"];
+const NATIVELY_1M_IDS = ["opus", "claude-opus-5", "sonnet", "claude-fable-5-2", "claude-fable-5-1"];
 const isNatively1m = (id: string) => NATIVELY_1M_IDS.includes(id);
 
 describe("modelRegistry", () => {
@@ -23,9 +23,9 @@ describe("modelRegistry", () => {
   });
 
   // `NATIVELY_1M_IDS` covers the entries whose ids lack the `[1m]` suffix other
-  // 1M variants use (the `opus` / `sonnet` aliases, the demoted Opus 5 id and
-  // Fable 5.1, all natively 1M). Keep the explicit id checks — dropping one
-  // would silently misclassify that model as 200k.
+  // 1M variants use (the `opus` / `sonnet` aliases, the demoted Opus 5 id, and
+  // Fable 5.2 / Fable 5.1, all natively 1M). Keep the explicit id checks —
+  // dropping one would silently misclassify that model as 200k.
   it("1M-context variants report 1_000_000", () => {
     const oneM = MODELS.filter((m) => isNatively1m(m.id) || m.id.endsWith("[1m]"));
     expect(oneM.length).toBeGreaterThan(0);
@@ -95,7 +95,8 @@ describe("modelRegistry", () => {
       expect(get1mFallback("sonnet")).toBe("sonnet");
     });
 
-    it("returns Fable 5.1 unchanged (natively 1M, no 200K variant) but still maps Fable 5 1M", () => {
+    it("returns Fable 5.2 / Fable 5.1 unchanged (natively 1M, no 200K variant) but still maps Fable 5 1M", () => {
+      expect(get1mFallback("claude-fable-5-2")).toBe("claude-fable-5-2");
       expect(get1mFallback("claude-fable-5-1")).toBe("claude-fable-5-1");
       expect(get1mFallback("claude-fable-5[1m]")).toBe("claude-fable-5");
     });

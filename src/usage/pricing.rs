@@ -110,9 +110,18 @@ const PRICING_TABLE: &[(&str, ModelPricing)] = &[
         },
     ),
     // -- Anthropic (only used when local-aggregating, e.g. via Pi) -----
-    // Fable 5.1 is the current Fable, priced identically to Fable 5 (2x Opus).
-    // It MUST stay above `claude-fable-5`: `starts_with` would otherwise collapse
-    // `claude-fable-5-1` onto the Fable 5 entry.
+    // Fable 5.2 is the current Fable, priced at 2x Opus 5.5. It MUST stay above
+    // `claude-fable-5`: `starts_with` would otherwise collapse `claude-fable-5-2`
+    // onto the Fable 5 entry (the shadowing test enforces this).
+    (
+        "claude-fable-5-2",
+        ModelPricing {
+            prompt_per_mtok_usd: 8.00,
+            completion_per_mtok_usd: 40.00,
+        },
+    ),
+    // Fable 5.1, demoted to a legacy entry when Fable 5.2 became the current
+    // Fable. Priced identically to Fable 5; same `starts_with` ordering rule.
     (
         "claude-fable-5-1",
         ModelPricing {
@@ -237,6 +246,16 @@ mod tests {
         // The 1M variant shares the bare prefix via `starts_with`.
         let one_m = lookup("claude-fable-5[1m]").expect("1M variant resolves to same pricing");
         assert!((one_m.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn lookup_fable_5_2() {
+        let p = lookup("claude-fable-5-2").expect("claude-fable-5-2 has pricing");
+        assert!((p.prompt_per_mtok_usd - 8.00).abs() < f64::EPSILON);
+        assert!((p.completion_per_mtok_usd - 40.00).abs() < f64::EPSILON);
+        // The `[1m]` gateway form shares the bare prefix via `starts_with`.
+        let one_m = lookup("claude-fable-5-2[1m]").expect("1M variant resolves to same pricing");
+        assert!((one_m.prompt_per_mtok_usd - 8.00).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -17,9 +17,9 @@ Select a model from the dropdown in the chat header. Available models:
 | **Opus 5.5** | `opus` | Latest Opus; native 1M context window (no extra usage), full effort support incl. XHigh, fast mode — Anthropic's recommended default for everyday, complex tasks |
 | **Sonnet 5** | `sonnet` | Fast and capable; native 1M context window (no extra usage), full effort support incl. XHigh |
 | **Haiku 4.5** | `haiku` | Fastest, most affordable |
-| **Fable 5.1** | `claude-fable-5-1` | Latest Fable; Anthropic's most capable widely released model. Native 1M context window (no extra usage), full effort support incl. XHigh |
+| **Fable 5.2** | `claude-fable-5-2` | Latest Fable; Anthropic's most capable widely released model. Native 1M context window (no extra usage), full effort support incl. XHigh, fast mode |
 
-Earlier-generation models (Opus 5, Fable 5, Fable 5 1M, Opus 4.8, Opus 4.8 1M, Opus 4.7, Opus 4.7 1M, Opus 4.6, Opus 4.6 1M, Opus 4.5, Sonnet 4.6, Sonnet 4.6 1M, Sonnet 4.5, Haiku 3.5) remain selectable in the picker as legacy entries.
+Earlier-generation models (Opus 5, Fable 5.1, Fable 5, Fable 5 1M, Opus 4.8, Opus 4.8 1M, Opus 4.7, Opus 4.7 1M, Opus 4.6, Opus 4.6 1M, Opus 4.5, Sonnet 4.6, Sonnet 4.6 1M, Sonnet 4.5, Haiku 3.5) remain selectable in the picker as legacy entries.
 
 The model selection is per-workspace — you can use different models for different tasks.
 
@@ -34,7 +34,7 @@ You can change the model on an active chat at any time — from the toolbar drop
 
 ### When the model's context window is too small
 
-If you switch to a model whose context window can't hold the current conversation, the agent's send fails with a "context length" / "input is too long" error. Claudette detects that error class and inlines a **"Choose a larger-context model →"** link directly into the chat error banner. Clicking it opens the toolbar's model picker so you can pick one of the 1M-context models (Opus 5.5, Sonnet 5, Fable 5.1 — all natively 1M) or another model the registry shows with a larger window. The conversation is not lost — it stays in the chat panel, and your next send under the new model will resume it via the same in-place or cross-runtime path described above.
+If you switch to a model whose context window can't hold the current conversation, the agent's send fails with a "context length" / "input is too long" error. Claudette detects that error class and inlines a **"Choose a larger-context model →"** link directly into the chat error banner. Clicking it opens the toolbar's model picker so you can pick one of the 1M-context models (Opus 5.5, Sonnet 5, Fable 5.2 — all natively 1M) or another model the registry shows with a larger window. The conversation is not lost — it stays in the chat panel, and your next send under the new model will resume it via the same in-place or cross-runtime path described above.
 
 ## Reasoning Effort
 
@@ -81,6 +81,8 @@ The block's header shows a state glyph (`◐` running, `●` done, `✕` failed,
 ## Fast Mode
 
 Fast mode prioritizes speed over depth. When enabled, the agent uses quicker, more concise responses.
+
+The toggle only appears on models that support it: Fable 5.2, Opus 5.5, and the legacy Opus 5 / Opus 4.8 entries. Selecting any other model hides it.
 
 Toggle fast mode in the chat header toolbar. Set the default in `Settings > Models > Default fast mode`.
 
