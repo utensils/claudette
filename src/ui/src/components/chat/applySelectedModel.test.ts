@@ -301,6 +301,21 @@ describe("applySelectedModel", () => {
       );
       expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
     });
+
+    it("does NOT substitute Fable 5.2 (natively 1M, no 200K variant)", async () => {
+      appStore.disable1mContext = true;
+      appStore.selectedModel["sess-1"] = "claude-fable-5";
+      appStore.selectedModelProvider["sess-1"] = "anthropic";
+
+      await applySelectedModel("sess-1", "claude-fable-5-2", "anthropic");
+
+      expect(appStore.setSelectedModel).toHaveBeenCalledWith(
+        "sess-1",
+        "claude-fable-5-2",
+        "anthropic",
+      );
+      expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
+    });
   });
 
   describe("clears stale per-session UI state on every swap", () => {

@@ -18,7 +18,7 @@ describe("isFastSupported", () => {
     expect(isFastSupported("claude-opus-4-8[1m]")).toBe(true);
   });
 
-  it("returns false for claude-opus-4-6 (fast mode is Opus 5.5 / Opus 5 / Opus 4.8 only)", () => {
+  it("returns false for claude-opus-4-6 (fast mode is Fable 5.2 / Opus 5.5 / Opus 5 / Opus 4.8 only)", () => {
     expect(isFastSupported("claude-opus-4-6")).toBe(false);
   });
 
@@ -30,11 +30,15 @@ describe("isFastSupported", () => {
     expect(isFastSupported("claude-opus-4-7")).toBe(false);
   });
 
-  it("returns false for claude-fable-5 (Opus-class but fast is Opus 5.5 / Opus 5 / Opus 4.8 only)", () => {
+  it("returns true for claude-fable-5-2 (fast mode is GA on Fable 5.2)", () => {
+    expect(isFastSupported("claude-fable-5-2")).toBe(true);
+  });
+
+  it("returns false for claude-fable-5 (no fast mode on Fable 5)", () => {
     expect(isFastSupported("claude-fable-5")).toBe(false);
   });
 
-  it("returns false for claude-fable-5-1 (Opus-class but fast is Opus 5.5 / Opus 5 / Opus 4.8 only)", () => {
+  it("returns false for claude-fable-5-1 (fast mode arrived with Fable 5.2)", () => {
     expect(isFastSupported("claude-fable-5-1")).toBe(false);
   });
 
@@ -70,6 +74,10 @@ describe("isEffortSupported", () => {
 
   it("returns true for claude-fable-5-1", () => {
     expect(isEffortSupported("claude-fable-5-1")).toBe(true);
+  });
+
+  it("returns true for claude-fable-5-2", () => {
+    expect(isEffortSupported("claude-fable-5-2")).toBe(true);
   });
 
   it("returns true for claude-fable-5[1m]", () => {
@@ -134,6 +142,10 @@ describe("isXhighEffortAllowed", () => {
     expect(isXhighEffortAllowed("claude-fable-5-1")).toBe(true);
   });
 
+  it("returns true for claude-fable-5-2", () => {
+    expect(isXhighEffortAllowed("claude-fable-5-2")).toBe(true);
+  });
+
   it("returns true for claude-opus-4-7", () => {
     expect(isXhighEffortAllowed("claude-opus-4-7")).toBe(true);
   });
@@ -183,6 +195,10 @@ describe("isMaxEffortAllowed", () => {
 
   it("returns true for claude-fable-5-1", () => {
     expect(isMaxEffortAllowed("claude-fable-5-1")).toBe(true);
+  });
+
+  it("returns true for claude-fable-5-2", () => {
+    expect(isMaxEffortAllowed("claude-fable-5-2")).toBe(true);
   });
 
   it("returns true for claude-opus-4-7", () => {
