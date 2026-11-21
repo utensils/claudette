@@ -420,9 +420,10 @@ mod tests {
         );
         let bucket = &snap.buckets[0];
         assert_eq!(bucket.key, "local_session");
-        // 1M prompt * $1.25 + 0.5M completion * $10.00 = $1.25 + $5.00 = $6.25
+        // GPT-5.4 list price: 1M prompt * $2.50 + 0.5M completion * $15.00
+        // = $2.50 + $7.50 = $10.00
         let secondary = bucket.secondary_text.as_ref().unwrap();
-        assert!(secondary.contains("$6.25"), "secondary = {secondary}");
+        assert!(secondary.contains("$10.00"), "secondary = {secondary}");
     }
 
     #[test]

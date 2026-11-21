@@ -1,4 +1,5 @@
-//! Model pricing table used by the OpenAI / OpenRouter cost path.
+//! Model pricing used by the OpenAI / OpenRouter cost path, backed by the
+//! `llm-prices` crate.
 //!
 //! Used by [`local_aggregate`](super::local_aggregate) when the
 //! `chat_messages.cost_usd` column wasn't populated by the harness
@@ -28,312 +29,122 @@ impl ModelPricing {
     }
 }
 
-/// Lookup pricing for a model id. Returns `None` for unknown models —
-/// callers should drop the dollar figure rather than guess. Matching is
+/// Lookup pricing for a model id. Returns `None` for unknown models, so
+/// callers drop the dollar figure rather than guess. Matching is
 /// case-insensitive and tolerant of common id variants (`gpt-5.4`,
-/// `gpt-5.4-2026-04-01`, `openai/gpt-5.4`, …).
+/// `gpt-5.4-2026-04-01`, `openai/gpt-5.4`, `claude-opus-5-5[1m]`, ...).
+///
+/// Rates come from the [`llm_prices`] table, which records each model's
+/// list price with the provider's pricing page and the date it was checked.
+/// A trailing context-window tag such as `[1m]` is stripped first: the
+/// gateway uses it to select the 1M-context variant, which bills at the
+/// same per-token rates as the bare model id.
 pub fn lookup(model_id: &str) -> Option<ModelPricing> {
-    let normalized = model_id.to_ascii_lowercase();
-    let normalized = normalized.rsplit('/').next().unwrap_or(&normalized);
-
-    for (prefix, pricing) in PRICING_TABLE {
-        if normalized.starts_with(prefix) {
-            return Some(*pricing);
-        }
-    }
-    None
+    let id = model_id.trim();
+    let id = match id.rfind('[') {
+        Some(i) if id.ends_with(']') => &id[..i],
+        _ => id,
+    };
+    let price = llm_prices::lookup(id)?;
+    Some(ModelPricing {
+        prompt_per_mtok_usd: price.input?,
+        completion_per_mtok_usd: price.output?,
+    })
 }
-
-/// Prefix-keyed pricing table. Order matters — longer prefixes first so
-/// `gpt-5.4-mini` doesn't accidentally match the `gpt-5.4` entry. The
-/// table covers the common defaults users actually hit; rare models
-/// fall back to "no cost displayed" rather than a wrong number.
-const PRICING_TABLE: &[(&str, ModelPricing)] = &[
-    // -- OpenAI ---------------------------------------------------------
-    // GPT-6 Sol is Codex's default starting model; Luna is the high-volume
-    // tier. Neither id is a prefix of the other, so order between them is
-    // free — but both must stay above any future bare `gpt-6` entry.
-    (
-        "gpt-6-sol",
-        ModelPricing {
-            prompt_per_mtok_usd: 2.00,
-            completion_per_mtok_usd: 10.00,
-        },
-    ),
-    (
-        "gpt-6-luna",
-        ModelPricing {
-            prompt_per_mtok_usd: 0.10,
-            completion_per_mtok_usd: 0.50,
-        },
-    ),
-    (
-        "gpt-5.4-mini",
-        ModelPricing {
-            prompt_per_mtok_usd: 0.25,
-            completion_per_mtok_usd: 2.00,
-        },
-    ),
-    (
-        "gpt-5.4",
-        ModelPricing {
-            prompt_per_mtok_usd: 1.25,
-            completion_per_mtok_usd: 10.00,
-        },
-    ),
-    (
-        "gpt-5.3-codex",
-        ModelPricing {
-            prompt_per_mtok_usd: 1.25,
-            completion_per_mtok_usd: 10.00,
-        },
-    ),
-    (
-        "gpt-5.3",
-        ModelPricing {
-            prompt_per_mtok_usd: 1.25,
-            completion_per_mtok_usd: 10.00,
-        },
-    ),
-    (
-        "gpt-4o-mini",
-        ModelPricing {
-            prompt_per_mtok_usd: 0.15,
-            completion_per_mtok_usd: 0.60,
-        },
-    ),
-    (
-        "gpt-4o",
-        ModelPricing {
-            prompt_per_mtok_usd: 2.50,
-            completion_per_mtok_usd: 10.00,
-        },
-    ),
-    // -- Anthropic (only used when local-aggregating, e.g. via Pi) -----
-    // Fable 5.2 is the current Fable, priced at 2x Opus 5.5. It MUST stay above
-    // `claude-fable-5`: `starts_with` would otherwise collapse `claude-fable-5-2`
-    // onto the Fable 5 entry (the shadowing test enforces this).
-    (
-        "claude-fable-5-2",
-        ModelPricing {
-            prompt_per_mtok_usd: 8.00,
-            completion_per_mtok_usd: 40.00,
-        },
-    ),
-    // Fable 5.1, demoted to a legacy entry when Fable 5.2 became the current
-    // Fable. Priced identically to Fable 5; same `starts_with` ordering rule.
-    (
-        "claude-fable-5-1",
-        ModelPricing {
-            prompt_per_mtok_usd: 10.00,
-            completion_per_mtok_usd: 50.00,
-        },
-    ),
-    // Fable 5 is priced at 2x Opus. The `[1m]` variant matches this same
-    // prefix via `starts_with`, so a single entry covers both ids.
-    (
-        "claude-fable-5",
-        ModelPricing {
-            prompt_per_mtok_usd: 10.00,
-            completion_per_mtok_usd: 50.00,
-        },
-    ),
-    // Opus 5.5 is the current Opus; the `opus` alias resolves here. It MUST
-    // stay above `claude-opus-5`: `starts_with` would otherwise collapse
-    // `claude-opus-5-5` onto the Opus 5 entry (the shadowing test enforces
-    // this). The `[1m]` gateway form matches via `starts_with`.
-    (
-        "claude-opus-5-5",
-        ModelPricing {
-            prompt_per_mtok_usd: 4.00,
-            completion_per_mtok_usd: 20.00,
-        },
-    ),
-    // Opus 5, demoted to a legacy entry when `opus` moved to Opus 5.5.
-    // The `[1m]` gateway form matches via `starts_with`.
-    (
-        "claude-opus-5",
-        ModelPricing {
-            prompt_per_mtok_usd: 5.00,
-            completion_per_mtok_usd: 25.00,
-        },
-    ),
-    (
-        "claude-opus-4-8",
-        ModelPricing {
-            prompt_per_mtok_usd: 5.00,
-            completion_per_mtok_usd: 25.00,
-        },
-    ),
-    (
-        "claude-opus-4-7",
-        ModelPricing {
-            prompt_per_mtok_usd: 5.00,
-            completion_per_mtok_usd: 25.00,
-        },
-    ),
-    (
-        "claude-opus-4-6",
-        ModelPricing {
-            prompt_per_mtok_usd: 5.00,
-            completion_per_mtok_usd: 25.00,
-        },
-    ),
-    (
-        "claude-opus-4-5",
-        ModelPricing {
-            prompt_per_mtok_usd: 5.00,
-            completion_per_mtok_usd: 25.00,
-        },
-    ),
-    // Sonnet 5 standard list price ($3/$15 per Mtok) — same as Sonnet 4.6.
-    // (The launch promo of $2/$10 through 2026-08-31 is intentionally not
-    // encoded; this table is a durable reference, not a billing source — the
-    // Anthropic Claude CLI path reports cost directly and bypasses this table.)
-    // A `[1m]`-suffixed gateway form (`claude-sonnet-5[1m]`) matches via `starts_with`.
-    (
-        "claude-sonnet-5",
-        ModelPricing {
-            prompt_per_mtok_usd: 3.00,
-            completion_per_mtok_usd: 15.00,
-        },
-    ),
-    (
-        "claude-sonnet-4-6",
-        ModelPricing {
-            prompt_per_mtok_usd: 3.00,
-            completion_per_mtok_usd: 15.00,
-        },
-    ),
-    (
-        "claude-haiku-4-5",
-        ModelPricing {
-            prompt_per_mtok_usd: 1.00,
-            completion_per_mtok_usd: 5.00,
-        },
-    ),
-];
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn assert_rates(id: &str, prompt: f64, completion: f64) {
+        let p = lookup(id).unwrap_or_else(|| panic!("{id} has pricing"));
+        assert!(
+            (p.prompt_per_mtok_usd - prompt).abs() < 1e-9,
+            "{id} prompt: got {}, want {prompt}",
+            p.prompt_per_mtok_usd,
+        );
+        assert!(
+            (p.completion_per_mtok_usd - completion).abs() < 1e-9,
+            "{id} completion: got {}, want {completion}",
+            p.completion_per_mtok_usd,
+        );
+    }
+
+    /// OpenAI list prices. The previous hand-written table carried GPT-5
+    /// launch rates ($1.25 / $10) for every 5.x model, which undercounted
+    /// GPT-5.4 by 2x on input and 1.5x on output.
     #[test]
-    fn lookup_known_model() {
-        let p = lookup("gpt-5.4").expect("gpt-5.4 has pricing");
-        assert!((p.prompt_per_mtok_usd - 1.25).abs() < f64::EPSILON);
+    fn openai_list_prices() {
+        assert_rates("gpt-5.4", 2.50, 15.00);
+        assert_rates("gpt-5.4-mini", 0.75, 4.50);
+        assert_rates("gpt-5.3-codex", 1.75, 14.00);
+        assert_rates("gpt-6-sol", 2.00, 10.00);
+        assert_rates("gpt-6-luna", 0.10, 0.50);
+        assert_rates("gpt-4o", 2.50, 10.00);
+        assert_rates("gpt-4o-mini", 0.15, 0.60);
+    }
+
+    /// Models the app offers that the old table had no row for, so the
+    /// usage meter showed no dollar figure at all.
+    #[test]
+    fn models_missing_from_the_old_table() {
+        assert_rates("gpt-5.5", 5.00, 30.00);
+        assert_rates("gpt-5.2", 1.75, 14.00);
+        assert_rates("claude-opus-4-20250514", 15.00, 75.00);
     }
 
     #[test]
-    fn lookup_gpt_6_sol_and_luna() {
-        let sol = lookup("gpt-6-sol").expect("gpt-6-sol has pricing");
-        assert!((sol.prompt_per_mtok_usd - 2.00).abs() < f64::EPSILON);
-        assert!((sol.completion_per_mtok_usd - 10.00).abs() < f64::EPSILON);
-        let luna = lookup("gpt-6-luna").expect("gpt-6-luna has pricing");
-        assert!((luna.prompt_per_mtok_usd - 0.10).abs() < f64::EPSILON);
-        assert!((luna.completion_per_mtok_usd - 0.50).abs() < f64::EPSILON);
-        // Dated snapshots and provider-qualified ids share the bare prefix.
-        let dated =
-            lookup("openai/gpt-6-sol-2026-09-22").expect("snapshot resolves to same pricing");
-        assert!((dated.prompt_per_mtok_usd - 2.00).abs() < f64::EPSILON);
+    fn anthropic_list_prices() {
+        assert_rates("claude-fable-5-2", 8.00, 40.00);
+        assert_rates("claude-fable-5-1", 10.00, 50.00);
+        assert_rates("claude-fable-5", 10.00, 50.00);
+        assert_rates("claude-opus-5-5", 4.00, 20.00);
+        assert_rates("claude-opus-5", 5.00, 25.00);
+        assert_rates("claude-opus-4-8", 5.00, 25.00);
+        assert_rates("claude-opus-4-5", 5.00, 25.00);
+        assert_rates("claude-sonnet-4-6", 3.00, 15.00);
+        assert_rates("claude-haiku-4-5", 1.00, 5.00);
+    }
+
+    /// Sonnet 5's $2 / $10 launch price became its standard price; the
+    /// scheduled move to $3 / $15 on 2026-09-01 was cancelled (footnote on
+    /// Anthropic's pricing page).
+    #[test]
+    fn sonnet_5_standard_price() {
+        assert_rates("claude-sonnet-5", 2.00, 10.00);
     }
 
     #[test]
-    fn lookup_fable_5_priced_at_2x_opus() {
-        let p = lookup("claude-fable-5").expect("claude-fable-5 has pricing");
-        assert!((p.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
-        assert!((p.completion_per_mtok_usd - 50.00).abs() < f64::EPSILON);
-        // The 1M variant shares the bare prefix via `starts_with`.
-        let one_m = lookup("claude-fable-5[1m]").expect("1M variant resolves to same pricing");
-        assert!((one_m.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
+    fn id_variants_resolve() {
+        // Dated snapshots and provider-qualified ids (Pi qualifies ids as
+        // `<provider>/<id>`) share the bare model's price.
+        assert_rates("openai/gpt-6-sol-2026-09-22", 2.00, 10.00);
+        assert_rates("gpt-5.4-2026-04-01", 2.50, 15.00);
+        assert_rates("openai/gpt-5.4-mini", 0.75, 4.50);
+        assert_rates("anthropic/claude-sonnet-5", 2.00, 10.00);
+        assert_rates("GPT-5.4", 2.50, 15.00);
+        // The `[1m]` gateway form bills at the bare model's rates.
+        assert_rates("claude-fable-5-2[1m]", 8.00, 40.00);
+        assert_rates("claude-opus-5-5[1m]", 4.00, 20.00);
+        assert_rates("claude-sonnet-5[1m]", 2.00, 10.00);
     }
 
     #[test]
-    fn lookup_fable_5_2() {
-        let p = lookup("claude-fable-5-2").expect("claude-fable-5-2 has pricing");
-        assert!((p.prompt_per_mtok_usd - 8.00).abs() < f64::EPSILON);
-        assert!((p.completion_per_mtok_usd - 40.00).abs() < f64::EPSILON);
-        // The `[1m]` gateway form shares the bare prefix via `starts_with`.
-        let one_m = lookup("claude-fable-5-2[1m]").expect("1M variant resolves to same pricing");
-        assert!((one_m.prompt_per_mtok_usd - 8.00).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn lookup_fable_5_1() {
-        let p = lookup("claude-fable-5-1").expect("claude-fable-5-1 has pricing");
-        assert!((p.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
-        assert!((p.completion_per_mtok_usd - 50.00).abs() < f64::EPSILON);
-        // The `[1m]` gateway form shares the bare prefix via `starts_with`.
-        let one_m = lookup("claude-fable-5-1[1m]").expect("1M variant resolves to same pricing");
-        assert!((one_m.prompt_per_mtok_usd - 10.00).abs() < f64::EPSILON);
-    }
-
-    /// The table's ordering contract, enforced table-wide: a shorter prefix
-    /// placed above a longer one that extends it would shadow the longer
-    /// entry, so every id would silently resolve to the wrong price. Fable
-    /// 5.1 and Fable 5 currently share a price, which would hide such a
-    /// regression here — this pins the structure instead of the number.
-    #[test]
-    fn no_entry_is_shadowed_by_an_earlier_prefix() {
-        for (i, (earlier, _)) in PRICING_TABLE.iter().enumerate() {
-            for (later, _) in &PRICING_TABLE[i + 1..] {
-                assert!(
-                    !later.starts_with(earlier),
-                    "`{later}` is unreachable: the earlier `{earlier}` entry matches it first",
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn lookup_opus_5_5() {
-        let p = lookup("claude-opus-5-5").expect("claude-opus-5-5 has pricing");
-        assert!((p.prompt_per_mtok_usd - 4.00).abs() < f64::EPSILON);
-        assert!((p.completion_per_mtok_usd - 20.00).abs() < f64::EPSILON);
-        // The 1M gateway form shares the bare prefix via `starts_with`.
-        let one_m = lookup("claude-opus-5-5[1m]").expect("1M variant resolves to same pricing");
-        assert!((one_m.prompt_per_mtok_usd - 4.00).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn lookup_opus_5() {
-        let p = lookup("claude-opus-5").expect("claude-opus-5 has pricing");
-        assert!((p.prompt_per_mtok_usd - 5.00).abs() < f64::EPSILON);
-        assert!((p.completion_per_mtok_usd - 25.00).abs() < f64::EPSILON);
-        // The 1M gateway form shares the bare prefix via `starts_with`.
-        let one_m = lookup("claude-opus-5[1m]").expect("1M variant resolves to same pricing");
-        assert!((one_m.prompt_per_mtok_usd - 5.00).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn lookup_sonnet_5_priced_same_as_sonnet_4_6() {
-        let p = lookup("claude-sonnet-5").expect("claude-sonnet-5 has pricing");
-        assert!((p.prompt_per_mtok_usd - 3.00).abs() < f64::EPSILON);
-        assert!((p.completion_per_mtok_usd - 15.00).abs() < f64::EPSILON);
-        // The 1M variant shares the bare prefix via `starts_with`.
-        let one_m = lookup("claude-sonnet-5[1m]").expect("1M variant resolves to same pricing");
-        assert!((one_m.prompt_per_mtok_usd - 3.00).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn lookup_handles_provider_prefix() {
-        // Pi qualifies model ids as `<provider>/<id>`; the table is
-        // keyed on the bare id.
-        let p = lookup("openai/gpt-5.4-mini").expect("provider-prefixed lookup");
-        assert!((p.prompt_per_mtok_usd - 0.25).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn longer_prefix_wins() {
-        // `gpt-5.4-mini` must not collapse onto `gpt-5.4`.
+    fn longer_id_wins() {
+        // `gpt-5.4-mini` must not collapse onto `gpt-5.4`, nor
+        // `claude-fable-5-2` onto `claude-fable-5`.
         let mini = lookup("gpt-5.4-mini").unwrap();
         let full = lookup("gpt-5.4").unwrap();
         assert!(mini.prompt_per_mtok_usd < full.prompt_per_mtok_usd);
+        let f52 = lookup("claude-fable-5-2").unwrap();
+        let f5 = lookup("claude-fable-5").unwrap();
+        assert!(f52.prompt_per_mtok_usd < f5.prompt_per_mtok_usd);
     }
 
     #[test]
     fn lookup_unknown_returns_none() {
         assert!(lookup("never-heard-of-it-2030").is_none());
+        assert!(lookup("").is_none());
     }
 
     #[test]

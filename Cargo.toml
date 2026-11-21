@@ -58,6 +58,10 @@ futures-util = "0.3"
 # on Windows. One async API for both, used by `agent_mcp::bridge` to talk to
 # the Claudette-hosted MCP grandchild that the Claude CLI spawns over stdio.
 interprocess = { version = "2", features = ["tokio"] }
+# Dated, source-cited per-model API prices (OpenAI, Anthropic, ...). Backs
+# `usage::pricing::lookup` so the Codex / OpenRouter cost estimate tracks the
+# providers' pricing pages instead of a hand-maintained table.
+llm-prices = "1.8.0"
 # Structured, span-aware logging. We use `tracing` macros across the
 # library and binary crates and configure the subscriber from
 # `claudette::logging::init` (called once from src-tauri/src/main.rs).
