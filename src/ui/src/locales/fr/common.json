@@ -1,0 +1,23 @@
+{
+  "cancel": "Annuler",
+  "save": "Enregistrer",
+  "delete": "Supprimer",
+  "close": "Fermer",
+  "browse": "Parcourir",
+  "file_picker_unavailable": "Sélecteur de fichiers indisponible — collez le chemin ci-dessus. (Installez xdg-desktop-portal sous Linux pour les boîtes de dialogue natives.)",
+  "file_picker_unavailable_attachment": "Sélecteur de fichiers indisponible — glissez-déposez plutôt les fichiers dans la zone de saisie. (Installez xdg-desktop-portal sous Linux pour les boîtes de dialogue natives.)",
+  "copy": "Copier",
+  "copied": "Copié",
+  "add": "Ajouter",
+  "edit": "Modifier",
+  "loading": "Chargement…",
+  "error": "Erreur",
+  "open": "Ouvrir",
+  "none": "Aucun",
+  "custom": "Personnalisé",
+  "more": "Plus",
+  "retry": "Réessayer",
+  "skip": "Ignorer",
+  "done": "Terminé",
+  "back_to_app": "Retour à l'app"
+}

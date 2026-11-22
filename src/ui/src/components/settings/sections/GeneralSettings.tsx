@@ -449,6 +449,7 @@ export function GeneralSettings() {
             <option value="ja">{t("general_language_ja")}</option>
             <option value="zh-CN">{t("general_language_zh_cn")}</option>
             <option value="de">{t("general_language_de")}</option>
+            <option value="fr">{t("general_language_fr")}</option>
           </select>
         </div>
       </div>

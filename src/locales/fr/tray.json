@@ -1,0 +1,21 @@
+{
+  "tooltip_all_idle": "Claudette — Tout est inactif",
+  "tooltip_running_one": "Claudette — {{count}} agent en cours",
+  "tooltip_running_other": "Claudette — {{count}} agents en cours",
+  "tooltip_needs_input_one": "Claudette — {{count}} agent attend une saisie",
+  "tooltip_needs_input_other": "Claudette — {{count}} agents attendent une saisie",
+  "status_needs_input_plan": "ℹ️ Saisie requise",
+  "status_needs_input": "❓ Saisie requise",
+  "status_running": "● En cours",
+  "status_idle": "○ Inactif",
+  "menu_settings": "Réglages",
+  "menu_show": "Afficher Claudette",
+  "menu_quit": "Quitter",
+  "quit_title": "Quitter Claudette",
+  "quit_message": "Des agents sont encore en cours. Quitter quand même ?",
+  "quit_confirm": "Quitter",
+  "quit_cancel": "Annuler",
+  "notification_title": "Claudette — Saisie requise",
+  "notification_body": "{{ws_name}} attend votre réponse",
+  "notification_unknown_workspace": "Un agent"
+}

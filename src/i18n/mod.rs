@@ -15,6 +15,7 @@ const TRAY_PT_BR: &str = include_str!("../locales/pt-BR/tray.json");
 const TRAY_JA: &str = include_str!("../locales/ja/tray.json");
 const TRAY_ZH_CN: &str = include_str!("../locales/zh-CN/tray.json");
 const TRAY_DE: &str = include_str!("../locales/de/tray.json");
+const TRAY_FR: &str = include_str!("../locales/fr/tray.json");
 
 /// Supported locales. Mirrors `SUPPORTED_LANGUAGES` in `src/ui/src/i18n.ts`;
 /// keep both lists in sync. Unknown values from the DB fall back to `En`.
@@ -26,6 +27,7 @@ pub enum Locale {
     Ja,
     ZhCn,
     De,
+    Fr,
 }
 
 impl Locale {
@@ -39,6 +41,7 @@ impl Locale {
             "ja" => Locale::Ja,
             "zh-CN" => Locale::ZhCn,
             "de" => Locale::De,
+            "fr" => Locale::Fr,
             _ => Locale::En,
         }
     }
@@ -51,6 +54,7 @@ impl Locale {
             Locale::Ja => ja_store(),
             Locale::ZhCn => zh_cn_store(),
             Locale::De => de_store(),
+            Locale::Fr => fr_store(),
         }
     }
 }
@@ -83,6 +87,11 @@ fn zh_cn_store() -> &'static HashMap<String, String> {
 fn de_store() -> &'static HashMap<String, String> {
     static DE: OnceLock<HashMap<String, String>> = OnceLock::new();
     DE.get_or_init(|| parse_locale(TRAY_DE, "de"))
+}
+
+fn fr_store() -> &'static HashMap<String, String> {
+    static FR: OnceLock<HashMap<String, String>> = OnceLock::new();
+    FR.get_or_init(|| parse_locale(TRAY_FR, "fr"))
 }
 
 fn parse_locale(raw: &str, tag: &str) -> HashMap<String, String> {
@@ -140,6 +149,8 @@ mod tests {
         assert_eq!(Locale::from_db_value(Some(" zh-CN ")), Locale::ZhCn);
         assert_eq!(Locale::from_db_value(Some("de")), Locale::De);
         assert_eq!(Locale::from_db_value(Some(" de ")), Locale::De);
+        assert_eq!(Locale::from_db_value(Some("fr")), Locale::Fr);
+        assert_eq!(Locale::from_db_value(Some(" fr ")), Locale::Fr);
     }
 
     #[test]
@@ -157,6 +168,7 @@ mod tests {
         assert_eq!(t(Locale::Ja, "menu_settings"), "設定");
         assert_eq!(t(Locale::ZhCn, "menu_settings"), "设置");
         assert_eq!(t(Locale::De, "menu_settings"), "Einstellungen");
+        assert_eq!(t(Locale::Fr, "menu_settings"), "Réglages");
     }
 
     #[test]
@@ -174,6 +186,7 @@ mod tests {
             Locale::Ja,
             Locale::ZhCn,
             Locale::De,
+            Locale::Fr,
         ] {
             let body = t_args(locale, "notification_body", &[("ws_name", "vast-daffodil")]);
             assert!(
@@ -201,6 +214,7 @@ mod tests {
             ("ja", ja_store()),
             ("zh-CN", zh_cn_store()),
             ("de", de_store()),
+            ("fr", fr_store()),
         ] {
             let other: std::collections::BTreeSet<_> = store.keys().collect();
             let only_en: Vec<_> = en.difference(&other).collect();
