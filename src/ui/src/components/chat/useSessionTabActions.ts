@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import i18n from "../../i18n";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -18,10 +19,10 @@ import type { NavEntry } from "./sessionTabsLogic";
  *  sessions without prompting" regression. */
 async function askToClose(message: string): Promise<boolean> {
   return ask(message, {
-    title: "Close session",
+    title: i18n.t("chat:session_close"),
     kind: "warning",
-    okLabel: "Close",
-    cancelLabel: "Cancel",
+    okLabel: i18n.t("chat:tab_close"),
+    cancelLabel: i18n.t("common:cancel"),
   });
 }
 

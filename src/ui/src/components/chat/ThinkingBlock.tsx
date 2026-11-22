@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Brain } from "lucide-react";
 import { useTypewriter } from "../../hooks/useTypewriter";
 import { HighlightedPlainText } from "./HighlightedPlainText";
@@ -23,8 +24,9 @@ export function ThinkingBlock({
   inline = false,
   searchQuery,
 }: ThinkingBlockProps) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(false);
-  const label = isStreaming ? "Thinking…" : "Thinking";
+  const label = isStreaming ? t("thinking_streaming") : t("thinking_chip");
   const queryMatches =
     !!searchQuery && content.toLowerCase().includes(searchQuery.toLowerCase());
   const isExpanded = inline || expanded || queryMatches;

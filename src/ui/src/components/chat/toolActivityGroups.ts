@@ -1,3 +1,4 @@
+import i18n from "../../i18n";
 import { nonEmptyStringField, parseToolInput } from "../../utils/toolInput";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { ToolActivity } from "../../stores/useAppStore";
@@ -34,7 +35,7 @@ export function groupToolActivitiesForDisplay(
       groups.push({
         key: `agents:${agentRun.map((activity) => activity.toolUseId).join(",")}`,
         kind: "agents",
-        label: `${agentRun.length} agents`,
+        label: i18n.t("chat:agents_group_label", { count: agentRun.length }),
         activities: agentRun,
       });
     }
@@ -200,7 +201,9 @@ function activityDisplayGroup(activity: ToolActivity): ToolActivityDisplayGroup 
       // Name comes from the tool input (stable from the moment the
       // tool_use arrives), not the streamed description — which the CLI
       // repoints at whichever agent is currently running.
-      label: `Workflow ${workflowDisplayName(activity.inputJson)}`,
+      label: i18n.t("chat:workflow_group_label", {
+        name: workflowDisplayName(activity.inputJson),
+      }),
       activities: [activity],
     };
   }

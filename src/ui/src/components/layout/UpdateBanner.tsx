@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   installNow,
@@ -14,6 +15,7 @@ const RELEASE_URL_BY_CHANNEL = {
 } as const;
 
 export function UpdateBanner() {
+  const { t } = useTranslation();
   const updateAvailable = useAppStore((s) => s.updateAvailable);
   const updateVersion = useAppStore((s) => s.updateVersion);
   const updateDismissed = useAppStore((s) => s.updateDismissed);
@@ -33,11 +35,11 @@ export function UpdateBanner() {
     return (
       <div className={styles.banner} role="alert">
         <span className={`${styles.message} ${styles.errorMessage}`}>
-          Update failed: {updateError}
+          {t("update_failed", { error: updateError })}
         </span>
         <div className={styles.actions}>
           <button className={styles.btnPrimary} onClick={retryInstall}>
-            Try again
+            {t("update_try_again")}
           </button>
           <button
             className={styles.btn}
@@ -45,10 +47,10 @@ export function UpdateBanner() {
               void openUrl(releaseUrl).catch(() => {});
             }}
           >
-            View release page
+            {t("update_view_release")}
           </button>
           <button className={styles.btn} onClick={dismissError}>
-            Dismiss
+            {t("update_dismiss")}
           </button>
         </div>
       </div>
@@ -64,7 +66,7 @@ export function UpdateBanner() {
     <div className={styles.banner}>
       {updateDownloading ? (
         <>
-          <span className={styles.message}>Downloading update...</span>
+          <span className={styles.message}>{t("update_downloading")}</span>
           <div className={styles.progressWrap}>
             <div className={styles.progressTrack}>
               <div
@@ -78,33 +80,39 @@ export function UpdateBanner() {
       ) : updateInstallWhenIdle ? (
         <>
           <span className={styles.message}>
-            <span className={styles.version}>v{updateVersion}</span> ready
+            <Trans
+              i18nKey="update_ready"
+              values={{ version: updateVersion }}
+              components={{ version: <span className={styles.version} /> }}
+            />
           </span>
           <span className={styles.idleMessage}>
-            Will install when all agents finish
+            {t("update_install_when_idle")}
           </span>
           <div className={styles.actions}>
             <button className={styles.btnPrimary} onClick={installNow}>
-              Install Now
+              {t("update_install_now")}
             </button>
           </div>
         </>
       ) : (
         <>
           <span className={styles.message}>
-            {productLabel}{" "}
-            <span className={styles.version}>v{updateVersion}</span> is
-            available
+            <Trans
+              i18nKey="update_available"
+              values={{ product: productLabel, version: updateVersion }}
+              components={{ version: <span className={styles.version} /> }}
+            />
           </span>
           <div className={styles.actions}>
             <button className={styles.btnPrimary} onClick={installNow}>
-              Install Now
+              {t("update_install_now")}
             </button>
             <button className={styles.btn} onClick={installWhenIdle}>
-              When Idle
+              {t("update_when_idle")}
             </button>
             <button className={styles.btn} onClick={dismiss}>
-              Dismiss
+              {t("update_dismiss")}
             </button>
           </div>
         </>

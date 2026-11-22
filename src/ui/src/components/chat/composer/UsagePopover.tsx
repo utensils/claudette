@@ -1,4 +1,5 @@
 import { type RefObject, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { UsageBucket, UsageSnapshot } from "../../../types/usage";
 import styles from "./UsagePopover.module.css";
@@ -52,6 +53,7 @@ export function UsagePopover({
   snapshot,
   activeBucketKey,
 }: UsagePopoverProps) {
+  const { t } = useTranslation("chat");
   const popoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,10 +84,10 @@ export function UsagePopover({
       ref={popoverRef}
       className={styles.popover}
       role="dialog"
-      aria-label={`Usage — ${snapshot.source_label}`}
+      aria-label={t("usage_popover_aria", { source: snapshot.source_label })}
     >
       <div className={styles.header}>
-        <span className={styles.caption}>Usage</span>
+        <span className={styles.caption}>{t("usage_caption")}</span>
         <span className={styles.tier}>{snapshot.source_label}</span>
       </div>
 

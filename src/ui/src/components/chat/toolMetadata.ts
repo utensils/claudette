@@ -1,3 +1,4 @@
+import i18n from "../../i18n";
 import { parseToolInput } from "../../utils/toolInput";
 /**
  * Per-tool display metadata: which input field carries the "primary
@@ -277,7 +278,7 @@ function displayFromField(
   if (Array.isArray(raw)) {
     if (field === "todos") {
       return {
-        summary: `${raw.length} item${raw.length !== 1 ? "s" : ""}`,
+        summary: i18n.t("chat:tool_todos_items", { count: raw.length }),
         lang: null,
         fullContent: safeStringify(raw),
       };

@@ -35,6 +35,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 vi.mock("react-i18next", () => ({
+  initReactI18next: { type: "3rdParty", init: () => {} },
   useTranslation: () => ({
     t: (key: string, values?: Record<string, unknown>) =>
       values?.name ? `${key}:${String(values.name)}` : key,

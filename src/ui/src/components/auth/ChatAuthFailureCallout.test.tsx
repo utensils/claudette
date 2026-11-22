@@ -101,7 +101,7 @@ describe("ChatAuthFailureCallout", () => {
   it("marks Codex auth failures recovered when Codex login completes", async () => {
     const element = await renderCallout();
     const button = Array.from(element.querySelectorAll("button")).find((item) =>
-      item.textContent?.includes("auth_sign_in"),
+      item.textContent?.includes("Sign in"),
     );
 
     await act(async () => {

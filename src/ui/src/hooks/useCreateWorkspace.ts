@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { useCallback, useRef, useState } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import {
@@ -338,9 +339,7 @@ async function runCreateWorkspaceOrchestrated(
       }
       useAppStore
         .getState()
-        .addToast(
-          "A workspace is already being created for this repository. Please wait for it to finish.",
-        );
+        .addToast(i18n.t("modals:workspace_creation_in_progress"));
       return null;
     }
     console.error("Failed to create workspace:", e);

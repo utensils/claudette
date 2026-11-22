@@ -1,4 +1,5 @@
 import { memo, useContext, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, FilePenLine, Pencil } from "lucide-react";
 import { relativizePath } from "../../hooks/toolSummary";
 import { bootstrapGrammarRegistry } from "../../utils/grammarRegistry";
@@ -26,6 +27,7 @@ export function InlineEditSummary({
   worktreePath?: string | null;
   onOpenFile?: (filePath: string) => void;
 }) {
+  const { t } = useTranslation("chat");
   const file = summary.files[0];
   if (!file) return null;
   // Single-file is the common case (one Edit / Write call). Multi-file
@@ -44,10 +46,10 @@ export function InlineEditSummary({
   return (
     <span className={styles.inlineEditSummary}>
       <Pencil size={12} aria-hidden="true" className={styles.inlineEditIcon} />
-      <span className={styles.inlineEditVerb}>Editing</span>
+      <span className={styles.inlineEditVerb}>{t("edit_summary_editing")}</span>
       {isMulti || !onOpenFile ? (
         <span className={styles.inlineEditPath}>
-          {isMulti ? `${summary.files.length} files` : pathContent}
+          {isMulti ? t("edit_summary_files", { count: summary.files.length }) : pathContent}
         </span>
       ) : (
         <button
@@ -85,6 +87,7 @@ export function TurnEditSummaryCard({
    *  available). */
   onOpenFile?: (filePath: string) => void;
 }) {
+  const { t } = useTranslation("chat");
   const [listExpanded, setListExpanded] = useState(false);
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
   const [previewByFile, setPreviewByFile] = useState<Record<string, PreviewState>>({});
@@ -191,7 +194,7 @@ export function TurnEditSummaryCard({
         onClick={() => setListExpanded((v) => !v)}
       >
         <span className={styles.turnEditSummaryTitle}>
-          {summary.files.length} file{summary.files.length !== 1 ? "s" : ""} changed
+          {t("edit_summary_files_changed", { count: summary.files.length })}
         </span>
         <ChangeStats added={summary.added} removed={summary.removed} />
         {listExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -237,8 +240,8 @@ export function TurnEditSummaryCard({
                     <button
                       type="button"
                       className={styles.turnEditFileActionBtn}
-                      title="Open in editor"
-                      aria-label={`Open ${file.filePath} in editor`}
+                      title={t("edit_summary_open_in_editor")}
+                      aria-label={t("edit_summary_open_in_editor_aria", { path: file.filePath })}
                       onClick={(e) => {
                         e.stopPropagation();
                         onOpenFile(file.filePath);
@@ -251,7 +254,7 @@ export function TurnEditSummaryCard({
                     <button
                       type="button"
                       className={styles.turnEditFileActionBtn}
-                      aria-label={expanded ? "Collapse preview" : "Expand preview"}
+                      aria-label={expanded ? t("edit_summary_collapse_preview") : t("edit_summary_expand_preview")}
                       aria-expanded={expanded}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -321,14 +324,15 @@ function InlineDiffPreview({
   language: string | null;
   cacheVersion: number;
 }) {
+  const { t } = useTranslation("chat");
   if (status === "loading") {
-    return <div className={styles.turnEditDiffState}>Loading diff…</div>;
+    return <div className={styles.turnEditDiffState}>{t("edit_summary_loading_diff")}</div>;
   }
   if (status === "error") {
-    return <div className={styles.turnEditDiffState}>Diff unavailable</div>;
+    return <div className={styles.turnEditDiffState}>{t("edit_summary_diff_unavailable")}</div>;
   }
   if (lines.length === 0) {
-    return <div className={styles.turnEditDiffState}>No preview lines</div>;
+    return <div className={styles.turnEditDiffState}>{t("edit_summary_no_preview_lines")}</div>;
   }
   return (
     <div className={styles.turnEditDiffPreview}>

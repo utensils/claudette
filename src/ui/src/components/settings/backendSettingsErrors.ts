@@ -1,3 +1,4 @@
+import i18n from "../../i18n";
 import type { AgentBackendConfig } from "../../services/tauri";
 
 function backendBaseUrl(backend: AgentBackendConfig): string | null {
@@ -24,11 +25,11 @@ export function formatBackendError(error: unknown, backend: AgentBackendConfig):
     lower.includes("failed to query ollama")
   ) {
     return baseUrl
-      ? `${backend.label} is not reachable at ${baseUrl}. Start the service or update the Base URL.`
-      : `${backend.label} is not reachable. Check the provider and try again.`;
+      ? i18n.t("settings:backend_error_unreachable_at", { label: backend.label, url: baseUrl })
+      : i18n.t("settings:backend_error_unreachable", { label: backend.label });
   }
   if (lower.includes("api key") || lower.includes("authentication") || lower.includes("authenticated")) {
     return message;
   }
-  return message || `${backend.label} request failed.`;
+  return message || i18n.t("settings:backend_error_request_failed", { label: backend.label });
 }

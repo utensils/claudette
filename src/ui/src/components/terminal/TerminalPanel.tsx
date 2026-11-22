@@ -10,6 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -392,6 +393,7 @@ function forwardPtyResize(
  * a split never tears down an existing instance.
  */
 export const TerminalPanel = memo(function TerminalPanel() {
+  const { t } = useTranslation();
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceEnvironmentPreparing = useAppStore((s) =>
     s.selectedWorkspaceId
@@ -659,8 +661,13 @@ export const TerminalPanel = memo(function TerminalPanel() {
     // Tauri 2 webviews silently no-op `window.confirm()` — use the
     // plugin-dialog's `ask()` so the user actually sees the prompt.
     const ok = await ask(
-      `Stop background task "${label}"?\n\nThis will terminate the running command.`,
-      { title: "Stop task", kind: "warning", okLabel: "Stop", cancelLabel: "Cancel" },
+      t("terminal_stop_task_confirm", { label }),
+      {
+        title: t("terminal_stop_task_title"),
+        kind: "warning",
+        okLabel: t("terminal_stop"),
+        cancelLabel: t("cancel"),
+      },
     );
     if (!ok) return;
     try {
@@ -668,7 +675,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     } catch (err) {
       console.error("Failed to stop agent background task:", err);
     }
-  }, []);
+  }, [t]);
 
   // When the panel gets hidden (most often because the user just closed
   // the last tab via the X button or Cmd+W on the last pane) clear the
@@ -1529,19 +1536,19 @@ export const TerminalPanel = memo(function TerminalPanel() {
       getHotkeyLabel("terminal.paste", keybindings, hotkeyIsMac) ?? undefined;
     if (contextMenu?.hasSelection) {
       items.push({
-        label: "Copy",
+        label: t("copy"),
         shortcut: copyShortcut,
         onSelect: handleCopyContextTerminal,
       });
     }
     if (contextMenu?.leafId) {
       items.push({
-        label: "Paste",
+        label: t("terminal_paste"),
         shortcut: pasteShortcut,
         onSelect: handlePasteContextTerminal,
       });
     }
-    items.push({ label: "Clear terminal", onSelect: handleClearContextTerminal });
+    items.push({ label: t("terminal_clear"), onSelect: handleClearContextTerminal });
     return items;
   }, [
     contextMenu?.hasSelection,
@@ -1551,6 +1558,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     handleCopyContextTerminal,
     handlePasteContextTerminal,
     handleClearContextTerminal,
+    t,
   ]);
 
   const handleTabContextMenu = useCallback(
@@ -1858,7 +1866,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
               ["starting", "running"].includes((tab.task_status ?? "").toLowerCase()) && (
                 <button
                   className={styles.tabStop}
-                  title="Stop background task"
+                  title={t("terminal_stop_background_task")}
                   onClick={(e) => {
                     e.stopPropagation();
                     void handleStopAgentTask(tab);
@@ -1883,8 +1891,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
           className={styles.addTab}
           onClick={handleCreateTab}
           disabled={workspaceEnvironmentPreparing}
-          aria-label="New terminal tab"
-          {...tooltipAttributes("New terminal tab", "terminal.new-tab", keybindings, hotkeyIsMac, "bottom")}
+          aria-label={t("terminal_new_tab")}
+          {...tooltipAttributes(t("terminal_new_tab"), "terminal.new-tab", keybindings, hotkeyIsMac, "bottom")}
         >
           +
         </button>
@@ -1892,8 +1900,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
         <button
           className={styles.hideBtn}
           onClick={toggleTerminalPanel}
-          aria-label="Hide terminal"
-          {...tooltipAttributes("Hide terminal", "terminal.toggle-panel", keybindings, hotkeyIsMac, "bottom")}
+          aria-label={t("terminal_hide")}
+          {...tooltipAttributes(t("terminal_hide"), "terminal.toggle-panel", keybindings, hotkeyIsMac, "bottom")}
         >
           −
         </button>

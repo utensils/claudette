@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 import type { HeatmapCell } from "../../../types/metrics";
 
@@ -17,6 +18,7 @@ export function Heatmap({
   cellSize = 11,
   gap = 2,
 }: HeatmapProps) {
+  const { t } = useTranslation();
   const max = cells.reduce((m, c) => (c.count > m ? c.count : m), 0);
   const width = weeks * (cellSize + gap) - gap;
   const height = days * (cellSize + gap) - gap;
@@ -60,7 +62,7 @@ export function Heatmap({
           fill="var(--accent-primary)"
           fillOpacity={count === 0 ? 0.06 : opacity}
         >
-          <title>{`${count} sessions`}</title>
+          <title>{t("metrics_heatmap_cell", { count })}</title>
         </rect>
       );
     }
@@ -73,7 +75,7 @@ export function Heatmap({
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="xMinYMid meet"
       role="img"
-      aria-label="session heatmap"
+      aria-label={t("metrics_heatmap_aria")}
       style={{
         aspectRatio: `${width} / ${height}`,
         ...(pxHeight !== null ? { height: `${pxHeight}px` } : null),

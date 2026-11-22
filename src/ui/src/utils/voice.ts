@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import type { VoiceProviderInfo } from "../types/voice";
 
 export const PLATFORM_VOICE_PROVIDER_ID = "voice-platform-system";
@@ -82,24 +83,26 @@ export function describeSpeechRecognitionError(
     error === "service-not-allowed" ||
     normalized.includes("permission")
   ) {
-    return "System dictation needs Microphone and Speech Recognition permission. Enable both for Claudette in System Settings, then restart the app.";
+    return i18n.t("modals:voice_err_permission");
   }
 
   if (error === "audio-capture") {
-    return "System dictation could not access a microphone. Check your input device and microphone permission.";
+    return i18n.t("modals:voice_err_audio_capture");
   }
 
   if (error === "network") {
-    return "System dictation could not reach the platform speech recognition service. Try again, or use an offline provider when available.";
+    return i18n.t("modals:voice_err_network");
   }
 
   if (error === "no-speech") {
-    return "No speech was detected. Try again closer to the microphone.";
+    return i18n.t("modals:voice_err_no_speech");
   }
 
   if (error === "language-not-supported") {
-    return "System dictation does not support the current input language.";
+    return i18n.t("modals:voice_err_language");
   }
 
-  return detail ? `System dictation failed: ${detail}` : "System dictation failed.";
+  return detail
+    ? i18n.t("modals:voice_err_failed_detail", { detail })
+    : i18n.t("modals:voice_err_failed");
 }

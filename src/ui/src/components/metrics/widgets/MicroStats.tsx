@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatTokens } from "../../chat/formatTokens";
@@ -14,6 +15,7 @@ function formatShort(n: number): string {
 }
 
 export function MicroStats({ workspaceId }: MicroStatsProps) {
+  const { t } = useTranslation();
   const stats = useAppStore((s) => s.workspaceMetrics[workspaceId]);
   if (!stats) return null;
   const { commitsCount, additions, deletions, totalInputTokens, totalOutputTokens } = stats;
@@ -29,7 +31,7 @@ export function MicroStats({ workspaceId }: MicroStatsProps) {
   const parts: ReactNode[] = [];
   if (additions > 0 || deletions > 0) {
     parts.push(
-      <span key="churn" title="lines added / removed">
+      <span key="churn" title={t("metrics_lines_added_removed")}>
         <span className={styles.microAdd}>+{formatShort(additions)}</span>
         <span className={styles.microSep}>/</span>
         <span className={styles.microDel}>-{formatShort(deletions)}</span>
@@ -37,10 +39,10 @@ export function MicroStats({ workspaceId }: MicroStatsProps) {
     );
   }
   if (commitsCount > 0) {
-    parts.push(<span key="commits" title="commits">{commitsCount}c</span>);
+    parts.push(<span key="commits" title={t("metrics_commits")}>{commitsCount}c</span>);
   }
   if (totalTokens > 0) {
-    parts.push(<span key="tokens" title="tokens (in + out)">{formatTokens(totalTokens)}t</span>);
+    parts.push(<span key="tokens" title={t("metrics_tokens_in_out")}>{formatTokens(totalTokens)}t</span>);
   }
   return (
     <div className={styles.microChip}>

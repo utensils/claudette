@@ -97,6 +97,7 @@ function pairLines(lines: DiffLine[]): SideBySideRow[] {
 
 export function DiffViewer() {
   const { t } = useTranslation("chat");
+  const { t: tModals } = useTranslation("modals");
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
   const diffSelectedLayer = useAppStore((s) => s.diffSelectedLayer);
   const diffContent = useAppStore((s) => s.diffContent);
@@ -324,7 +325,7 @@ export function DiffViewer() {
               {selectedWorkspaceId && diffSelectedFile && (
                 <IconButton
                   onClick={() => openFileTab(selectedWorkspaceId, diffSelectedFile)}
-                  tooltip="Open in editor"
+                  tooltip={tModals("diff_open_in_editor")}
                 >
                   <FilePenLine size={14} aria-hidden="true" />
                 </IconButton>

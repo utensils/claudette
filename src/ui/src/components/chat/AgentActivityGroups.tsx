@@ -127,7 +127,7 @@ export const AgentRollupGroup = memo(function AgentRollupGroup({
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
   const isExpanded = queryHasMatch || !collapsed;
-  const label = `${activities.length} agents`;
+  const label = t("agents_group_label", { count: activities.length });
 
   return (
     <div className={styles.turnSummary}>
@@ -135,7 +135,11 @@ export const AgentRollupGroup = memo(function AgentRollupGroup({
         className={styles.turnHeader}
         expanded={isExpanded}
         onToggle={onToggle}
-        ariaLabel={`${isExpanded ? "Collapse" : "Expand"} ${label}`}
+        ariaLabel={
+          isExpanded
+            ? t("disclosure_collapse_aria", { label })
+            : t("disclosure_expand_aria", { label })
+        }
         ariaControls={bodyId}
       >
         <span className={styles.turnLabel}>{label}</span>

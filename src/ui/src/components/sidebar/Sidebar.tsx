@@ -117,7 +117,7 @@ export const Sidebar = memo(function Sidebar() {
   );
   const keybindings = useAppStore((s) => s.keybindings);
   const isMac = isMacHotkeyPlatform();
-  const { t } = useTranslation("sidebar");
+  const { t } = useTranslation(["sidebar", "common"]);
 
   // Filter dropdown state
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
@@ -210,7 +210,7 @@ export const Sidebar = memo(function Sidebar() {
       },
       { type: "separator" },
       {
-        label: "Sort Workspaces Automatically",
+        label: t("common:sidebar_sort_workspaces_auto"),
         icon: <ArrowDownAZ size={14} />,
         disabled: !isManualWorkspaceOrder(manualWorkspaceOrderByRepo, repoId),
         onSelect: async () => {
@@ -250,10 +250,12 @@ export const Sidebar = memo(function Sidebar() {
       await createWorkspaceOrchestrated(repoId);
     } catch (e) {
       alert(
-        `Failed to create workspace: ${e instanceof Error ? e.message : String(e)}`,
+        t("common:sidebar_create_failed", {
+          error: e instanceof Error ? e.message : String(e),
+        }),
       );
     }
-  }, []);
+  }, [t]);
 
   const filteredWorkspaces = useMemo(
     () => filterSidebarWorkspaces(workspaces, {
@@ -1373,7 +1375,7 @@ export const Sidebar = memo(function Sidebar() {
 });
 
 function ShareButton({ openModal }: { openModal: (name: string) => void }) {
-  const { t } = useTranslation("sidebar");
+  const { t } = useTranslation(["sidebar", "common"]);
   const running = useAppStore((s) => s.localServerRunning);
   const setRunning = useAppStore((s) => s.setLocalServerRunning);
   const setConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
@@ -1393,7 +1395,7 @@ function ShareButton({ openModal }: { openModal: (name: string) => void }) {
       openModal("share");
     } catch (e) {
       console.error("Failed to start server:", e);
-      alert(`Failed to start server: ${e}`);
+      alert(t("common:sidebar_start_server_failed", { error: String(e) }));
     } finally {
       setLoading(false);
     }

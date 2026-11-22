@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { useTranslation } from "react-i18next";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Copy, ExternalLink, Globe, LoaderCircle, Power, Radio, Zap } from "lucide-react";
+import i18n from "../../../i18n";
 import { useAppStore } from "../../../stores/useAppStore";
 import {
   getClaudeRemoteControlStatus,
@@ -54,6 +56,7 @@ export function OverflowMenu({
   // (not inside `RemoteControlMenuItem`) so they survive the dropdown
   // unmount that fires whenever the menu closes — clicking outside the
   // menu would otherwise discard the queued intent before the turn ends.
+  const { t } = useTranslation("chat");
   const mutationDisabled = configDisabled || isRunning;
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -211,13 +214,13 @@ export function OverflowMenu({
 
   const queuePendingEnable = useCallback(() => {
     setPendingEnableForSession(sessionId);
-    addToast("Remote Control will enable when the current turn finishes.");
-  }, [addToast, sessionId]);
+    addToast(t("overflow_remote_pending_toast"));
+  }, [addToast, sessionId, t]);
 
   const cancelPendingEnable = useCallback(() => {
     setPendingEnableForSession(null);
-    addToast("Remote Control enable cancelled.");
-  }, [addToast]);
+    addToast(t("overflow_remote_cancelled_toast"));
+  }, [addToast, t]);
 
   useEffect(() => {
     if (!showRemoteControl) {
@@ -300,7 +303,7 @@ export function OverflowMenu({
         className={styles.trigger}
         onClick={() => setOpen((v) => !v)}
         disabled={configDisabled}
-        aria-label="More options"
+        aria-label={t("overflow_more_options")}
         aria-expanded={open}
       >
         <span className={styles.dot} />
@@ -314,18 +317,18 @@ export function OverflowMenu({
           {showFast && (
             <MenuItem
               icon={<Zap size={14} />}
-              label="Fast mode"
+              label={t("overflow_fast_mode")}
               active={fastMode}
-              meta={fastMode ? "on" : "off"}
+              meta={fastMode ? t("overflow_on") : t("overflow_off")}
               onClick={toggleFast}
               disabled={mutationDisabled}
             />
           )}
           <MenuItem
             icon={<Globe size={14} />}
-            label="Claude in Chrome"
+            label={t("overflow_chrome")}
             active={chromeEnabled}
-            meta={chromeEnabled ? "on" : "off"}
+            meta={chromeEnabled ? t("overflow_on") : t("overflow_off")}
             onClick={toggleChrome}
             disabled={mutationDisabled}
           />
@@ -368,6 +371,7 @@ function RemoteControlMenuItem({
   onQueuePending: () => void;
   onCancelPending: () => void;
 }) {
+  const { t } = useTranslation("chat");
   const url = remoteControlUrl(status);
   const pendingFirstTurn = isPendingFirstTurnRemoteControl(status);
   const busy = status.state === "enabling" && !pendingFirstTurn;
@@ -423,13 +427,13 @@ function RemoteControlMenuItem({
         onClick={active ? undefined : toggle}
         disabled={disabled || busy}
         aria-disabled={active}
-        title={detail ?? "Claude Remote Control"}
+        title={detail ?? t("overflow_remote_title")}
       >
         <span className={styles.itemIcon}>
           {busy ? <LoaderCircle size={14} className={styles.spin} /> : <Radio size={14} />}
         </span>
         <span className={styles.itemText}>
-          <span className={styles.itemLabel}>Claude Remote Control</span>
+          <span className={styles.itemLabel}>{t("overflow_remote_title")}</span>
           {displayDetail && <span className={styles.itemDetail}>{displayDetail}</span>}
         </span>
         <span className={styles.itemMeta}>{meta}</span>
@@ -443,8 +447,8 @@ function RemoteControlMenuItem({
               if (url) void openUrl(url).catch(() => {});
             }}
             disabled={!url}
-            title="Open Remote Control"
-            aria-label="Open Remote Control"
+            title={t("overflow_remote_open")}
+            aria-label={t("overflow_remote_open")}
           >
             <ExternalLink size={13} />
           </button>
@@ -455,8 +459,8 @@ function RemoteControlMenuItem({
               if (url) void writeText(url).catch(() => {});
             }}
             disabled={!url}
-            title="Copy Remote Control link"
-            aria-label="Copy Remote Control link"
+            title={t("overflow_remote_copy_link")}
+            aria-label={t("overflow_remote_copy_link")}
           >
             <Copy size={13} />
           </button>
@@ -465,8 +469,8 @@ function RemoteControlMenuItem({
             className={styles.actionButton}
             onClick={toggle}
             disabled={disabled || busy}
-            title="Turn off Remote Control"
-            aria-label="Turn off Remote Control"
+            title={t("overflow_remote_turn_off")}
+            aria-label={t("overflow_remote_turn_off")}
           >
             <Power size={13} />
           </button>
@@ -501,14 +505,14 @@ function remoteControlDisplayDetail(
   pendingEnable: boolean,
 ): string | null {
   if (pendingEnable) {
-    return "Pending — will enable when the current turn finishes.";
+    return i18n.t("chat:overflow_remote_pending_detail");
   }
   if ((status.state === "ready" || status.state === "connected") && !url) {
-    return "Waiting for Claude to publish the session link.";
+    return i18n.t("chat:overflow_remote_waiting_link");
   }
   if (!detail) return null;
   if (detail === "Session creation failed — see debug log") {
-    return "Session creation failed. Refresh Claude login, then retry.";
+    return i18n.t("chat:overflow_remote_session_failed");
   }
   return detail;
 }
@@ -535,28 +539,28 @@ function formatRemoteControlError(err: unknown): string {
       return String(err);
     }
   }
-  return String(err || "Claude Remote Control failed");
+  return String(err || i18n.t("chat:overflow_remote_failed"));
 }
 
 function remoteControlMeta(
   status: ClaudeRemoteControlStatus,
   pendingEnable: boolean,
 ): string {
-  if (pendingEnable) return "pending";
-  if (isPendingFirstTurnRemoteControl(status)) return "armed";
+  if (pendingEnable) return i18n.t("chat:overflow_remote_meta_pending");
+  if (isPendingFirstTurnRemoteControl(status)) return i18n.t("chat:overflow_remote_meta_armed");
   switch (status.state) {
     case "disabled":
-      return "off";
+      return i18n.t("chat:overflow_off");
     case "enabling":
-      return "starting";
+      return i18n.t("chat:overflow_remote_meta_starting");
     case "ready":
-      return "ready";
+      return i18n.t("chat:overflow_remote_meta_ready");
     case "connected":
-      return "live";
+      return i18n.t("chat:overflow_remote_meta_live");
     case "reconnecting":
-      return "retrying";
+      return i18n.t("chat:overflow_remote_meta_retrying");
     case "error":
-      return "error";
+      return i18n.t("chat:overflow_remote_meta_error");
   }
 }
 

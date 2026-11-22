@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 
 interface SparklineProps {
@@ -15,8 +16,9 @@ export function Sparkline({
   fill = true,
   title,
 }: SparklineProps) {
+  const { t } = useTranslation();
   if (values.length === 0) {
-    return <div className={styles.empty}>no data yet</div>;
+    return <div className={styles.empty}>{t("metrics_no_data")}</div>;
   }
 
   const max = Math.max(1, ...values);
@@ -39,7 +41,7 @@ export function Sparkline({
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
       role="img"
-      aria-label={title ?? "sparkline"}
+      aria-label={title ?? t("metrics_sparkline_aria")}
     >
       <line
         className={styles.axis}

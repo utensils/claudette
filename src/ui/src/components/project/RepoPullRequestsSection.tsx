@@ -8,6 +8,7 @@ import {
   GitPullRequestDraft,
   RefreshCw,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { openUrl } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { useRepoOpenPullRequests } from "../../hooks/useRepoOpenPullRequests";
@@ -29,11 +30,11 @@ import {
 const DEFAULT_VISIBLE = 10;
 const ALL_VISIBLE_LIMIT = 50;
 
-const SCOPES: { value: PullRequestScope; label: string }[] = [
-  { value: "open", label: "Open" },
-  { value: "mine", label: "Mine" },
-  { value: "review_requested", label: "Review" },
-];
+const SCOPES = [
+  { value: "open", labelKey: "repo_scope_open" },
+  { value: "mine", labelKey: "repo_scope_mine" },
+  { value: "review_requested", labelKey: "repo_scope_review" },
+] as const satisfies readonly { value: PullRequestScope; labelKey: string }[];
 
 export interface RepoPullRequestsSectionProps {
   repoId: string;
@@ -42,6 +43,7 @@ export interface RepoPullRequestsSectionProps {
 export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
   repoId,
 }: RepoPullRequestsSectionProps) {
+  const { t } = useTranslation();
   const [scope, setScope] = useState<PullRequestScope>("open");
   const { payload, isStale, loading, refresh } = useRepoOpenPullRequests(
     repoId,
@@ -80,9 +82,9 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
   const handleCopyUrl = async (url: string) => {
     try {
       await navigator.clipboard.writeText(url);
-      addToast("URL copied");
+      addToast(t("repo_url_copied"));
     } catch {
-      addToast("Failed to copy URL");
+      addToast(t("repo_url_copy_failed"));
     }
   };
 
@@ -95,13 +97,13 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
     try {
       const created = await createWorkspaceOrchestrated(repoId);
       if (created) {
-        addToast(`Workspace ready (default branch). PR head: ${pr.branch}`);
+        addToast(t("repo_pr_workspace_ready", { branch: pr.branch }));
       }
     } catch (e) {
       addToast(
-        `Failed to create workspace: ${
-          e instanceof Error ? e.message : String(e)
-        }`,
+        t("repo_create_failed", {
+          error: e instanceof Error ? e.message : String(e),
+        }),
       );
     }
   };
@@ -117,7 +119,7 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
         >
           {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <GitPullRequest size={12} className={dashStyles.archivedIcon} aria-hidden />
-          <span className={dashStyles.workspacesTitle}>Pull Requests</span>
+          <span className={dashStyles.workspacesTitle}>{t("repo_prs_title")}</span>
           {prs.length > 0 && (
             // Bare count, no " open" suffix: the count tracks whatever
             // scope is active (Open / Mine / Review), and "open" was
@@ -140,7 +142,7 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
                   setShowAll(false);
                 }}
               >
-                {s.label}
+                {t(s.labelKey)}
               </button>
             ))}
           </div>
@@ -149,8 +151,8 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
             className={styles.refreshButton}
             onClick={() => void refresh()}
             disabled={loading}
-            title="Refresh"
-            aria-label="Refresh pull requests"
+            title={t("repo_refresh")}
+            aria-label={t("repo_prs_refresh")}
           >
             <RefreshCw
               size={12}
@@ -222,6 +224,7 @@ function RepoPullRequestsBody({
   onCopyUrl,
   onCreateWorkspaceForBranch,
 }: RepoPullRequestsBodyProps) {
+  const { t } = useTranslation();
   // Render the skeleton whenever we don't yet have a payload for this
   // (repo, scope) pair — see RepoIssuesSection's RepoIssuesBody for the
   // rationale. Switching scope tabs selects a store slot that may be
@@ -233,7 +236,7 @@ function RepoPullRequestsBody({
   if (payload?.unsupported) {
     return (
       <div className={styles.muted}>
-        Pull requests are not supported by this provider.
+        {t("repo_prs_unsupported")}
       </div>
     );
   }
@@ -244,19 +247,19 @@ function RepoPullRequestsBody({
   if (payload?.error && !hasCachedRows) {
     return (
       <div className={styles.error}>
-        <span>Could not load pull requests.</span>
+        <span>{t("repo_prs_load_failed")}</span>
         <button
           type="button"
           className={styles.retryButton}
           onClick={onRetry}
         >
-          Retry
+          {t("repo_retry")}
         </button>
       </div>
     );
   }
   if (!hasCachedRows) {
-    return <div className={styles.muted}>No open pull requests.</div>;
+    return <div className={styles.muted}>{t("repo_prs_none_open")}</div>;
   }
 
   const renderRow = (pr: PullRequest) => (
@@ -272,7 +275,7 @@ function RepoPullRequestsBody({
   const showAllRow = !showAll && restTotal > visibleRest.length && (
     <li>
       <button type="button" className={styles.retryButton} onClick={onShowAll}>
-        Show all ({restTotal})
+        {t("repo_show_all", { count: restTotal })}
       </button>
     </li>
   );
@@ -286,13 +289,13 @@ function RepoPullRequestsBody({
     <div className={staleClass} aria-busy={isStale || undefined}>
       {payload?.error && (
         <div className={styles.errorBanner}>
-          <span>Could not refresh pull requests — showing cached results.</span>
+          <span>{t("repo_prs_refresh_failed")}</span>
           <button
             type="button"
             className={styles.retryButton}
             onClick={onRetry}
           >
-            Retry
+            {t("repo_retry")}
           </button>
         </div>
       )}
@@ -300,10 +303,10 @@ function RepoPullRequestsBody({
         // Dispatched PRs get their own group above the rest; flat list
         // when nothing is dispatched keeps the common case unchanged.
         <>
-          <RepoListGroup label="In progress" count={inProgress.length} accent>
+          <RepoListGroup label={t("repo_group_in_progress")} count={inProgress.length} accent>
             <ul className={styles.list}>{inProgress.map(renderRow)}</ul>
           </RepoListGroup>
-          <RepoListGroup label="Open" count={restTotal}>
+          <RepoListGroup label={t("repo_group_open")} count={restTotal}>
             <ul className={styles.list}>
               {visibleRest.map(renderRow)}
               {showAllRow}
@@ -335,6 +338,7 @@ function PullRequestRow({
   onCopyUrl,
   onCreateWorkspaceForBranch,
 }: PullRequestRowProps) {
+  const { t } = useTranslation();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const registry = useModelRegistry();
   const addToast = useAppStore((s) => s.addToast);
@@ -342,13 +346,13 @@ function PullRequestRow({
   const linked = useWorkspaceScmLink(repoId, "pr", pr.number);
 
   const items: ContextMenuItem[] = [
-    { label: "Open in browser", onSelect: () => onOpen(pr.url) },
-    { label: "Copy URL", onSelect: () => onCopyUrl(pr.url) },
+    { label: t("repo_open_in_browser"), onSelect: () => onOpen(pr.url) },
+    { label: t("repo_copy_url"), onSelect: () => onCopyUrl(pr.url) },
     {
       // Honest label: this creates a workspace on the repo's default
       // branch, NOT the PR head — see handleCreateWorkspaceInRepo in
       // the parent component for the follow-up tracker.
-      label: "New workspace in this repo",
+      label: t("repo_pr_new_workspace_in_repo"),
       onSelect: () => onCreateWorkspaceForBranch(pr),
     },
     { type: "separator" },
@@ -357,14 +361,14 @@ function PullRequestRow({
     ...(linked
       ? ([
           {
-            label: `Go to workspace “${linked.workspaceName}”`,
+            label: t("repo_go_to_workspace", { name: linked.workspaceName }),
             onSelect: () => selectWorkspace(linked.workspaceId),
           },
         ] satisfies ContextMenuItem[])
       : []),
     {
       type: "submenu",
-      label: "Send to new workspace",
+      label: t("repo_send_to_new_workspace"),
       children: buildModelSubmenuItems(registry, async (model) => {
         try {
           await sendToNewWorkspace({
@@ -379,9 +383,9 @@ function PullRequestRow({
           });
         } catch (e) {
           addToast(
-            `Failed to send to new workspace: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
+            t("repo_send_failed", {
+              error: e instanceof Error ? e.message : String(e),
+            }),
           );
         }
       }),

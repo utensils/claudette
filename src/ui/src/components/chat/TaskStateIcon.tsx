@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "./TaskStateIcon.module.css";
 
 /** Normalized lifecycle state shared by workflow agents and subagents. */
@@ -50,11 +51,15 @@ export function TaskStateIcon({
   label?: string;
   className?: string;
 }) {
+  const { t } = useTranslation("chat");
+  const stateLabel = t(`task_state_${state || "queued"}`, {
+    defaultValue: state || "queued",
+  });
   return (
     <span
       className={`${styles.icon} ${stateClass(state)}${className ? ` ${className}` : ""}`}
       role="img"
-      aria-label={label ?? (state || "queued")}
+      aria-label={label ?? stateLabel}
     >
       {taskStateGlyph(state)}
     </span>

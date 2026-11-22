@@ -288,7 +288,7 @@ export function ChatPanelSessionView({
                       size={14}
                       className={styles.loadingOlderSpinner}
                     />
-                    Loading older messages…
+                    {t("loading_older_messages")}
                   </div>
                 )}
                 {activeSessionId && selectedWorkspaceId && (

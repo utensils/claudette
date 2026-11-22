@@ -1,8 +1,10 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import styles from "./FuzzyFinder.module.css";
 
 export function FuzzyFinder() {
+  const { t } = useTranslation();
   const workspaces = useAppStore((s) => s.workspaces);
   const repositories = useAppStore((s) => s.repositories);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
@@ -54,12 +56,12 @@ export function FuzzyFinder() {
             setSelectedIndex(0);
           }}
           onKeyDown={handleKeyDown}
-          placeholder="Search workspaces..."
+          placeholder={t("fuzzy_placeholder")}
           autoFocus
         />
         <div className={styles.results}>
           {results.length === 0 ? (
-            <div className={styles.empty}>No matching workspaces</div>
+            <div className={styles.empty}>{t("fuzzy_empty")}</div>
           ) : (
             results.map((ws, i) => {
               const repo = repositories.find(

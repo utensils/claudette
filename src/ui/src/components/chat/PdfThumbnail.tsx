@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { FileText } from "lucide-react";
 import { loadAttachmentData } from "../../services/tauri";
 import { base64ToBytes } from "../../utils/base64";
@@ -31,6 +32,7 @@ export function PdfThumbnail({
    *  WebKit's default image menu. See issue 430. */
   onContextMenu?: (e: React.MouseEvent) => void;
 }) {
+  const { t } = useTranslation("chat");
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -67,7 +69,7 @@ export function PdfThumbnail({
             onClick();
           }
         },
-        "aria-label": `Open ${filename}`,
+        "aria-label": t("attachment_open_aria", { filename }),
       }
     : {};
   if (!src) {

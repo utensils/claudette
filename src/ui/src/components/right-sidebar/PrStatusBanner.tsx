@@ -11,6 +11,8 @@ import {
   ExternalLink,
   LoaderCircle,
 } from "lucide-react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import { openUrl } from "../../services/tauri";
 import { usePrBannerData, type BannerStatus } from "../../hooks/usePrBannerData";
 import type { CiCheck } from "../../types/plugin";
@@ -24,50 +26,50 @@ import styles from "./PrStatusBanner.module.css";
 const STATUS_CONFIG: Record<
   BannerStatus,
   {
-    text: string;
+    textKey: ParseKeys;
     icon: typeof GitPullRequestArrow;
     bannerClass: string;
     fgClass: string;
   }
 > = {
   ready: {
-    text: "Ready to merge",
+    textKey: "pr_banner_ready",
     icon: GitPullRequestArrow,
     bannerClass: styles.bannerReady,
     fgClass: styles.fgReady,
   },
   "ci-pending": {
-    text: "CI running",
+    textKey: "pr_banner_ci_pending",
     icon: GitPullRequestArrow,
     bannerClass: styles.bannerPending,
     fgClass: styles.fgPending,
   },
   "ci-failed": {
-    text: "CI failed",
+    textKey: "pr_banner_ci_failed",
     icon: GitPullRequestArrow,
     bannerClass: styles.bannerFailed,
     fgClass: styles.fgFailed,
   },
   open: {
-    text: "Open",
+    textKey: "pr_banner_open",
     icon: GitPullRequestArrow,
     bannerClass: styles.bannerOpen,
     fgClass: styles.fgOpen,
   },
   draft: {
-    text: "Draft",
+    textKey: "pr_banner_draft",
     icon: GitPullRequestDraft,
     bannerClass: styles.bannerDraft,
     fgClass: styles.fgDraft,
   },
   merged: {
-    text: "Merged",
+    textKey: "pr_banner_merged",
     icon: GitMerge,
     bannerClass: styles.bannerMerged,
     fgClass: styles.fgMerged,
   },
   closed: {
-    text: "Closed",
+    textKey: "pr_banner_closed",
     icon: GitPullRequestClosed,
     bannerClass: styles.bannerClosed,
     fgClass: styles.fgClosed,
@@ -75,6 +77,7 @@ const STATUS_CONFIG: Record<
 };
 
 export const PrStatusBanner = memo(function PrStatusBanner() {
+  const { t } = useTranslation();
   const { pr, checks, status } = usePrBannerData();
   const [checksOpen, setChecksOpen] = useState(false);
   const checksPanelId = useId();
@@ -93,7 +96,7 @@ export const PrStatusBanner = memo(function PrStatusBanner() {
         type="button"
         className={`${styles.prPill} ${config.fgClass}`}
         onClick={() => openUrl(pr.url)}
-        title={`Open PR #${pr.number} in browser`}
+        title={t("pr_banner_open_in_browser", { number: pr.number })}
       >
         <Icon size={14} />
         <span className={styles.prNumber}>#{pr.number}</span>
@@ -110,7 +113,7 @@ export const PrStatusBanner = memo(function PrStatusBanner() {
           aria-haspopup="dialog"
           title={checksSummary.title}
         >
-          <span className={styles.statusText}>{config.text}</span>
+          <span className={styles.statusText}>{t(config.textKey)}</span>
           <span className={styles.statusCount}>{checksSummary.total}</span>
           <ChevronRight
             size={14}
@@ -120,7 +123,7 @@ export const PrStatusBanner = memo(function PrStatusBanner() {
         </button>
       ) : (
         <span className={`${styles.statusText} ${styles.statusSolo} ${config.fgClass}`}>
-          {config.text}
+          {t(config.textKey)}
         </span>
       )}
 
@@ -158,6 +161,7 @@ function checkSummaryStatus(summary: ReturnType<typeof summarizeCiChecks>): CiCh
 }
 
 function CheckRow({ check }: { check: CiCheck }) {
+  const { t } = useTranslation();
   const content = (
     <>
       <CheckStatusIcon status={check.status} />
@@ -173,7 +177,7 @@ function CheckRow({ check }: { check: CiCheck }) {
         type="button"
         className={`${styles.checkRow} ${styles.checkRowLink}`}
         onClick={() => openUrl(check.url!)}
-        title={`Open ${check.name} check details`}
+        title={t("pr_banner_check_details", { name: check.name })}
       >
         {content}
       </button>

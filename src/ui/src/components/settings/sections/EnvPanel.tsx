@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../../../stores/useAppStore";
 import { useCopyToClipboard } from "../../../hooks/useCopyToClipboard";
@@ -25,6 +27,8 @@ import { summarizeError } from "../../modals/envTrustFormat";
 import { envProviderCategoryColor } from "./envProviderCategory";
 import styles from "../Settings.module.css";
 
+type TFn = TFunction<"settings">;
+
 interface EnvPanelProps {
   target: EnvTarget;
 }
@@ -46,15 +50,15 @@ function stateColor(source: EnvSourceInfo): string {
   return source.cached ? "var(--status-idle)" : "var(--status-running)";
 }
 
-function stateBadge(source: EnvSourceInfo): string {
+function stateBadge(t: TFn, source: EnvSourceInfo): string {
   // "not installed" is a system-capability state — distinct from
   // "disabled" (user toggled off) so users know whether the fix is
   // toggling Claudette or installing the underlying tool.
-  if (source.unavailable) return "not installed";
-  if (!source.enabled) return "disabled";
-  if (source.error) return "error";
-  if (!source.detected) return "not detected";
-  return source.cached ? "cached" : "fresh";
+  if (source.unavailable) return t("env_panel_state_not_installed");
+  if (!source.enabled) return t("env_panel_state_disabled");
+  if (source.error) return t("env_panel_state_error");
+  if (!source.detected) return t("env_panel_state_not_detected");
+  return source.cached ? t("env_panel_state_cached") : t("env_panel_state_fresh");
 }
 
 /**
@@ -64,31 +68,31 @@ function stateBadge(source: EnvSourceInfo): string {
  * fallback for third-party providers names "the required CLI" so we
  * never claim it's a specific tool we don't know about.
  */
-function unavailableTooltip(pluginName: string): string {
+function unavailableTooltip(t: TFn, pluginName: string): string {
   // CLI availability is probed once at PluginRegistry discovery; the
   // user has to restart Claudette to pick up a newly-installed tool.
   // Be explicit so the toggle's tooltip doesn't promise live recovery.
-  const restartHint = "Install it and restart Claudette to enable this provider.";
+  const restartHint = t("env_panel_restart_hint");
   switch (pluginName) {
     case "env-nix-devshell":
-      return `Install \`nix\` and restart Claudette to enable this provider.`;
+      return t("env_panel_install_tool_tooltip", { tool: "nix" });
     case "env-mise":
-      return `Install \`mise\` and restart Claudette to enable this provider.`;
+      return t("env_panel_install_tool_tooltip", { tool: "mise" });
     case "env-direnv":
-      return `Install \`direnv\` and restart Claudette to enable this provider.`;
+      return t("env_panel_install_tool_tooltip", { tool: "direnv" });
     default:
-      return `The required CLI for this provider is not on PATH. ${restartHint}`;
+      return t("env_panel_cli_missing_tooltip", { hint: restartHint });
   }
 }
 
-function formatRelativeTime(ms: number): string {
+function formatRelativeTime(t: TFn, ms: number): string {
   if (!ms) return "";
   const now = Date.now();
   const diff = Math.max(0, now - ms);
-  if (diff < 5_000) return "just now";
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  if (diff < 5_000) return t("env_panel_time_just_now");
+  if (diff < 60_000) return t("env_panel_time_seconds_ago", { count: Math.floor(diff / 1000) });
+  if (diff < 3_600_000) return t("env_panel_time_minutes_ago", { count: Math.floor(diff / 60_000) });
+  if (diff < 86_400_000) return t("env_panel_time_hours_ago", { count: Math.floor(diff / 3_600_000) });
   return new Date(ms).toLocaleDateString();
 }
 
@@ -134,6 +138,7 @@ function isTrustClassError(error: string | null | undefined): boolean {
  * outside Claudette and wanting the new state reflected immediately.
  */
 export function EnvPanel({ target }: EnvPanelProps) {
+  const { t } = useTranslation("settings");
   const [sources, setSources] = useState<EnvSourceInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -608,7 +613,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
   if (fetchError) {
     return (
       <div className={styles.mcpError} role="alert">
-        Failed to load environment providers: {fetchError}
+        {t("env_panel_load_failed", { error: fetchError })}
       </div>
     );
   }
@@ -618,13 +623,13 @@ export function EnvPanel({ target }: EnvPanelProps) {
   // otherwise the placeholder rows let the user see + toggle providers
   // immediately.
   if (loading && sources === null) {
-    return <div className={styles.settingDescription}>Loading…</div>;
+    return <div className={styles.settingDescription}>{t("env_panel_loading")}</div>;
   }
 
   if (!sources || sources.length === 0) {
     return (
       <div className={styles.settingDescription}>
-        No environment providers installed.
+        {t("env_panel_none_installed")}
       </div>
     );
   }
@@ -632,11 +637,16 @@ export function EnvPanel({ target }: EnvPanelProps) {
   return (
     <>
       <div className={styles.settingDescription}>
-        Tools whose env is merged into every subprocess Claudette spawns
-        for this {target.kind === "repo" ? "repository" : "workspace"}.
-        Cached results invalidate automatically when watched files
-        (<code>.envrc</code>, <code>mise.toml</code>, <code>.env</code>,{" "}
-        <code>flake.lock</code>) change.
+        <Trans
+          i18nKey="env_panel_description"
+          ns="settings"
+          values={{
+            kind: target.kind === "repo"
+              ? t("env_panel_kind_repo")
+              : t("env_panel_kind_workspace"),
+          }}
+          components={{ code: <code /> }}
+        />
       </div>
 
       {envProgress?.status === "preparing" && envProgress.current_plugin && (
@@ -653,10 +663,14 @@ export function EnvPanel({ target }: EnvPanelProps) {
               active plugin + elapsed counter mirrors the sidebar's
               loading hint so the same data shows up wherever a
               resolve is visible. */}
-          Resolving <strong>{envProgress.current_plugin}</strong>… {elapsedSec}
-          s elapsed
+          <Trans
+            i18nKey="env_panel_resolving"
+            ns="settings"
+            values={{ plugin: envProgress.current_plugin, seconds: elapsedSec }}
+            components={{ strong: <strong /> }}
+          />
           {elapsedSec > 30 && (
-            <> · cold flakes can take 60–120 seconds on first run</>
+            <> · {t("env_panel_cold_flakes")}</>
           )}
         </div>
       )}
@@ -693,7 +707,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
           const toggleOn = source.enabled && !source.unavailable;
           const toggleDisabled = source.unavailable;
           const toggleTitle = source.unavailable
-            ? unavailableTooltip(source.plugin_name)
+            ? unavailableTooltip(t, source.plugin_name)
             : undefined;
           // Show the inline Settings drawer only when:
           //   1. We're in repo mode (per-repo overrides only make
@@ -733,7 +747,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
                   <span
                     className={styles.mcpStatusDot}
                     style={{ background: stateColor(source) }}
-                    title={stateBadge(source)}
+                    title={stateBadge(t, source)}
                   />
                   <span
                     className={`${styles.mcpName} ${!source.enabled || source.unavailable ? styles.mcpNameDisabled : ""}`}
@@ -744,21 +758,20 @@ export function EnvPanel({ target }: EnvPanelProps) {
                     className={styles.mcpBadge}
                     title={
                       source.unavailable
-                        ? unavailableTooltip(source.plugin_name)
+                        ? unavailableTooltip(t, source.plugin_name)
                         : undefined
                     }
                   >
-                    {stateBadge(source)}
+                    {stateBadge(t, source)}
                   </span>
                   {source.enabled &&
                     !source.unavailable &&
                     source.detected &&
                     !source.error && (
                       <span className={styles.settingDescription}>
-                        {source.vars_contributed} var
-                        {source.vars_contributed === 1 ? "" : "s"}
+                        {t("env_panel_vars", { count: source.vars_contributed })}
                         {source.evaluated_at_ms > 0 && (
-                          <> · {formatRelativeTime(source.evaluated_at_ms)}</>
+                          <> · {formatRelativeTime(t, source.evaluated_at_ms)}</>
                         )}
                       </span>
                     )}
@@ -776,9 +789,9 @@ export function EnvPanel({ target }: EnvPanelProps) {
                       type="button"
                       className={styles.envDetailsBtn}
                       onClick={() => openTrustModalForPlugin(source)}
-                      title="Open the trust prompt for this provider"
+                      title={t("env_panel_resolve_tooltip")}
                     >
-                      Resolve…
+                      {t("env_panel_resolve")}
                     </button>
                   )}
                   {(showSettings || showDetails) && (
@@ -789,10 +802,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
                       aria-expanded={isOpen}
                     >
                       {isOpen
-                        ? "Hide"
+                        ? t("env_panel_hide")
                         : showSettings
-                          ? "Settings"
-                          : "Details"}
+                          ? t("env_panel_settings")
+                          : t("env_panel_details")}
                     </button>
                   )}
                   <button
@@ -803,7 +816,9 @@ export function EnvPanel({ target }: EnvPanelProps) {
                     }
                     role="switch"
                     aria-checked={toggleOn}
-                    aria-label={`${toggleOn ? "Disable" : "Enable"} ${source.display_name}`}
+                    aria-label={toggleOn
+                      ? t("env_panel_toggle_disable", { name: source.display_name })
+                      : t("env_panel_toggle_enable", { name: source.display_name })}
                     disabled={toggleDisabled}
                     title={toggleTitle}
                   >
@@ -836,7 +851,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
           onClick={handleReloadAll}
           disabled={loading}
         >
-          {loading ? "Reloading…" : "Reload"}
+          {loading ? t("env_panel_reloading") : t("env_panel_reload")}
         </button>
       </div>
     </>
@@ -867,6 +882,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
  * the modal has its own raw-error disclosure with a copy affordance.
  */
 function ErrorDisclosure({ error }: { error: string }) {
+  const { t } = useTranslation("settings");
   const { copied, copy } = useCopyToClipboard();
   return (
     <div className={styles.envErrorDisclosure}>
@@ -875,9 +891,9 @@ function ErrorDisclosure({ error }: { error: string }) {
         type="button"
         className={styles.envErrorCopyBtn}
         onClick={() => void copy(error)}
-        title="Copy the full error text"
+        title={t("env_panel_copy_tooltip")}
       >
-        {copied ? "Copied" : "Copy"}
+        {copied ? t("env_panel_copied") : t("env_panel_copy")}
       </button>
     </div>
   );
@@ -894,6 +910,7 @@ function ProviderSettingsDrawer({
   overrides: Record<string, unknown>;
   onChange: (key: string, value: unknown) => void;
 }) {
+  const { t } = useTranslation("settings");
   return (
     <div className={styles.envSettingsDrawer}>
       {schema.map((field) => {
@@ -924,9 +941,9 @@ function ProviderSettingsDrawer({
                 type="button"
                 className={styles.envSettingsClearBtn}
                 onClick={() => onChange(field.key, null)}
-                title="Clear this repo's override and use the global default"
+                title={t("env_panel_clear_override_tooltip")}
               >
-                Use global default
+                {t("env_panel_use_global_default")}
               </button>
             )}
           </div>

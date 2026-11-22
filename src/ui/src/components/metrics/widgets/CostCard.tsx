@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 import { useAppStore } from "../../../stores/useAppStore";
 import { Sparkline } from "../primitives/Sparkline";
@@ -9,16 +10,17 @@ function formatUsd(n: number): string {
 }
 
 export function CostCard() {
+  const { t } = useTranslation();
   const metrics = useAppStore((s) => s.dashboardMetrics);
   const cost = metrics?.cost30dUsd ?? 0;
   const series = metrics?.costDaily30d ?? [];
 
   return (
     <div className={styles.tile}>
-      <span className={styles.tileLabel}>Cost · 30d</span>
+      <span className={styles.tileLabel}>{t("metrics_cost_title")}</span>
       <div className={styles.tileValue}>{formatUsd(cost)}</div>
       <div style={{ marginTop: 4 }}>
-        <Sparkline values={series} title="daily cost (30d)" />
+        <Sparkline values={series} title={t("metrics_daily_cost")} />
       </div>
     </div>
   );

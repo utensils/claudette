@@ -1,3 +1,4 @@
+import i18n from "../../i18n";
 import { useAppStore } from "../../stores/useAppStore";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
 import { applySelectedModel } from "../chat/applySelectedModel";
@@ -51,7 +52,7 @@ export async function sendToNewWorkspace(
     idempotencyKey: sendIdempotencyKey(args),
     onIdempotencyDuplicate: () => {
       store.addToast(
-        `#${args.number} is already being sent to a new workspace.`,
+        i18n.t("repo_send_duplicate", { number: args.number }),
       );
     },
   });
@@ -123,7 +124,7 @@ export async function sendToNewWorkspace(
     rollbackChatTurnStarting(sessionId, workspaceId);
     throw e;
   }
-  store.addToast(`Sent #${args.number} to a new workspace`);
+  store.addToast(i18n.t("repo_send_done", { number: args.number }));
 }
 
 function sendIdempotencyKey(args: SendToNewWorkspaceArgs): string {
@@ -170,7 +171,7 @@ export function buildModelSubmenuItems(
   if (visible.length === 0) {
     return [
       {
-        label: "No models available",
+        label: i18n.t("repo_no_models"),
         onSelect: () => {},
         disabled: true,
       },

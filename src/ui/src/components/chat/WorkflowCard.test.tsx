@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolActivity } from "../../stores/useAppStore";
 import type { WorkflowProgressEntry } from "../../types/workflow";
 import { WorkflowCard } from "./WorkflowCard";
+import "../../i18n";
 
 const mountedRoots: Root[] = [];
 const mountedContainers: HTMLElement[] = [];

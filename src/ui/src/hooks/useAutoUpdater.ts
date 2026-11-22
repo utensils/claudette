@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
@@ -72,7 +73,7 @@ export async function retryInstall(): Promise<void> {
   if (result === "error") {
     useAppStore
       .getState()
-      .setUpdateError("Failed to check for updates. Please try again.");
+      .setUpdateError(i18n.t("modals:update_check_failed"));
     return;
   }
   if (result === "available") await installNow();

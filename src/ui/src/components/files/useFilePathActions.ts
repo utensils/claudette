@@ -6,6 +6,7 @@ import {
   restoreWorkspacePathFromTrash,
   trashWorkspacePath,
 } from "../../services/tauri";
+import i18n from "../../i18n";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   snapshotRemovedFilePath,
@@ -63,7 +64,7 @@ export function useFilePathActions(workspaceId: string) {
         isDirectory: result.is_directory,
       });
       await refreshWorkspaceFiles();
-      addToast("Renamed");
+      addToast(i18n.t("modals:files_toast_renamed"));
       return result;
     },
     [
@@ -92,7 +93,7 @@ export function useFilePathActions(workspaceId: string) {
         path: result.path,
       });
       await refreshWorkspaceFiles();
-      addToast("Created file");
+      addToast(i18n.t("modals:files_toast_created"));
       return result;
     },
     [
@@ -127,7 +128,7 @@ export function useFilePathActions(workspaceId: string) {
         snapshot,
       });
       await refreshWorkspaceFiles();
-      addToast("Moved to Trash");
+      addToast(i18n.t("modals:files_toast_trashed"));
       return result;
     },
     [
@@ -144,7 +145,7 @@ export function useFilePathActions(workspaceId: string) {
       useAppStore.getState().filePathUndoStackByWorkspace[workspaceId] ?? [];
     const operation = stack.at(-1);
     if (!operation) {
-      addToast("Nothing to undo");
+      addToast(i18n.t("modals:files_toast_nothing_to_undo"));
       return false;
     }
 
@@ -152,11 +153,11 @@ export function useFilePathActions(workspaceId: string) {
       await runUndoFilePathOperation(workspaceId, operation);
       popFilePathUndoOperation(workspaceId, operation);
       await refreshWorkspaceFiles();
-      addToast("Undone");
+      addToast(i18n.t("modals:files_toast_undone"));
       return true;
     } catch (err) {
       console.error("Failed to undo file operation:", err);
-      addToast(`Undo failed: ${String(err)}`);
+      addToast(i18n.t("modals:files_toast_undo_failed", { error: String(err) }));
       return false;
     }
   }, [

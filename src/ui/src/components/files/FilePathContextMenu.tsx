@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   openWorkspacePath,
@@ -56,6 +57,7 @@ export function FilePathContextMenu({
   onOperationComplete,
   onClose,
 }: FilePathContextMenuProps) {
+  const { t } = useTranslation("modals");
   const openFileTab = useAppStore((s) => s.openFileTab);
   const addToast = useAppStore((s) => s.addToast);
   const keybindings = useAppStore((s) => s.keybindings);
@@ -99,12 +101,12 @@ export function FilePathContextMenu({
       copyPath: async () => {
         const absolute = await resolveWorkspacePath(workspaceId, target.path);
         await clipboardWriteText(absolute);
-        addToast("Copied path");
+        addToast(t("files_toast_copied_path"));
         onOperationComplete?.();
       },
       copyRelativePath: async () => {
         await clipboardWriteText(target.path.replace(/\/+$/g, ""));
-        addToast("Copied relative path");
+        addToast(t("files_toast_copied_relative_path"));
         onOperationComplete?.();
       },
       rename: () => {
@@ -129,6 +131,7 @@ export function FilePathContextMenu({
     onOperationComplete,
     onRenameRequest,
     openFileTab,
+    t,
     target,
     workspaceId,
   ]);

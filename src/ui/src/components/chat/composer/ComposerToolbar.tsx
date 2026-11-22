@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting } from "../../../services/tauri";
@@ -43,6 +44,7 @@ export function ComposerToolbar({
   isRunning,
   isRemote,
 }: ComposerToolbarProps) {
+  const { t } = useTranslation("chat");
   // Session-mutating pills (model, plan, reasoning) keep their pre-split
   // behavior: locked whenever a turn is running.
   // Env preparation only blocks actions that need the resolved environment;
@@ -186,7 +188,7 @@ export function ComposerToolbar({
           chevron
           onClick={() => setModelSelectorOpen(!modelSelectorOpen)}
           disabled={mutationDisabled}
-          title={isExtraUsage ? "Change model (extra usage: 1M context billed at API rates)" : "Change model"}
+          title={isExtraUsage ? t("change_model_extra_usage") : t("change_model")}
         >
           {isExtraUsage && <CircleDollarSign size={14} className={styles.extraUsage} />}
         </ToolbarPill>
@@ -202,12 +204,12 @@ export function ComposerToolbar({
 
       <ToolbarPill
         icon={<BookOpen size={14} />}
-        label="Plan"
+        label={t("plan_chip")}
         active={planMode}
         onClick={togglePlan}
         disabled={mutationDisabled}
         {...tooltipAttributes(
-          `${planMode ? "Disable" : "Enable"} plan mode`,
+          planMode ? t("plan_mode_disable") : t("plan_mode_enable"),
           "global.toggle-plan-mode",
           keybindings,
           isMac,

@@ -23,6 +23,7 @@ import {
   FolderOpen,
   File,
 } from "lucide-react";
+import i18n from "../../i18n";
 import type { ThemeDefinition } from "../../types/theme";
 import { getHotkeyLabel } from "../../hotkeys/display";
 import type { KeybindingMap } from "../../hotkeys/bindings";
@@ -57,15 +58,16 @@ export interface EffortCommandLabels {
   codexSetReasoningEffort?: string;
 }
 
-export const CATEGORY_LABELS: Record<CommandCategory, string> = {
-  general: "General",
-  ui: "Interface",
-  agent: "Agent",
-  theme: "Theme",
-  workspace: "Workspaces",
-  navigation: "Navigation",
-  settings: "Settings",
-};
+/** i18n keys of the category headers; resolved at render time. */
+export const CATEGORY_LABELS = {
+  general: "palette_category_general",
+  ui: "palette_category_ui",
+  agent: "palette_category_agent",
+  theme: "palette_category_theme",
+  workspace: "palette_category_workspace",
+  navigation: "palette_category_navigation",
+  settings: "palette_category_settings",
+} as const satisfies Record<CommandCategory, string>;
 
 export const CATEGORY_ORDER: CommandCategory[] = [
   "general",
@@ -103,7 +105,7 @@ export function groupCommandsByCategory(
   }
   return CATEGORY_ORDER.filter((cat) => map.has(cat)).map((cat) => ({
     category: cat,
-    label: CATEGORY_LABELS[cat],
+    label: i18n.t(CATEGORY_LABELS[cat]),
     commands: map.get(cat)!,
   }));
 }
@@ -171,7 +173,7 @@ export function buildThemeCommands(
   return themes.map((theme) => ({
     id: `theme:${theme.id}`,
     name: theme.name,
-    description: theme.author ? `by ${theme.author}` : theme.description,
+    description: theme.author ? i18n.t("palette_theme_by_author", { author: theme.author }) : theme.description,
     category: "theme" as const,
     icon: Palette,
     keywords: ["theme", "color", "appearance", ...theme.name.toLowerCase().split(/\s+/)],
@@ -190,7 +192,7 @@ export function buildModelCommands(
   return models.map((m) => ({
     id: `model:${m.providerQualifiedId ?? m.id}`,
     name: `${m.providerLabel ? `${m.providerLabel} / ` : ""}${m.label}${m.id === selectedModel && (m.providerId ?? "anthropic") === selectedProvider ? " ✓" : ""}`,
-    description: m.extraUsage ? "Extra usage: 1M context billed at API rates" : undefined,
+    description: m.extraUsage ? i18n.t("palette_extra_usage") : undefined,
     category: "agent" as const,
     icon: m.extraUsage ? BadgeDollarSign : Sparkles,
     keywords: ["model", ...m.label.toLowerCase().split(/\s+/)],
@@ -230,12 +232,12 @@ export function buildEffortCommands(
   }
 
   const all = [
-    { id: "auto", label: "Auto", description: "Let CLI decide" },
-    { id: "low", label: "Low", description: "Fast, minimal reasoning" },
-    { id: "medium", label: "Medium", description: "Balanced" },
-    { id: "high", label: "High", description: "Deep reasoning" },
-    { id: "xhigh", label: "Extra High", description: "Extended reasoning (Opus 4.7+, Fable 5+, Sonnet 5)" },
-    { id: "max", label: "Max", description: "Full budget" },
+    { id: "auto", label: i18n.t("palette_effort_auto"), description: i18n.t("palette_effort_auto_desc") },
+    { id: "low", label: i18n.t("palette_effort_low"), description: i18n.t("palette_effort_low_desc") },
+    { id: "medium", label: i18n.t("palette_effort_medium"), description: i18n.t("palette_effort_medium_desc") },
+    { id: "high", label: i18n.t("palette_effort_high"), description: i18n.t("palette_effort_high_desc") },
+    { id: "xhigh", label: i18n.t("palette_effort_xhigh"), description: i18n.t("palette_effort_xhigh_desc") },
+    { id: "max", label: i18n.t("palette_effort_max"), description: i18n.t("palette_effort_max_desc") },
   ];
   const levels = !isEffortSupported(selectedModel)
     ? all.filter((l) => l.id === "auto")
@@ -292,7 +294,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
   // -- UI --
   cmds.push({
     id: "toggle-sidebar",
-    name: "Toggle Sidebar",
+    name: i18n.t("palette_cmd_toggle_sidebar"),
     category: "ui",
     icon: PanelLeft,
     shortcut: shortcut("global.toggle-sidebar"),
@@ -301,7 +303,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
   });
   cmds.push({
     id: "toggle-terminal",
-    name: "Toggle Terminal",
+    name: i18n.t("palette_cmd_toggle_terminal"),
     category: "ui",
     icon: Terminal,
     shortcut: shortcut("global.toggle-terminal-panel"),
@@ -310,7 +312,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
   });
   cmds.push({
     id: "toggle-changes",
-    name: "Toggle Changes Panel",
+    name: i18n.t("palette_cmd_toggle_changes"),
     category: "ui",
     icon: GitCompare,
     shortcut: shortcut("global.toggle-right-sidebar"),
@@ -319,8 +321,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
   });
   cmds.push({
     id: "zoom-in",
-    name: "Zoom In",
-    description: "Increase UI font size",
+    name: i18n.t("palette_cmd_zoom_in"),
+    description: i18n.t("palette_cmd_zoom_in_desc"),
     category: "ui",
     icon: ZoomIn,
     shortcut: shortcut("global.increase-ui-font"),
@@ -329,8 +331,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
   });
   cmds.push({
     id: "zoom-out",
-    name: "Zoom Out",
-    description: "Decrease UI font size",
+    name: i18n.t("palette_cmd_zoom_out"),
+    description: i18n.t("palette_cmd_zoom_out_desc"),
     category: "ui",
     icon: ZoomOut,
     shortcut: shortcut("global.decrease-ui-font"),
@@ -339,8 +341,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
   });
   cmds.push({
     id: "reset-zoom",
-    name: "Reset Zoom",
-    description: "Reset UI font size to default (13px)",
+    name: i18n.t("palette_cmd_reset_zoom"),
+    description: i18n.t("palette_cmd_reset_zoom_desc"),
     category: "ui",
     icon: ZoomIn,
     keywords: ["zoom", "reset", "actual", "default", "font", "size"],
@@ -348,8 +350,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
   });
   cmds.push({
     id: "terminal-zoom-in",
-    name: "Terminal: Zoom In",
-    description: "Increase terminal font size",
+    name: i18n.t("palette_cmd_terminal_zoom_in"),
+    description: i18n.t("palette_cmd_terminal_zoom_in_desc"),
     category: "ui",
     icon: ZoomIn,
     shortcut: shortcut("global.increase-terminal-font"),
@@ -358,8 +360,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
   });
   cmds.push({
     id: "terminal-zoom-out",
-    name: "Terminal: Zoom Out",
-    description: "Decrease terminal font size",
+    name: i18n.t("palette_cmd_terminal_zoom_out"),
+    description: i18n.t("palette_cmd_terminal_zoom_out_desc"),
     category: "ui",
     icon: ZoomOut,
     shortcut: shortcut("global.decrease-terminal-font"),
@@ -368,8 +370,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
   });
   cmds.push({
     id: "terminal-reset-zoom",
-    name: "Terminal: Reset Zoom",
-    description: "Reset terminal font size to default (11px)",
+    name: i18n.t("palette_cmd_terminal_reset_zoom"),
+    description: i18n.t("palette_cmd_terminal_reset_zoom_desc"),
     category: "ui",
     icon: RotateCcw,
     keywords: ["terminal", "zoom", "reset", "actual", "default", "font", "size"],
@@ -386,7 +388,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     ) {
       cmds.push({
         id: "toggle-thinking",
-        name: `${ctx.thinkingEnabled ? "Disable" : "Enable"} Thinking Mode`,
+        name: ctx.thinkingEnabled ? i18n.t("palette_cmd_disable_thinking") : i18n.t("palette_cmd_enable_thinking"),
         category: "agent",
         icon: Brain,
         keywords: ["think", "reasoning", "extended"],
@@ -400,7 +402,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     }
     cmds.push({
       id: "toggle-plan",
-      name: `${ctx.planMode ? "Disable" : "Enable"} Plan Mode`,
+      name: ctx.planMode ? i18n.t("palette_cmd_disable_plan") : i18n.t("palette_cmd_enable_plan"),
       category: "agent",
       icon: BookOpen,
       shortcut: shortcut("global.toggle-plan-mode"),
@@ -415,7 +417,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     if (isFastSupported(ctx.selectedModel)) {
       cmds.push({
         id: "toggle-fast",
-        name: `${ctx.fastMode ? "Disable" : "Enable"} Fast Mode`,
+        name: ctx.fastMode ? i18n.t("palette_cmd_disable_fast") : i18n.t("palette_cmd_enable_fast"),
         category: "agent",
         icon: Zap,
         keywords: ["speed", "quick"],
@@ -429,8 +431,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
     }
     cmds.push({
       id: "change-model",
-      name: "Change Model",
-      description: `Currently: ${ctx.selectedModel}`,
+      name: i18n.t("palette_cmd_change_model"),
+      description: i18n.t("palette_cmd_currently", { value: ctx.selectedModel }),
       category: "agent",
       icon: Sparkles,
       keywords: ["model", "opus", "sonnet", "haiku", "switch"],
@@ -439,8 +441,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
     if (isEffortSupported(ctx.selectedModel)) {
       cmds.push({
         id: "set-effort",
-        name: "Set Effort Level",
-        description: `Currently: ${ctx.effortLevel}`,
+        name: i18n.t("palette_cmd_set_effort"),
+        description: i18n.t("palette_cmd_currently", { value: ctx.effortLevel }),
         category: "agent",
         icon: Gauge,
         keywords: ["effort", "reasoning", "depth", "budget"],
@@ -449,8 +451,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
     }
     cmds.push({
       id: "stop-agent",
-      name: "Stop Agent",
-      description: "Kill the running agent process",
+      name: i18n.t("palette_cmd_stop_agent"),
+      description: i18n.t("palette_cmd_stop_agent_desc"),
       category: "agent",
       icon: Square,
       keywords: ["kill", "cancel", "abort"],
@@ -465,8 +467,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
     });
     cmds.push({
       id: "reset-session",
-      name: "Reset Agent Session",
-      description: "Start a fresh session",
+      name: i18n.t("palette_cmd_reset_session"),
+      description: i18n.t("palette_cmd_reset_session_desc"),
       category: "agent",
       icon: RotateCcw,
       keywords: ["restart", "new", "clear"],
@@ -483,8 +485,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
   // -- Theme (single entry → opens sub-menu) --
   cmds.push({
     id: "change-theme",
-    name: "Change Theme",
-    description: `${ctx.themes.length} themes available`,
+    name: i18n.t("palette_cmd_change_theme"),
+    description: i18n.t("palette_cmd_themes_available", { count: ctx.themes.length }),
     category: "theme",
     icon: Palette,
     keywords: ["theme", "color", "appearance", "dark", "light"],
@@ -496,8 +498,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
     const repoId = ctx.currentRepoId;
     cmds.push({
       id: "create-workspace",
-      name: "Create Workspace",
-      description: "New workspace in current repository",
+      name: i18n.t("palette_cmd_create_workspace"),
+      description: i18n.t("palette_cmd_create_workspace_desc"),
       category: "workspace",
       icon: Plus,
       keywords: ["new", "add", "worktree"],
@@ -509,8 +511,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
   if (ctx.selectedWorkspaceId) {
     cmds.push({
       id: "open-file",
-      name: "Open File...",
-      description: "Browse and open a workspace file",
+      name: i18n.t("palette_cmd_open_file"),
+      description: i18n.t("palette_cmd_open_file_desc"),
       category: "navigation",
       icon: FolderOpen,
       shortcut: shortcut("global.open-command-palette-file-mode"),
@@ -520,7 +522,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
   }
   cmds.push({
     id: "switch-workspace",
-    name: "Switch Workspace",
+    name: i18n.t("palette_cmd_switch_workspace"),
     category: "navigation",
     icon: Layers,
     shortcut: shortcut("global.toggle-fuzzy-finder"),
@@ -531,7 +533,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
   // -- Settings --
   cmds.push({
     id: "open-settings",
-    name: "Open Settings",
+    name: i18n.t("palette_cmd_open_settings"),
     category: "settings",
     icon: Settings,
     shortcut: shortcut("global.open-settings"),
@@ -541,7 +543,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
   if (ctx.currentRepoId) {
     cmds.push({
       id: "repo-settings",
-      name: "Repository Settings",
+      name: i18n.t("palette_cmd_repo_settings"),
       category: "settings",
       icon: Wrench,
       keywords: ["repo", "project", "config"],
@@ -550,7 +552,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
   }
   cmds.push({
     id: "add-repository",
-    name: "Add Repository",
+    name: i18n.t("palette_cmd_add_repository"),
     category: "settings",
     icon: FolderPlus,
     keywords: ["repo", "project", "import"],
@@ -558,7 +560,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
   });
   cmds.push({
     id: "add-remote",
-    name: "Add Remote Server",
+    name: i18n.t("palette_cmd_add_remote"),
     category: "settings",
     icon: Globe,
     keywords: ["server", "remote", "connect"],

@@ -1,3 +1,4 @@
+import i18n from "../../i18n";
 import type { PluginSettingsIntent } from "../../types/plugins";
 import {
   type NativeSlashKind,
@@ -401,29 +402,25 @@ const loginHandler: NativeHandler = {
   execute: async (ctx, args) => {
     const handled = { kind: "handled" as const, canonicalName: "login" };
     if (args.trim() !== "") {
-      ctx.addLocalMessage("/login: does not accept arguments. Usage: /login");
+      ctx.addLocalMessage(i18n.t("chat:slash_login_no_args"));
       return handled;
     }
     const target = loginTargetForProvider(ctx.selectedModelProvider);
     try {
       if (target === "codex") {
         await ctx.startCodexLogin();
-        ctx.addLocalMessage(
-          "Codex sign-in opened. Complete the browser flow, then retry the turn.",
-        );
+        ctx.addLocalMessage(i18n.t("chat:slash_login_codex_opened"));
       } else if (target === "antigravity" && ctx.startAntigravityLogin) {
         await ctx.startAntigravityLogin();
-        ctx.addLocalMessage(
-          "Antigravity sign-in opened. Complete the browser flow, then retry the turn.",
-        );
+        ctx.addLocalMessage(i18n.t("chat:slash_login_antigravity_opened"));
       } else {
         await ctx.startClaudeAuthLogin();
-        ctx.addLocalMessage(
-          "Claude Code sign-in opened. Complete the browser flow, then retry the turn.",
-        );
+        ctx.addLocalMessage(i18n.t("chat:slash_login_claude_opened"));
       }
     } catch (error) {
-      ctx.addLocalMessage(`/login failed: ${formatCommandError(error)}`);
+      ctx.addLocalMessage(
+        i18n.t("chat:slash_login_failed", { error: formatCommandError(error) }),
+      );
     }
     return handled;
   },
@@ -461,7 +458,9 @@ const releaseNotesHandler: NativeHandler = {
 
 /** Format the text shown by `/version`. Exported for testing. */
 export function formatVersionMessage(version: string | null): string {
-  return `Claudette v${version ?? "unknown"}`;
+  return i18n.t("chat:slash_version", {
+    version: version ?? i18n.t("chat:slash_version_unknown"),
+  });
 }
 
 const versionHandler: NativeHandler = {
@@ -481,7 +480,7 @@ function isPermissionLevel(value: string): value is PermissionLevel {
 }
 
 function formatOnOff(enabled: boolean): string {
-  return enabled ? "on" : "off";
+  return enabled ? i18n.t("chat:overflow_on") : i18n.t("chat:overflow_off");
 }
 
 const clearHandler: NativeHandler = {
@@ -491,20 +490,22 @@ const clearHandler: NativeHandler = {
   execute: async (ctx, args) => {
     const handled = { kind: "handled" as const, canonicalName: "clear" };
     if (!ctx.workspaceId) {
-      ctx.addLocalMessage("/clear: no active workspace");
+      ctx.addLocalMessage(i18n.t("chat:slash_no_workspace", { command: "/clear" }));
       return handled;
     }
     if (args.trim() !== "") {
-      ctx.addLocalMessage("/clear: does not accept arguments. Usage: /clear");
+      ctx.addLocalMessage(i18n.t("chat:slash_no_args", { command: "/clear" }));
       return handled;
     }
     try {
       // Chat history only — file restore is available from the rollback modal
       // when the user explicitly wants it.
       await ctx.clearConversation(false);
-      ctx.addLocalMessage("Conversation cleared.");
+      ctx.addLocalMessage(i18n.t("chat:slash_clear_done"));
     } catch (error) {
-      ctx.addLocalMessage(`/clear failed: ${String(error)}`);
+      ctx.addLocalMessage(
+        i18n.t("chat:slash_failed", { command: "/clear", error: String(error) }),
+      );
     }
     return handled;
   },
@@ -516,11 +517,11 @@ const compactHandler: NativeHandler = {
   kind: "harness_action",
   execute: (ctx, args) => {
     if (!ctx.workspaceId) {
-      ctx.addLocalMessage("/compact: no active workspace");
+      ctx.addLocalMessage(i18n.t("chat:slash_no_workspace", { command: "/compact" }));
       return { kind: "handled" as const, canonicalName: "compact" };
     }
     if (args.trim() !== "") {
-      ctx.addLocalMessage("/compact: does not accept arguments. Usage: /compact");
+      ctx.addLocalMessage(i18n.t("chat:slash_no_args", { command: "/compact" }));
       return { kind: "handled" as const, canonicalName: "compact" };
     }
     return {
@@ -538,31 +539,31 @@ const planHandler: NativeHandler = {
   execute: async (ctx, args) => {
     const handled = { kind: "handled" as const, canonicalName: "plan" };
     if (!ctx.workspaceId) {
-      ctx.addLocalMessage("/plan: no active workspace");
+      ctx.addLocalMessage(i18n.t("chat:slash_no_workspace", { command: "/plan" }));
       return handled;
     }
     const arg = args.trim().toLowerCase();
     if (arg === "" || arg === "toggle") {
       const next = !ctx.planMode;
       ctx.setPlanMode(next);
-      ctx.addLocalMessage(`Plan mode ${formatOnOff(next)}.`);
+      ctx.addLocalMessage(
+        i18n.t("chat:slash_plan_mode_toggled", { state: formatOnOff(next) }),
+      );
       return handled;
     }
     if (arg === "on") {
       ctx.setPlanMode(true);
-      ctx.addLocalMessage("Plan mode enabled.");
+      ctx.addLocalMessage(i18n.t("chat:slash_plan_enabled"));
       return handled;
     }
     if (arg === "off") {
       ctx.setPlanMode(false);
-      ctx.addLocalMessage("Plan mode disabled.");
+      ctx.addLocalMessage(i18n.t("chat:slash_plan_disabled"));
       return handled;
     }
     if (arg === "open") {
       if (!ctx.planFilePath) {
-        ctx.addLocalMessage(
-          "/plan open: no plan file found for this workspace. Enable plan mode and run a turn to produce one.",
-        );
+        ctx.addLocalMessage(i18n.t("chat:slash_plan_open_no_file"));
         return handled;
       }
       try {
@@ -571,16 +572,16 @@ const planHandler: NativeHandler = {
         // fences inside the plan instead of collapsing it into one paragraph.
         // The path line is rendered as italic muted metadata above the body.
         ctx.addLocalMessage(
-          `_Plan file — \`${ctx.planFilePath}\`_\n\n${content}`,
+          `${i18n.t("chat:slash_plan_file_header", { path: ctx.planFilePath })}\n\n${content}`,
         );
       } catch (error) {
-        ctx.addLocalMessage(`/plan open failed: ${String(error)}`);
+        ctx.addLocalMessage(
+          i18n.t("chat:slash_failed", { command: "/plan open", error: String(error) }),
+        );
       }
       return handled;
     }
-    ctx.addLocalMessage(
-      "/plan: unknown argument. Usage: /plan [on|off|toggle|open]",
-    );
+    ctx.addLocalMessage(i18n.t("chat:slash_plan_unknown_arg"));
     return handled;
   },
 };
@@ -592,7 +593,7 @@ const modelHandler: NativeHandler = {
   execute: async (ctx, args) => {
     const handled = { kind: "handled" as const, canonicalName: "model" };
     if (!ctx.workspaceId) {
-      ctx.addLocalMessage("/model: no active workspace");
+      ctx.addLocalMessage(i18n.t("chat:slash_no_workspace", { command: "/model" }));
       return handled;
     }
     const { disable1mContext } = useAppStore.getState();
@@ -615,26 +616,37 @@ const modelHandler: NativeHandler = {
         const id = m.providerQualifiedId ?? m.id;
         return ` ${marker} ${id} — ${m.label}`;
       }).join("\n");
-      ctx.addLocalMessage(`Current model: ${ctx.selectedModel}\n${lines}`);
+      ctx.addLocalMessage(
+        `${i18n.t("chat:slash_model_current", { model: ctx.selectedModel })}\n${lines}`,
+      );
       return handled;
     }
     const match = resolveModelSelection(available, arg);
     if (!match) {
       ctx.addLocalMessage(
-        `/model: unknown model "${arg}". Valid options: ${modelIds.join(", ")}`,
+        i18n.t("chat:slash_model_unknown", {
+          model: arg,
+          options: modelIds.join(", "),
+        }),
       );
       return handled;
     }
     const provider = match.providerId ?? "anthropic";
     if (match.id === ctx.selectedModel && provider === ctx.selectedModelProvider) {
-      ctx.addLocalMessage(`Model is already ${match.id}.`);
+      ctx.addLocalMessage(i18n.t("chat:slash_model_already", { model: match.id }));
       return handled;
     }
     try {
       await ctx.setSelectedModel(match.id, provider);
-      ctx.addLocalMessage(`Model set to ${match.providerQualifiedId ?? match.id}.`);
+      ctx.addLocalMessage(
+        i18n.t("chat:slash_model_set", {
+          model: match.providerQualifiedId ?? match.id,
+        }),
+      );
     } catch (error) {
-      ctx.addLocalMessage(`/model failed: ${String(error)}`);
+      ctx.addLocalMessage(
+        i18n.t("chat:slash_failed", { command: "/model", error: String(error) }),
+      );
     }
     return handled;
   },
@@ -650,31 +662,41 @@ const permissionsHandler: NativeHandler = {
       canonicalName: "permissions",
     };
     if (!ctx.workspaceId) {
-      ctx.addLocalMessage("/permissions: no active workspace");
+      ctx.addLocalMessage(
+        i18n.t("chat:slash_no_workspace", { command: "/permissions" }),
+      );
       return handled;
     }
     const arg = args.trim().toLowerCase();
     if (arg === "") {
       ctx.addLocalMessage(
-        `Permission mode: ${ctx.permissionLevel}. Options: ${PERMISSION_MODES.join(", ")}`,
+        i18n.t("chat:slash_permissions_current", {
+          mode: ctx.permissionLevel,
+          options: PERMISSION_MODES.join(", "),
+        }),
       );
       return handled;
     }
     if (!isPermissionLevel(arg)) {
       ctx.addLocalMessage(
-        `/permissions: unknown mode "${args.trim()}". Valid options: ${PERMISSION_MODES.join(", ")}`,
+        i18n.t("chat:slash_permissions_unknown", {
+          mode: args.trim(),
+          options: PERMISSION_MODES.join(", "),
+        }),
       );
       return handled;
     }
     if (arg === ctx.permissionLevel) {
-      ctx.addLocalMessage(`Permission mode is already ${arg}.`);
+      ctx.addLocalMessage(i18n.t("chat:slash_permissions_already", { mode: arg }));
       return handled;
     }
     try {
       await ctx.setPermissionLevel(arg);
-      ctx.addLocalMessage(`Permission mode set to ${arg}.`);
+      ctx.addLocalMessage(i18n.t("chat:slash_permissions_set", { mode: arg }));
     } catch (error) {
-      ctx.addLocalMessage(`/permissions failed: ${String(error)}`);
+      ctx.addLocalMessage(
+        i18n.t("chat:slash_failed", { command: "/permissions", error: String(error) }),
+      );
     }
     return handled;
   },
@@ -759,8 +781,7 @@ function intervalToCron(token: string): string | null {
   return `0 0 * * *`;
 }
 
-const LOOP_USAGE =
-  "/loop: usage — `/loop <interval> <prompt>` (e.g. `/loop 5m run the tests`). The interval must evenly divide its unit: minutes that divide an hour (e.g. 1m, 5m, 15m, 30m), hours that divide a day (e.g. 1h, 2h, 6h, 12h), or 1d. For anything else, write a cron expression in the New scheduled task dialog.";
+const loopUsage = () => i18n.t("chat:slash_loop_usage");
 
 const loopHandler: NativeHandler = {
   name: "loop",
@@ -769,12 +790,12 @@ const loopHandler: NativeHandler = {
   execute: async (ctx, args) => {
     const handled = { kind: "handled" as const, canonicalName: "loop" };
     if (!ctx.workspaceId || !ctx.sessionId) {
-      ctx.addLocalMessage("/loop: no active workspace");
+      ctx.addLocalMessage(i18n.t("chat:slash_no_workspace", { command: "/loop" }));
       return handled;
     }
     const tokens = args.trim().split(/\s+/);
     if (tokens.length === 0 || tokens[0] === "") {
-      ctx.addLocalMessage(LOOP_USAGE);
+      ctx.addLocalMessage(loopUsage());
       return handled;
     }
     const cronExpr = intervalToCron(tokens[0]);
@@ -787,11 +808,11 @@ const loopHandler: NativeHandler = {
         prompt: prompt || undefined,
         mode: "cron",
       });
-      ctx.addLocalMessage(LOOP_USAGE);
+      ctx.addLocalMessage(loopUsage());
       return handled;
     }
     if (!prompt) {
-      ctx.addLocalMessage(LOOP_USAGE);
+      ctx.addLocalMessage(loopUsage());
       return handled;
     }
     try {
@@ -809,7 +830,9 @@ const loopHandler: NativeHandler = {
         model: ctx.selectedModel || undefined,
       });
     } catch (e) {
-      ctx.addLocalMessage(`/loop failed: ${String(e)}`);
+      ctx.addLocalMessage(
+        i18n.t("chat:slash_failed", { command: "/loop", error: String(e) }),
+      );
     }
     return handled;
   },
@@ -900,7 +923,9 @@ const scheduleHandler: NativeHandler = {
             model: ctx.selectedModel || undefined,
           });
         } catch (e) {
-          ctx.addLocalMessage(`/schedule failed: ${String(e)}`);
+          ctx.addLocalMessage(
+            i18n.t("chat:slash_failed", { command: "/schedule", error: String(e) }),
+          );
         }
         return handled;
       }
@@ -946,7 +971,7 @@ function formatCommandLine(
   );
   const aliasPart =
     visibleAliases.length > 0
-      ? `  (alias: ${visibleAliases.map((a) => `/${a}`).join(", ")})`
+      ? `  (${i18n.t("chat:slash_help_alias", { aliases: visibleAliases.map((a) => `/${a}`).join(", ") })})`
       : "";
   const desc = cmd.description.trim().length > 0 ? ` — ${cmd.description}` : "";
   return `- ${head}${aliasPart}${desc}`;
@@ -1006,16 +1031,16 @@ export function formatHelpMessage(commands: SlashCommand[]): string {
   const kindOrder: Array<{ kind: NativeSlashKind; heading: string }> = [
     {
       kind: "local_action",
-      heading: "_Actions (stay local, do not contact the agent)_",
+      heading: `_${i18n.t("chat:slash_help_actions")}_`,
     },
-    { kind: "settings_route", heading: "_Settings shortcuts_" },
+    { kind: "settings_route", heading: `_${i18n.t("chat:slash_help_settings")}_` },
     {
       kind: "harness_action",
-      heading: "_Agent actions (dispatched per backend)_",
+      heading: `_${i18n.t("chat:slash_help_agent_actions")}_`,
     },
     {
       kind: "prompt_expansion",
-      heading: "_Prompt expansions (seed a prompt, then send to the agent)_",
+      heading: `_${i18n.t("chat:slash_help_prompt_expansions")}_`,
     },
   ];
 
@@ -1032,13 +1057,13 @@ export function formatHelpMessage(commands: SlashCommand[]): string {
     while (nativeLines.length > 0 && nativeLines[nativeLines.length - 1] === "") {
       nativeLines.pop();
     }
-    sections.push(["**Native commands**", "", ...nativeLines].join("\n"));
+    sections.push([`**${i18n.t("chat:slash_help_native")}**`, "", ...nativeLines].join("\n"));
   }
 
   const sourceOrder: Array<{ key: "project" | "user" | "plugin"; heading: string }> = [
-    { key: "project", heading: "**Project commands**" },
-    { key: "user", heading: "**User commands**" },
-    { key: "plugin", heading: "**Plugin commands**" },
+    { key: "project", heading: `**${i18n.t("chat:slash_help_project")}**` },
+    { key: "user", heading: `**${i18n.t("chat:slash_help_user")}**` },
+    { key: "plugin", heading: `**${i18n.t("chat:slash_help_plugin")}**` },
   ];
 
   for (const { key, heading } of sourceOrder) {
@@ -1049,7 +1074,7 @@ export function formatHelpMessage(commands: SlashCommand[]): string {
   }
 
   if (sections.length === 0) {
-    return "No slash commands are registered.";
+    return i18n.t("chat:slash_help_none");
   }
 
   return sections.join("\n\n");
@@ -1072,23 +1097,23 @@ const statusHandler: NativeHandler = {
   execute: (ctx) => {
     const handled = { kind: "handled" as const, canonicalName: "status" };
     if (!ctx.workspaceId) {
-      ctx.addLocalMessage("/status: no active workspace");
+      ctx.addLocalMessage(i18n.t("chat:slash_no_workspace", { command: "/status" }));
       return handled;
     }
-    const repo = ctx.repository?.name ?? "(unknown repo)";
-    const branch = ctx.workspace?.branch ?? "(no branch)";
-    const agent = ctx.agentStatus ?? "(unknown)";
+    const repo = ctx.repository?.name ?? i18n.t("chat:slash_status_unknown_repo");
+    const branch = ctx.workspace?.branch ?? i18n.t("chat:slash_status_no_branch");
+    const agent = ctx.agentStatus ?? i18n.t("chat:slash_status_unknown");
     const lines = [
-      `Repo: ${repo}`,
-      `Branch: ${branch}`,
-      `Agent: ${agent}`,
-      `Model: ${ctx.selectedModel}`,
-      `Permission: ${ctx.permissionLevel}`,
-      `Plan mode: ${formatOnOff(ctx.planMode)}`,
-      `Fast: ${formatOnOff(ctx.fastMode)}`,
-      `Thinking: ${formatOnOff(ctx.thinkingEnabled)}`,
-      `Chrome: ${formatOnOff(ctx.chromeEnabled)}`,
-      `Effort: ${ctx.effortLevel}`,
+      i18n.t("chat:slash_status_repo", { value: repo }),
+      i18n.t("chat:slash_status_branch", { value: branch }),
+      i18n.t("chat:slash_status_agent", { value: agent }),
+      i18n.t("chat:slash_status_model", { value: ctx.selectedModel }),
+      i18n.t("chat:slash_status_permission", { value: ctx.permissionLevel }),
+      i18n.t("chat:slash_status_plan_mode", { value: formatOnOff(ctx.planMode) }),
+      i18n.t("chat:slash_status_fast", { value: formatOnOff(ctx.fastMode) }),
+      i18n.t("chat:slash_status_thinking", { value: formatOnOff(ctx.thinkingEnabled) }),
+      i18n.t("chat:slash_status_chrome", { value: formatOnOff(ctx.chromeEnabled) }),
+      i18n.t("chat:slash_status_effort", { value: ctx.effortLevel }),
     ];
     ctx.addLocalMessage(lines.join("\n"));
     return handled;

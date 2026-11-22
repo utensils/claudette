@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   cancelVoiceRecording,
@@ -189,8 +190,8 @@ export function useVoiceInput(
       const hasEnabledProvider = providers.some((candidate) => candidate.enabled);
       setError(
         hasEnabledProvider
-          ? "No ready voice provider is available. Open Plugins settings to finish voice setup."
-          : "No enabled voice provider is ready. Open Plugins settings to enable System dictation or set up an offline provider.",
+          ? i18n.t("modals:voice_no_ready_provider")
+          : i18n.t("modals:voice_no_enabled_provider"),
       );
       setState("error");
       return;
@@ -244,7 +245,9 @@ export function useVoiceInput(
     }
 
     if (provider.id !== PLATFORM_VOICE_PROVIDER_ID) {
-      setError(provider.error ?? provider.statusLabel ?? "This voice provider is not available.");
+      setError(provider.error ??
+          provider.statusLabel ??
+          i18n.t("modals:voice_provider_unavailable"));
       setState("error");
       return;
     }
@@ -256,7 +259,7 @@ export function useVoiceInput(
     }
 
     if (platformSpeechDisabled) {
-      setError("System dictation is disabled on macOS because it can crash the app before permission errors are recoverable.");
+      setError(i18n.t("modals:voice_dictation_disabled_macos"));
       setState("error");
       return;
     }
@@ -268,7 +271,7 @@ export function useVoiceInput(
       // engine as setup-required here and route the user to Plugins
       // settings where they can enable the offline Whisper provider.
       setError(
-        "System dictation isn't available in this webview. Switch to an offline voice provider in Plugins settings.",
+        i18n.t("modals:voice_dictation_unavailable_webview"),
       );
       setState("setup-required");
       onNeedsSetup(provider.id);

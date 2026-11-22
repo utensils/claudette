@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ThinkingBlock } from "./ThinkingBlock";
 import styles from "./ThinkingBlock.module.css";
+import "../../i18n";
 
 const mountedRoots: Root[] = [];
 const mountedContainers: HTMLElement[] = [];

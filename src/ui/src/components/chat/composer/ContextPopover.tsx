@@ -1,4 +1,5 @@
 import { type RefObject, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { computeMeterState } from "../contextMeterLogic";
 import { formatTokens } from "../formatTokens";
@@ -16,9 +17,9 @@ interface ContextPopoverProps {
 }
 
 const SEGMENTS = [
-  { label: "System + tools", shareKey: "system" as const },
-  { label: "Conversation", shareKey: "conversation" as const },
-  { label: "Latest files", shareKey: "files" as const },
+  { labelKey: "context_segment_system" as const, shareKey: "system" as const },
+  { labelKey: "context_segment_conversation" as const, shareKey: "conversation" as const },
+  { labelKey: "context_segment_files" as const, shareKey: "files" as const },
 ];
 
 const SEGMENT_COLORS = [
@@ -28,6 +29,7 @@ const SEGMENT_COLORS = [
 ];
 
 export function ContextPopover({ sessionId, onClose, onCompact, onClear, triggerRef }: ContextPopoverProps) {
+  const { t } = useTranslation("chat");
   const popoverRef = useRef<HTMLDivElement>(null);
   const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
 
@@ -77,13 +79,13 @@ export function ContextPopover({ sessionId, onClose, onCompact, onClear, trigger
   return (
     <div ref={popoverRef} className={styles.popover}>
       <div className={styles.header}>
-        <span className={styles.caption}>Context</span>
+        <span className={styles.caption}>{t("context_caption")}</span>
         <span className={styles.stateLabel} style={{ color }}>{stateLabel(ratio)}</span>
       </div>
 
       <div className={styles.bigReadout}>
         <span className={styles.bigNumber}>{formatTokens(state.totalTokens)}</span>
-        <span className={styles.bigDenom}>/ {formatTokens(state.capacity)} tokens</span>
+        <span className={styles.bigDenom}>{t("context_capacity_tokens", { capacity: formatTokens(state.capacity) })}</span>
       </div>
 
       <div className={styles.bar}>
@@ -107,7 +109,7 @@ export function ContextPopover({ sessionId, onClose, onCompact, onClear, trigger
                 className={styles.segmentDot}
                 style={{ background: SEGMENT_COLORS[i] }}
               />
-              <span>{seg.label}</span>
+              <span>{t(seg.labelKey)}</span>
             </div>
             <span className={styles.segmentValue}>
               {formatTokens(Math.trunc(shares[i] * state.capacity))}
@@ -118,13 +120,13 @@ export function ContextPopover({ sessionId, onClose, onCompact, onClear, trigger
 
       <div className={styles.footer}>
         <div className={styles.footerCol}>
-          <span className={styles.footerCaption}>Remaining</span>
+          <span className={styles.footerCaption}>{t("context_remaining")}</span>
           <span className={styles.footerValue}>
             {formatTokens(Math.max(0, remaining))}
           </span>
         </div>
         <div className={styles.footerColRight}>
-          <span className={styles.footerCaption}>This session</span>
+          <span className={styles.footerCaption}>{t("context_this_session")}</span>
           <span className={styles.footerValue}>{formatCost(cost)}</span>
         </div>
       </div>
@@ -135,14 +137,14 @@ export function ContextPopover({ sessionId, onClose, onCompact, onClear, trigger
           className={styles.actionBtn}
           onClick={() => { onCompact(); onClose(); }}
         >
-          Compact
+          {t("context_compact")}
         </button>
         <button
           type="button"
           className={styles.actionBtn}
           onClick={() => { onClear(); onClose(); }}
         >
-          Clear
+          {t("context_clear")}
         </button>
       </div>
     </div>

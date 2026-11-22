@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 import type { SessionDot } from "../../../types/metrics";
 
@@ -12,11 +13,12 @@ interface TimelineProps {
  * semantics (the SVG is a single figure, not a button list).
  */
 export function Timeline({ dots }: TimelineProps) {
+  const { t } = useTranslation();
   const now = Date.now();
   const windowMs = 24 * 60 * 60 * 1000;
 
   if (dots.length === 0) {
-    return <div className={styles.empty}>no sessions in last 24h</div>;
+    return <div className={styles.empty}>{t("metrics_timeline_empty")}</div>;
   }
 
   const width = 100;
@@ -29,7 +31,7 @@ export function Timeline({ dots }: TimelineProps) {
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
       role="img"
-      aria-label="24h session timeline"
+      aria-label={t("metrics_timeline_aria")}
       style={{ height: 32 }}
     >
       <line
@@ -40,8 +42,8 @@ export function Timeline({ dots }: TimelineProps) {
         y2={height / 2}
       />
       {dots.map((dot, i) => {
-        const t = Date.parse(dot.endedAt);
-        const age = now - t;
+        const endedAt = Date.parse(dot.endedAt);
+        const age = now - endedAt;
         if (age < 0 || age > windowMs) return null;
         const x = width - (age / windowMs) * width;
         return (
@@ -53,8 +55,8 @@ export function Timeline({ dots }: TimelineProps) {
             r={r}
           >
             <title>
-              {new Date(t).toLocaleTimeString()} ·{" "}
-              {dot.completedOk ? "ok" : "failed"}
+              {new Date(endedAt).toLocaleTimeString()} ·{" "}
+              {dot.completedOk ? t("metrics_timeline_ok") : t("metrics_timeline_failed")}
             </title>
           </circle>
         );

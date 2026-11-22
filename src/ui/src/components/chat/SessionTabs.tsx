@@ -709,7 +709,7 @@ function FileTab({
       ? null
       : typeof gitStatus === "string"
         ? gitStatus
-        : `Renamed from ${gitStatus.Renamed.from}`;
+        : t("file_tab_renamed_from", { from: gitStatus.Renamed.from });
 
   return (
     <TabShell
@@ -726,7 +726,7 @@ function FileTab({
         <InlineRenameInput
           name={basename}
           className={styles.nameInput}
-          ariaLabel={`Rename ${basename}`}
+          ariaLabel={t("tab_rename_aria", { name: basename })}
           onCommit={onRenameCommit}
           onCancel={onRenameCancel}
         />

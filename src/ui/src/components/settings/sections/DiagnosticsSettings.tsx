@@ -168,7 +168,7 @@ export function DiagnosticsSettings() {
           >
             {LOG_LEVELS.map((opt) => (
               <option key={opt.value || "default"} value={opt.value}>
-                {opt.label}
+                {opt.value === "" ? t("diagnostics_log_level_default") : opt.label}
               </option>
             ))}
           </select>

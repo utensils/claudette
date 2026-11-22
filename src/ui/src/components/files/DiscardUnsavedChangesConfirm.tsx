@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Modal } from "../modals/Modal";
 import shared from "../modals/shared.module.css";
 
@@ -17,18 +18,17 @@ export function DiscardUnsavedChangesConfirm({
   onConfirm,
   onClose,
 }: DiscardUnsavedChangesConfirmProps) {
-  const message =
-    count > 1
-      ? `You have unsaved changes in ${count} files. Closing these tabs will discard them.`
-      : "You have unsaved changes in this file. Closing this tab will discard them.";
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   return (
-    <Modal title="Discard unsaved changes?" onClose={onClose}>
+    <Modal title={t("discard_unsaved_title")} onClose={onClose}>
       <div className={shared.warning}>
-        {message} <strong>This cannot be undone.</strong>
+        {t("discard_unsaved_message", { count })}{" "}
+        <strong>{t("discard_unsaved_irreversible")}</strong>
       </div>
       <div className={shared.actions}>
         <button type="button" className={shared.btn} onClick={onClose}>
-          Cancel
+          {tCommon("cancel")}
         </button>
         <button
           type="button"
@@ -38,7 +38,7 @@ export function DiscardUnsavedChangesConfirm({
           }}
           autoFocus
         >
-          Discard
+          {t("discard_unsaved_confirm")}
         </button>
       </div>
     </Modal>

@@ -8,6 +8,8 @@
  * so we share the parse and let callers wrap.
  */
 
+import i18n from "../i18n";
+
 export interface ResetCountdown {
   /** True once the reset moment has passed (utilization should refresh). */
   resetting: boolean;
@@ -43,17 +45,26 @@ export function resetCountdown(
 /** Compact countdown ("1h 23m" / "2d 5h" / "resetting…"). */
 export function formatResetCountdown(resetsAt: string | number): string {
   const c = resetCountdown(resetsAt);
-  if (c.resetting) return "resetting…";
-  if (c.days > 0) return `${c.days}d ${c.hours}h`;
-  if (c.hours > 0) return `${c.hours}h ${c.minutes}m`;
-  return `${c.minutes}m`;
+  if (c.resetting) return i18n.t("modals:usage_resetting_short");
+  if (c.days > 0) return i18n.t("modals:usage_countdown_dh", { days: c.days, hours: c.hours });
+  if (c.hours > 0) return i18n.t("modals:usage_countdown_hm", {
+      hours: c.hours,
+      minutes: c.minutes,
+    });
+  return i18n.t("modals:usage_countdown_m", { minutes: c.minutes });
 }
 
 /** Settings-style "resets in X" copy ("resets in 1h 23m" / "resetting now"). */
 export function formatResetIn(resetsAt: string | number): string {
   const c = resetCountdown(resetsAt);
-  if (c.resetting) return "resetting now";
-  if (c.days > 0) return `resets in ${c.days}d ${c.hours}h`;
-  if (c.hours > 0) return `resets in ${c.hours}h ${c.minutes}m`;
-  return `resets in ${c.minutes}m`;
+  if (c.resetting) return i18n.t("modals:usage_resetting_now");
+  if (c.days > 0) return i18n.t("modals:usage_resets_in_dh", {
+      days: c.days,
+      hours: c.hours,
+    });
+  if (c.hours > 0) return i18n.t("modals:usage_resets_in_hm", {
+      hours: c.hours,
+      minutes: c.minutes,
+    });
+  return i18n.t("modals:usage_resets_in_m", { minutes: c.minutes });
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getReasoningLevels,
   type ReasoningControlVariant,
@@ -20,10 +21,11 @@ export function EffortSelector({
   selected,
   selectedModel,
   variant = "claude",
-  label = "Effort",
+  label,
   onSelect,
   onClose,
 }: EffortSelectorProps) {
+  const { t } = useTranslation("chat");
   const dropdownRef = useRef<HTMLDivElement>(null);
   const levels = getReasoningLevels(selectedModel, variant);
 
@@ -42,7 +44,7 @@ export function EffortSelector({
     <>
       <div className={styles.overlay} onClick={onClose} />
       <div ref={dropdownRef} className={styles.dropdown}>
-        <div className={styles.groupLabel}>{label}</div>
+        <div className={styles.groupLabel}>{label ?? t("effort")}</div>
         {levels.map((level) => (
           <button
             key={level.id}

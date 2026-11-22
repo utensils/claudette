@@ -9,6 +9,7 @@ import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import type { WorkflowProgressEntry } from "../../types/workflow";
 import { WORKFLOW_CARD_ANCHOR_ATTR } from "./workflowAnchor";
 import { WorkflowStatusPill } from "./WorkflowStatusPill";
+import "../../i18n";
 
 const SESSION = "session-1";
 

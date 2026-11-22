@@ -22,6 +22,7 @@ const serviceMocks = vi.hoisted(() => ({
 vi.mock("../../services/tauri", () => serviceMocks);
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+  initReactI18next: { type: "3rdParty", init: () => {} },
 }));
 vi.mock("../chat/SessionTabs", () => ({
   SessionTabs: () => <div data-testid="session-tabs" />,

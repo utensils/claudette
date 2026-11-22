@@ -41,6 +41,7 @@ const serviceMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("react-i18next", () => ({
+  initReactI18next: { type: "3rdParty", init: () => {} },
   useTranslation: () => ({
     t: (key: string, fallbackOrOptions?: string | Record<string, unknown>) =>
       typeof fallbackOrOptions === "string" ? fallbackOrOptions : key,

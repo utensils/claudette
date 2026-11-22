@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronRight } from "lucide-react";
 import styles from "./SyntheticContinuationMessage.module.css";
 
@@ -15,6 +16,7 @@ interface SyntheticContinuationMessageProps {
 export function SyntheticContinuationMessage({
   body,
 }: SyntheticContinuationMessageProps) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(false);
   return (
     <div className={styles.container}>
@@ -38,7 +40,7 @@ export function SyntheticContinuationMessage({
             className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
             aria-hidden="true"
           />
-          Pre-compaction summary
+          {t("pre_compaction_summary")}
         </span>
         <span className={styles.line} aria-hidden="true" />
       </div>

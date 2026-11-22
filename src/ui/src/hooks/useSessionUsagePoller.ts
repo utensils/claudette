@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { useEffect, useRef } from "react";
 
 import type { AgentBackendConfig } from "../services/tauri/agentBackends";
@@ -101,9 +102,9 @@ export function useSessionUsagePoller({
       // backend).
       const stub: UsageSnapshot = {
         provider_kind: backend.kind,
-        source_label: "Claude Code Usage off",
+        source_label: i18n.t("modals:usage_disabled_label"),
         buckets: [],
-        note: "Enable Claude Code Usage in Settings → Experimental to surface subscription limits.",
+        note: i18n.t("modals:usage_disabled_note"),
         fetched_at_ms: Date.now(),
         experimental_disabled: true,
       };

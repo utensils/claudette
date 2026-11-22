@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 import { useAppStore } from "../../../stores/useAppStore";
 import { HBar } from "../primitives/HBar";
@@ -9,13 +10,14 @@ function format(n: number): string {
 }
 
 export function ChurnBar() {
+  const { t } = useTranslation();
   const metrics = useAppStore((s) => s.dashboardMetrics);
   const adds = metrics?.additions7d ?? 0;
   const dels = metrics?.deletions7d ?? 0;
 
   return (
     <div className={styles.tile}>
-      <span className={styles.tileLabel}>Churn · 7d</span>
+      <span className={styles.tileLabel}>{t("metrics_churn_title")}</span>
       <div className={styles.tileRow}>
         <span className={`${styles.tileValue} ${styles.tileValuePositive}`}>
           +{format(adds)}

@@ -1,4 +1,5 @@
 import { CircleDot } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import styles from "./Sidebar.module.css";
 
@@ -15,15 +16,19 @@ export interface WorkspaceScmLinkIconProps {
 /// of the project-view issues/PRs feature, so it stays invisible
 /// whenever that feature is turned off.
 export function WorkspaceScmLinkIcon({ workspaceId }: WorkspaceScmLinkIconProps) {
+  const { t } = useTranslation();
   const enabled = useAppStore((s) => s.projectViewIssuesPrsEnabled);
   const link = useAppStore((s) => s.workspaceScmLinks[workspaceId]);
   if (!enabled || !link) return null;
-  const prefix = link.kind === "pr" ? "PR" : "Issue";
+  const prefix =
+    link.kind === "pr"
+      ? t("workspace_header_kind_pr")
+      : t("workspace_header_kind_issue");
   return (
     <span
       className={styles.wsScmLink}
-      title={`${prefix} #${link.number} — ${link.title}`}
-      aria-label={`${prefix} #${link.number}: ${link.title}`}
+      title={t("sidebar_scm_link_title", { kind: prefix, number: link.number, title: link.title })}
+      aria-label={t("sidebar_scm_link_aria", { kind: prefix, number: link.number, title: link.title })}
       role="img"
     >
       <CircleDot size={11} />

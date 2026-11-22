@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskStatus, TrackedTask } from "../../hooks/useTaskTracker";
 import type { WorkspaceTaskHistoryResult } from "../../hooks/useWorkspaceTaskHistory";
+import "../../i18n";
 import { TaskList } from "./TaskList";
 
 const mountedRoots: Root[] = [];
