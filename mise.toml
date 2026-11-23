@@ -13,14 +13,15 @@
 [tools]
 rust = "1.94"
 bun = "latest"
-# tauri-cli pinned to the same ^2.9 line the Nix devshell ships
-# (`pkgs.cargo-tauri`). The npm package ships a prebuilt binary,
+# tauri-cli pinned to the same 2.x line the Nix devshell ships
+# (`pkgs.cargo-tauri`); mise takes a version prefix, not a semver range
+# like ^2.9. The npm package ships a prebuilt binary,
 # sidestepping `cargo install tauri-cli` (which itself needs the SDK
 # linker fix below). `src-tauri/Info.plist` is picked up automatically
 # from its conventional location — no `bundle.macOS.infoPlist` config
 # field exists in the Tauri 2 schema, and stricter validators (e.g.
 # nixpkgs' cargo-tauri 2.9.6) reject it as an unknown property.
-"npm:@tauri-apps/cli" = "^2.9"
+"npm:@tauri-apps/cli" = "2"
 
 [env]
 # macOS only. `xcrun --show-sdk-path` resolves whichever SDK is active —

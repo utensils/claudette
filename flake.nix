@@ -357,6 +357,7 @@
               pkgs.cmake
               pkgs.perl
               pkgs.cargo-llvm-cov
+              pkgs.gnumake
               # Windows cross-compile toolchain. cargo-xwin shells out to
               # clang-cl (the MSVC-compatible driver) and llvm-lib / llvm-ar
               # as the archiver; rust-lld is bundled with the fenix rustc
@@ -568,11 +569,7 @@
               }
               {
                 name = "docs-dev";
-                command = ''
-                  cd "$PRJ_ROOT/site"
-                  [ -d node_modules ] || bun install --frozen-lockfile
-                  exec bun run dev "$@"
-                '';
+                command = ''exec make -C "$PRJ_ROOT" docs-dev'';
                 help = "Start the docs site (Astro/Starlight) in dev mode with hot-reload (default http://localhost:4321)";
                 category = "documentation";
               }
@@ -590,24 +587,20 @@
               }
               {
                 name = "check";
-                command = ''
-                  mkdir -p src/ui/dist
-                  [ -f src/ui/dist/index.html ] || echo '<html></html>' > src/ui/dist/index.html
-                  cargo clippy --workspace --all-targets -- -D warnings && cd src/ui && bunx tsc --noEmit
-                '';
-                help = "Run clippy + TypeScript type checks";
+                command = ''exec make -C "$PRJ_ROOT" lint lint-tauri typecheck'';
+                help = "Run clippy (core crates + claudette-tauri), CSS token + ESLint checks, and tsc -b (`make lint lint-tauri typecheck`)";
                 category = "quality";
               }
               {
                 name = "fmt";
-                command = ''cargo fmt --all && cd src/ui && bunx eslint --fix . "$@"'';
-                help = "Format Rust and TypeScript code";
+                command = ''exec make -C "$PRJ_ROOT" fmt'';
+                help = "Format Rust and auto-fix ESLint issues (`make fmt`)";
                 category = "quality";
               }
               {
                 name = "run-tests";
-                command = ''cargo test --workspace --all-features "$@"'';
-                help = "Run all Rust tests";
+                command = ''exec make -C "$PRJ_ROOT" test-rust test-tauri T="$*"'';
+                help = "Run Rust tests for the core crates and claudette-tauri; args filter by name (`make test-rust test-tauri`)";
                 category = "quality";
               }
               {
@@ -667,16 +660,7 @@
               }
               {
                 name = "coverage";
-                command = ''
-                  mkdir -p src/ui/dist
-                  [ -f src/ui/dist/index.html ] || echo '<html></html>' > src/ui/dist/index.html
-                  cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-                  cargo llvm-cov report --html
-                  cargo llvm-cov report
-                  echo ""
-                  echo "lcov:  lcov.info"
-                  echo "html:  target/llvm-cov/html/index.html"
-                '';
+                command = ''exec make -C "$PRJ_ROOT" coverage'';
                 help = "Run tests with coverage (terminal summary + lcov + HTML report)";
                 category = "quality";
               }
