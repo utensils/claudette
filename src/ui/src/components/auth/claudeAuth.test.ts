@@ -26,6 +26,7 @@ const serviceMocks = vi.hoisted(() => ({
   // `useCodexAuthLogin` would explode with `TypeError: ... is not a
   // function`. Keep the mock surface in sync with the real module.
   launchCodexLogin: vi.fn(() => Promise.resolve()),
+  launchAntigravityLogin: vi.fn(() => Promise.resolve()),
 }));
 
 const eventMocks = vi.hoisted(() => {
@@ -57,8 +58,10 @@ vi.mock("../../services/tauri", () => serviceMocks);
 
 import {
   classifyAuthError,
+  cleanAntigravityAuthError,
   cleanClaudeAuthError,
   cleanCodexAuthError,
+  isAntigravityAuthError,
   isClaudeAuthError,
   isCodexAuthError,
   useClaudeAuthRecovery,
@@ -191,6 +194,25 @@ describe("classifyAuthError", () => {
       ),
     ).toBe("codex");
     expect(classifyAuthError("CODEX AUTHENTICATION EXPIRED")).toBe("codex");
+  });
+
+  it("returns antigravity for Antigravity ACP auth failures", () => {
+    expect(
+      classifyAuthError(
+        "Antigravity is not authenticated. Run /login (or `agy acp --login` in a terminal), then send the message again.",
+      ),
+    ).toBe("antigravity");
+    expect(
+      classifyAuthError("⚠ UNAUTHENTICATED (code 401): Please sign in"),
+    ).toBe("antigravity");
+    expect(
+      isAntigravityAuthError("Run `agy acp --login` to authenticate."),
+    ).toBe(true);
+    expect(
+      cleanAntigravityAuthError(
+        "Antigravity is not authenticated. Run /login (or `agy acp --login` in a terminal), then send the message again.",
+      ),
+    ).toBe("Antigravity is not authenticated. Run /login");
   });
 
   it("returns claude for Claude CLI auth failures", () => {

@@ -65,6 +65,7 @@ const serviceMocks = vi.hoisted(() => ({
     Promise.resolve({ ok: true, message: "OK", backends: [] }),
   ),
   launchCodexLogin: vi.fn(() => Promise.resolve()),
+  launchAntigravityLogin: vi.fn(() => Promise.resolve()),
   defaultHarnessForKind: (kind: AgentBackendConfig["kind"]) => {
     switch (kind) {
       case "anthropic":
@@ -76,6 +77,8 @@ const serviceMocks = vi.hoisted(() => ({
         return "claude_code" as const;
       case "codex_native":
         return "codex_app_server" as const;
+      case "antigravity":
+        return "antigravity_acp" as const;
     }
   },
   availableHarnessesForKind: (kind: AgentBackendConfig["kind"]) => {
@@ -89,6 +92,8 @@ const serviceMocks = vi.hoisted(() => ({
         return ["claude_code"] as const;
       case "codex_native":
         return ["codex_app_server"] as const;
+      case "antigravity":
+        return ["antigravity_acp"] as const;
     }
   },
   effectiveHarness: (backend: AgentBackendConfig) => {
@@ -104,6 +109,8 @@ const serviceMocks = vi.hoisted(() => ({
         return "claude_code" as const;
       case "codex_native":
         return "codex_app_server" as const;
+      case "antigravity":
+        return "antigravity_acp" as const;
     }
   },
   getClaudeAuthStatus: vi.fn<() => Promise<ClaudeAuthStatus>>(() =>

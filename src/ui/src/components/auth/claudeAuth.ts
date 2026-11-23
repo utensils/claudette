@@ -4,6 +4,7 @@ import {
   cancelClaudeAuthLogin,
   claudeAuthLogin,
   getClaudeAuthStatus,
+  launchAntigravityLogin,
   launchCodexLogin,
   submitClaudeAuthCode,
   type ClaudeAuthStatus,
@@ -52,23 +53,31 @@ const AUTH_ERROR_PATTERNS = [
  * phrasing tweak there gets picked up here without a separate code path.
  */
 const CODEX_AUTH_EXPIRED_SENTINEL = "codex authentication expired";
+const ANTIGRAVITY_AUTH_SENTINELS = [
+  "antigravity is not authenticated",
+  "agy acp --login",
+  "unauthenticated (code 401)",
+];
 
 /**
  * Provider whose sign-in flow should drive the in-chat auth callout for
  * a given failure. `null` = not an auth error we know how to recover.
  *
  * Determined entirely from the error string so this works regardless of
- * which harness produced it (Codex App-Server, Claude CLI subprocess,
- * etc.). When the backend evolves to emit other harness-specific auth
- * sentinels, extend this classifier rather than scattering per-call-site
+ * which harness produced it (Codex App-Server, Antigravity ACP, Claude CLI
+ * subprocess, etc.). When the backend evolves to emit other harness-specific
+ * auth sentinels, extend this classifier rather than scattering per-call-site
  * substring checks across the FE.
  */
-export type AuthErrorProvider = "claude" | "codex";
+export type AuthErrorProvider = "claude" | "codex" | "antigravity";
 
 export function classifyAuthError(error: string): AuthErrorProvider | null {
   if (error.includes("ENV_AUTH:")) return null;
   const normalized = error.toLowerCase();
   if (normalized.includes(CODEX_AUTH_EXPIRED_SENTINEL)) return "codex";
+  if (ANTIGRAVITY_AUTH_SENTINELS.some((sentinel) => normalized.includes(sentinel))) {
+    return "antigravity";
+  }
   if (AUTH_ERROR_PATTERNS.some((pattern) => normalized.includes(pattern))) {
     return "claude";
   }
@@ -77,6 +86,10 @@ export function classifyAuthError(error: string): AuthErrorProvider | null {
 
 export function isCodexAuthError(error: string): boolean {
   return classifyAuthError(error) === "codex";
+}
+
+export function isAntigravityAuthError(error: string): boolean {
+  return classifyAuthError(error) === "antigravity";
 }
 
 /**
@@ -397,6 +410,100 @@ export function useCodexAuthLogin({
 export function cleanCodexAuthError(error: string): string {
   return error
     .replace(/\s*\(or `codex login` in a terminal\)/, "")
+    .replace(/, then send the message again\.?$/, "")
+    .trim();
+}
+
+export function useAntigravityAuthLogin({
+  onSuccess,
+}: {
+  onSuccess?: () => void | Promise<void>;
+} = {}) {
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const onSuccessRef = useRef(onSuccess);
+  const loginInFlightRef = useRef(false);
+  const [authState, setAuthState] = useState<ClaudeAuthLoginState>({
+    status: "idle",
+  });
+
+  useEffect(() => {
+    onSuccessRef.current = onSuccess;
+  }, [onSuccess]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+    listen<AuthLoginComplete>("antigravity://login-complete", (event) => {
+      if (!loginInFlightRef.current) return;
+      loginInFlightRef.current = false;
+      const { success, error } = event.payload;
+      if (!success) {
+        setAuthState({
+          status: "error",
+          error: error ?? "Antigravity sign-in failed.",
+        });
+        return;
+      }
+
+      void Promise.resolve(onSuccessRef.current?.())
+        .then(() => {
+          setAuthState({ status: "success" });
+        })
+        .catch((err) => {
+          setAuthState({
+            status: "error",
+            error:
+              err instanceof Error
+                ? err.message
+                : String(err || "Antigravity sign-in could not be verified."),
+          });
+        });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => {
+        console.error("Failed to subscribe to antigravity://login-complete", err);
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const startAuthLogin = useCallback(async () => {
+    loginInFlightRef.current = true;
+    setAuthState({ status: "running", manualUrl: null });
+    try {
+      await launchAntigravityLogin(selectedWorkspaceId);
+    } catch (e) {
+      loginInFlightRef.current = false;
+      setAuthState({ status: "error", error: String(e) });
+    }
+  }, [selectedWorkspaceId]);
+
+  const cancelAuthLogin = useCallback(async () => {
+    loginInFlightRef.current = false;
+    setAuthState({ status: "idle" });
+  }, []);
+
+  const submitAuthCode = useCallback(async (_code: string) => {
+    // Antigravity's `agy acp --login` browser flow doesn't require a paste-back code.
+  }, []);
+
+  return {
+    authState,
+    startAuthLogin,
+    cancelAuthLogin,
+    submitAuthCode,
+  } satisfies ClaudeAuthLoginController;
+}
+
+export function cleanAntigravityAuthError(error: string): string {
+  return error
+    .replace(/\s*\(or `agy acp --login` in a terminal\)/, "")
     .replace(/, then send the message again\.?$/, "")
     .trim();
 }

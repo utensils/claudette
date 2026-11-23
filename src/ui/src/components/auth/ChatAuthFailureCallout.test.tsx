@@ -22,6 +22,7 @@ const serviceMocks = vi.hoisted(() => ({
   cancelClaudeAuthLogin: vi.fn(() => Promise.resolve()),
   submitClaudeAuthCode: vi.fn(() => Promise.resolve()),
   launchCodexLogin: vi.fn(() => Promise.resolve()),
+  launchAntigravityLogin: vi.fn(() => Promise.resolve()),
 }));
 
 const eventMocks = vi.hoisted(() => {

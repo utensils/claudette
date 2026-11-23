@@ -31,4 +31,21 @@ describe("reasoningControls", () => {
     expect(normalizeReasoningLevel("minimal", "sonnet", "claude")).toBe("auto");
   });
 
+  it("uses Antigravity reasoning levels and normalizes max to xhigh", () => {
+    const variant = reasoningVariantForModel({
+      providerId: "antigravity",
+      providerKind: "antigravity",
+    });
+
+    expect(variant).toBe("antigravity");
+    expect(getReasoningLevels("gemini-4-neon", variant).map((level) => level.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(normalizeReasoningLevel("auto", "gemini-4-neon", "antigravity")).toBe("high");
+    expect(normalizeReasoningLevel("max", "gemini-4-neon", "antigravity")).toBe("xhigh");
+    expect(normalizeReasoningLevel(undefined, "gemini-4-neon", "antigravity")).toBe("high");
+  });
 });

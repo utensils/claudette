@@ -156,6 +156,7 @@ export const DEFAULT_HARNESS_BY_KIND: Readonly<Record<string, string>> = {
   openai_api: "claude_code",
   custom_openai: "claude_code",
   codex_native: "codex_app_server",
+  antigravity: "antigravity_acp",
 };
 
 /** Sanctioned harnesses per kind. Mirror of `availableHarnessesForKind`
@@ -170,6 +171,7 @@ export const AVAILABLE_HARNESSES_BY_KIND: Readonly<Record<string, readonly strin
   openai_api: ["claude_code"],
   custom_openai: ["claude_code"],
   codex_native: ["codex_app_server"],
+  antigravity: ["antigravity_acp"],
 };
 
 /**

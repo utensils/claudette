@@ -6,6 +6,7 @@ export type AgentBackendKind =
   | "openai_api"
   | "codex_subscription"
   | "codex_native"
+  | "antigravity"
   | "custom_anthropic"
   | "custom_openai";
 
@@ -32,8 +33,12 @@ export interface AgentBackendModel {
  *  - `claude_code` — the bundled Claude CLI (with `ANTHROPIC_BASE_URL` /
  *    gateway env when the backend isn't Anthropic itself).
  *  - `codex_app_server` — the Codex CLI's debug app-server.
+ *  - `antigravity_acp` — the Antigravity CLI's ACP server (`agy acp`).
  */
-export type AgentBackendRuntimeHarness = "claude_code" | "codex_app_server";
+export type AgentBackendRuntimeHarness =
+  | "claude_code"
+  | "codex_app_server"
+  | "antigravity_acp";
 
 export interface AgentBackendConfig {
   id: string;
@@ -121,6 +126,14 @@ export function launchCodexLogin(workspaceId?: string | null): Promise<void> {
   return invoke("launch_codex_login", { workspaceId: workspaceId ?? null });
 }
 
+export function launchAntigravityLogin(
+  workspaceId?: string | null,
+): Promise<void> {
+  return invoke("launch_antigravity_login", {
+    workspaceId: workspaceId ?? null,
+  });
+}
+
 /**
  * Mirror of `AgentBackendKind::default_harness` for the frontend.
  * Keep in lockstep with `src/agent_backend.rs` — a Rust-side test
@@ -139,6 +152,8 @@ export function defaultHarnessForKind(
       return "claude_code";
     case "codex_native":
       return "codex_app_server";
+    case "antigravity":
+      return "antigravity_acp";
   }
 }
 
@@ -160,6 +175,8 @@ export function availableHarnessesForKind(
       return ["claude_code"];
     case "codex_native":
       return ["codex_app_server"];
+    case "antigravity":
+      return ["antigravity_acp"];
   }
 }
 

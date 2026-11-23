@@ -46,6 +46,7 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     addLocalMessage: vi.fn<(text: string) => void>(),
     startClaudeAuthLogin: vi.fn(async () => {}),
     startCodexLogin: vi.fn(async () => {}),
+    startAntigravityLogin: vi.fn(async () => {}),
     openUsageSettingsExternal: vi.fn<() => void>(),
     openReleaseNotes: vi.fn<() => void>(),
     workspaceId: "ws-1",
@@ -653,6 +654,19 @@ describe("login native handler", () => {
     await handler.execute(ctx, "");
     expect(ctx.startCodexLogin).toHaveBeenCalledTimes(1);
     expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
+  });
+
+  it("starts the Antigravity sign-in flow for Antigravity models", async () => {
+    const ctx = makeCtx({ selectedModelProvider: "antigravity" });
+    const handler = resolveNativeHandler("login")!;
+    const result = await handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "login" });
+    expect(ctx.startAntigravityLogin).toHaveBeenCalledTimes(1);
+    expect(ctx.startCodexLogin).not.toHaveBeenCalled();
+    expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      "Antigravity sign-in opened. Complete the browser flow, then retry the turn.",
+    );
   });
 
   it("surfaces login start failures as local messages", async () => {

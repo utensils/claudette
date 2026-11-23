@@ -3,7 +3,7 @@ import {
   isXhighEffortAllowed,
 } from "./modelCapabilities";
 
-export type ReasoningControlVariant = "claude" | "codex";
+export type ReasoningControlVariant = "claude" | "codex" | "antigravity";
 
 export type ReasoningLevel = {
   id: string;
@@ -31,14 +31,27 @@ export const CODEX_REASONING_LEVELS: readonly ReasoningLevel[] = [
   { id: "xhigh", label: "Extra High" },
 ] as const;
 
+export const ANTIGRAVITY_REASONING_LEVELS: readonly ReasoningLevel[] = [
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+  { id: "xhigh", label: "Extra High" },
+] as const;
+
 export function reasoningVariantForModel(
   model: ReasoningModelLike | undefined,
 ): ReasoningControlVariant {
-  return model?.providerKind === "codex_native" ||
+  if (
+    model?.providerKind === "codex_native" ||
     model?.providerId === "codex" ||
     model?.providerId === "experimental-codex"
-    ? "codex"
-    : "claude";
+  ) {
+    return "codex";
+  }
+  if (model?.providerKind === "antigravity" || model?.providerId === "antigravity") {
+    return "antigravity";
+  }
+  return "claude";
 }
 
 export function getReasoningLevels(
@@ -46,6 +59,7 @@ export function getReasoningLevels(
   variant: ReasoningControlVariant,
 ): readonly ReasoningLevel[] {
   if (variant === "codex") return CODEX_REASONING_LEVELS;
+  if (variant === "antigravity") return ANTIGRAVITY_REASONING_LEVELS;
   if (isXhighEffortAllowed(model)) return CLAUDE_EFFORT_LEVELS;
   if (isMaxEffortAllowed(model)) {
     return CLAUDE_EFFORT_LEVELS.filter((level) => level.id !== "xhigh");
@@ -61,15 +75,18 @@ export function normalizeReasoningLevel(
   variant: ReasoningControlVariant,
 ): string {
   const value = level?.trim() || (variant === "claude" ? "auto" : "high");
-  if (variant === "codex" && (value === "auto" || value === "default")) {
+  if (variant !== "claude" && (value === "auto" || value === "default")) {
     return "high";
+  }
+  if (variant === "antigravity" && value === "max") {
+    return "xhigh";
   }
   if (getReasoningLevels(model, variant).some((candidate) => candidate.id === value)) {
     return value;
   }
   if (value === "max") return "high";
   if (value === "xhigh") return "high";
-  if (variant === "codex") return "high";
+  if (variant !== "claude") return "high";
   return "auto";
 }
 

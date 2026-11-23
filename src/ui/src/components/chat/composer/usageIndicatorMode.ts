@@ -52,6 +52,7 @@ const CLAUDE_FAMILY_KINDS: ReadonlySet<AgentBackendKind> = new Set([
 const ALWAYS_ACTIVE_KINDS: ReadonlySet<AgentBackendKind> = new Set([
   "codex_native",
   "codex_subscription",
+  "antigravity",
   "openai_api",
   "custom_openai",
   "ollama",

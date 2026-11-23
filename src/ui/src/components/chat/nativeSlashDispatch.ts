@@ -1,5 +1,6 @@
 import {
   clearConversation,
+  launchAntigravityLogin,
   launchCodexLogin,
   listSlashCommands,
   loadAttachmentsForSession,
@@ -253,6 +254,9 @@ export async function dispatchNativeSlash(
           startClaudeAuthLogin: startChatClaudeAuthLogin,
           startCodexLogin: async () => {
             await launchCodexLogin(selectedWorkspaceId);
+          },
+          startAntigravityLogin: async () => {
+            await launchAntigravityLogin(selectedWorkspaceId);
           },
           openUsageSettingsExternal: () => {
             void openUsageSettings().catch((err) =>
