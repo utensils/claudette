@@ -53,7 +53,7 @@ Read these before the first spawn; several rules below exist because of them. Re
 - **The PR template asks for a maintainer-approved issue**, screenshots for UI changes, and a UAT
   plan (`.github/PULL_REQUEST_TEMPLATE.md`). Workers follow it.
 - **Worktrees share one machine.** Each worktree has its own Cargo `target/` (a cold build is large
-  and CPU-heavy) and its own `src/ui/node_modules`. `./scripts/dev.sh` probes free Vite and debug
+  and CPU-heavy) and its own `src/ui/node_modules`. `make dev` (`./scripts/dev.sh`) probes free Vite and debug
   ports, so several dev instances can run at once. `git stash` is shared by every worktree.
 
 ## Before you start: the effort runbook
@@ -114,12 +114,13 @@ The brief covers, because each of these has gone wrong when left out:
   it touches), the skills that apply (`claudette-debug` for UI verification), and the specific
   modules it builds on. Name them. "Read the codebase" is not a brief.
 - **What it must not touch**: files several branches would fight over, and other worktrees.
-- **What to run before the PR**: format, lint, type check, and the tests for what it changed.
+- **What to run before the PR**: the `make` targets for what it changed (`make check` covers
+  everything CI checks; `make check-tauri` for `src-tauri/`).
 - **Stale references**: if it changes a command name, event name, settings key, translation key,
   CLI flag, or visible text, it searches the Rust crates, `src/ui/src/`, `src-mobile/`, `plugins/`,
   and `site/src/content/docs/` for it and updates every consumer and test.
 - **Machine manners**: stop only processes it started, by PID; run the app only via
-  `./scripts/dev.sh`; no bare `git stash`; scratch files inside its own worktree.
+  `make dev`; no bare `git stash`; scratch files inside its own worktree.
 - **Hooks and signing**: never bypass commit hooks or signing. If signing fails, leave the work
   staged and report.
 - **How to finish**: one draft PR that closes the issue, following the PR template, with a
@@ -250,7 +251,7 @@ release once the code is done.
 
 The mode changes: findings arrive one at a time and the owner is waiting on each.
 
-- Keep the app running for them with `./scripts/dev.sh` from one branch that carries every fix so
+- Keep the app running for them with `make dev` from one branch that carries every fix so
   far, and tell them which worktree it runs from.
 - Fix small things yourself, one branch and PR per finding so each can be reviewed and reverted
   alone, and merge each into the running branch so they see it at once. Say plainly that it is live

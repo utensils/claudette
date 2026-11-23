@@ -7,9 +7,9 @@ Migrations are `.sql` files in this directory, each registered as a `Migration` 
 1. Create `YYYYMMDDHHMMSS_snake_case_description.sql`, named with the current UTC time (`date -u +%Y%m%d%H%M%S`).
 2. Append `Migration { id, sql: include_str!(...), legacy_version: None }` to `MIGRATIONS`.
 3. Keep it forward-only and additive. Use `IF NOT EXISTS` on new `CREATE TABLE` / `CREATE INDEX`. Give new columns a default, or backfill them, so existing rows still load.
-4. Run `cargo test -p claudette migrations`. The tests check that ids are unique, the timestamp prefix format, and a fresh-DB apply.
+4. Run `make test-rust T=migrations`. The tests check that ids are unique, the timestamp prefix format, and a fresh-DB apply.
 
-On a branch that adds a migration, run the dev app with `./scripts/dev.sh --new` or `--clone`. A plain run migrates your real `claudette.db`.
+On a branch that adds a migration, run the dev app with `make dev ARGS=--new` or `ARGS=--clone`. A plain run migrates your real `claudette.db`.
 
 ## Rules
 

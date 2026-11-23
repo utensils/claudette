@@ -39,17 +39,17 @@ git merge-base --is-ancestor origin/<branch-a> HEAD   # every branch is in
 git merge-base --is-ancestor origin/<branch-b> HEAD
 git status --short                                     # nothing unmerged or left over
 (cd src/ui && bun install --frozen-lockfile)           # if a lockfile changed
-cargo fmt --all --check
-cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features
-cargo test -p <crate> <filters for the changed areas>
-(cd src/ui && bunx tsc -b)
-(cd src/ui && bun run lint:css)
-(cd src/ui && bun run test)
+make fmt-check
+make lint
+make typecheck
+make test-rust T=<filter for the changed areas>
+make test-ui
+make check-tauri                                       # if the batch touched src-tauri/
 ```
 
 Do not chain these with `;` or `&&` across the merges: a chained command once checked a tree with
 conflict markers, and once checked plain `main` after a merge gave up. If the batch carries
-migrations, also run the migration tests (`cargo test -p claudette migrations`) so duplicate ids or
+migrations, also run the migration tests (`make test-rust T=migrations`) so duplicate ids or
 ordering problems show up here, not on `main`.
 
 Run the full Rust test command here only when the batch touched shared code and no workers are

@@ -22,11 +22,13 @@ and signing, anything outward-facing).>
 | What | Command | Notes |
 | --- | --- | --- |
 | New worktree | `git worktree add --no-track <path> -b <branch> origin/main` | or a Claudette workspace / the owner's worktree manager |
-| Set up a worktree | `cd src/ui && bun install` | first `cargo` build is slow; start it early |
-| Run the app | `./scripts/dev.sh` | probes free ports; never bare `cargo tauri dev` for voice work |
-| Rust checks | `cargo fmt --all` · `cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features` | zero warnings |
-| Rust tests | `cargo test -p <crate> <filter>` | full: `cargo test -p claudette -p claudette-server -p claudette-cli --all-features` |
-| Frontend checks | `cd src/ui && bunx tsc -b && bun run lint:css && bun run test` | `tsc -b` is mandatory; vitest doesn't type-check |
+| Set up a worktree | `make setup` | first `cargo` build is slow; start it early |
+| List targets | `make` | the Makefile mirrors CI |
+| Run the app | `make dev` | wraps `./scripts/dev.sh`; `ARGS=--new` for a throwaway user |
+| Everything CI checks | `make check` | fmt-check, lint, typecheck, test |
+| Rust | `make fmt lint-rust` · `make test-rust T=<filter>` | clippy with warnings denied |
+| Frontend | `make typecheck lint-ui test-ui` | `tsc -b` is mandatory; vitest doesn't type-check |
+| `src-tauri/` | `make check-tauri` | CI never lints or runs these tests |
 | Inspect the running app | `claudette-debug` skill | dev builds only |
 | Review (risky) | `pr-review` skill + one independent reviewer | prints; posts only when told |
 | Full CI | `CI` workflow on the PR | required: `Format`, `Test` only; not strict |

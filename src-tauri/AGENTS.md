@@ -7,12 +7,13 @@
 CI compiles this crate's tests but never runs them, and never lints it. When you change anything here, run:
 
 ```bash
-scripts/stage-cli-sidecar.sh --profile debug   # externalBin `binaries/claudette` must exist to build
-cargo clippy -p claudette-tauri --all-targets
-cargo test -p claudette-tauri <filter>
+make check-tauri                 # lint-tauri + test-tauri
+make test-tauri T=<filter>
 ```
 
-If either check fails on code you didn't touch, check it on plain `origin/main` and report it as pre-existing. `clippy.toml`'s raw `Command::new` ban isn't enforced by CI here, so check new spawn sites by hand (root `AGENTS.md`, Windows specifics).
+Both stage the CLI sidecar first (`make sidecar`): the `binaries/claudette` externalBin has to exist before the crate builds.
+
+`lint-tauri` reports clippy warnings without failing, because the crate carries existing findings CI never caught. Don't add new ones: compare its output for the files you touched against plain `origin/main`. If a test fails on code you didn't touch, check it on `origin/main` and report it as pre-existing. `clippy.toml`'s raw `Command::new` ban isn't enforced by CI here, so check new spawn sites by hand (root `AGENTS.md`, Windows specifics).
 
 ## Feature flags
 

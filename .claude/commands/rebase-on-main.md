@@ -21,11 +21,7 @@ Rebase the current branch on `origin/main` and resolve any conflicts.
    - If a conflict is ambiguous or risky, stop and ask the user for guidance
 
 4. **Verify** — Ensure the rebase didn't break anything:
-   - Detect the project's toolchain from config files (e.g., `package.json`, `Makefile`, `mix.exs`, `Cargo.toml`, `pyproject.toml`)
-   - Run the project's **format** command (e.g., `prettier`, `mix format`, `cargo fmt`, `ruff format`)
-   - Run the project's **lint** command (e.g., `eslint`, `mix credo`, `cargo clippy`, `ruff check`)
-   - Run the project's **typecheck** command if applicable (e.g., `tsc --noEmit`, `mypy`, `mix dialyzer`)
-   - Run the project's **test** command (e.g., `jest`, `mix test`, `cargo test`, `pytest`)
+   - Run `make check` (fmt-check, clippy, CSS tokens, ESLint, `tsc -b`, Rust + frontend tests; mirrors CI). If `src-tauri/` changed, also `make check-tauri`, which CI does not run. Run `make` to list targets.
    - If any check fails, investigate and fix the issue
 
 5. **Report** — Summarize what happened:

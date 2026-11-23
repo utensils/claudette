@@ -18,36 +18,32 @@ Copilot reads `.github/copilot-instructions.md` and `.github/instructions/*.inst
 
 ## Commands
 
+The `Makefile` is the entry point and mirrors CI; `make` lists every target. In the Nix devshell commands run as-is; otherwise they run through `mise exec` when mise is installed. On Windows without `make`, run the commands the `Makefile` shows.
+
 ```bash
-# Rust
-cargo fmt --all --check
-cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features  # zero warnings
-cargo test -p claudette -p claudette-server -p claudette-cli --all-features                 # what CI's Test job runs
-cargo test -p claudette <substring>                                                         # tests whose path matches
-cargo test -p claudette --lib diff::tests::test_validate_file_path_rejects_traversal -- --exact
-cargo test -p claudette --test grants_enforcement                                           # one file in tests/
-
-# Frontend
-cd src/ui && bun install
-cd src/ui && bunx tsc -b          # type check; vitest does not type-check
-cd src/ui && bun run test         # vitest
-cd src/ui && bun run lint:css     # design-token enforcement
-cd src/ui && bun run lint         # ESLint (not run in CI)
-
-# App
-./scripts/dev.sh                  # dev mode (Windows: scripts\dev.ps1); see scripts/AGENTS.md
-cargo tauri build                 # release build
+make setup                  # toolchain (mise) + Rust and frontend deps
+make dev                    # run the app via scripts/dev.sh (ARGS=--new|--clone|--clean); Windows: scripts\dev.ps1
+make check                  # fmt-check + lint + typecheck + test: what CI checks on a PR
+make fmt                    # cargo fmt + ESLint autofix
+make lint                   # lint-rust (clippy, core crates, -D warnings) + lint-ui (CSS tokens, ESLint)
+make typecheck              # bunx tsc -b; vitest does not type-check
+make test                   # test-rust (core crates, CI's Test job) + test-ui (vitest)
+make test-rust T=<filter>   # e.g. T=migrations, or T='diff::tests::test_validate_file_path_rejects_traversal -- --exact'
+make test-ui T=<path>       # one vitest file or pattern
+make check-tauri            # clippy + tests for claudette-tauri, which CI never runs
+make build                  # release build
 ```
 
-CI sets `RUSTFLAGS=-Dwarnings`, so any compiler warning fails the build.
+One integration test file: `cargo test -p claudette --test grants_enforcement`. CI sets `RUSTFLAGS=-Dwarnings`; the make targets pass `-D warnings` to clippy instead, so local builds keep their cache.
 
 ## Before you commit
 
 Run what applies to what you touched:
 
-- **Rust:** `cargo fmt --all`, the clippy command above with zero warnings, then the tests for the crate you changed.
-- **`src-tauri/`:** also the checks in `src-tauri/AGENTS.md`. CI neither lints that crate nor runs its tests.
-- **TypeScript or CSS:** `cd src/ui && bunx tsc -b && bun run lint:css && bun run test && bun run lint`. Run `tsc -b` after any TS change, tests included.
+- **Rust:** `make fmt lint-rust`, then `make test-rust T=<filter>` for what you changed.
+- **`src-tauri/`:** also `make check-tauri`. CI neither lints that crate nor runs its tests.
+- **TypeScript or CSS:** `make typecheck lint-ui test-ui`. Run `make typecheck` after any TS change, tests included.
+- **Everything, as CI sees it:** `make check`.
 - **User-visible change:** a docs update in the same PR (see Documentation discipline).
 - **Lockfiles:** CI runs `bun install --frozen-lockfile`; don't change `bun.lock` unless you meant to.
 
@@ -174,7 +170,7 @@ Nightly builds every platform from each push to `main` and stamps all five `Carg
 
 - Each worktree has its own `target/`, `src/ui/node_modules`, and `src-tauri/binaries/`, all gitignored. A fresh one needs `cd src/ui && bun install`. Its first Cargo build is slow and CPU-heavy.
 - `git stash` is shared across worktrees. Never use bare `git stash` or `git stash pop`; commit work in progress instead.
-- Launch the app only via `./scripts/dev.sh`, which probes for free ports. Stop only processes you started, by PID, since other worktrees run processes with the same names.
+- Launch the app only via `make dev` (`./scripts/dev.sh`), which probes for free ports. Stop only processes you started, by PID, since other worktrees run processes with the same names.
 
 ## Dependencies
 

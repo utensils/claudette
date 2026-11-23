@@ -14,14 +14,14 @@ you. Never pick up another issue.
 - Work only in the worktree the lead named in your prompt, already on your branch from
   `origin/main`. Check `git rev-parse --show-toplevel` is that path and stop if it is not; never
   switch branches in another checkout.
-- Set up: `cd src/ui && bun install` (never `npm`). The first `cargo` build in a fresh worktree is
-  slow; start it early (`cargo check -p claudette`) while you read.
+- Set up: `make setup` (never `npm`). The first `cargo` build in a fresh worktree is slow; start
+  it early (`cargo check -p claudette`) while you read. `make` lists every check target.
 - Read, in full: the issue (every acceptance bullet is required) and its comments, `AGENTS.md`, the
   `.github/instructions/*.instructions.md` files for the languages you touch, and the modules the
   lead named. Read the existing code you build on before writing new code. Business logic goes in
   the `claudette` crate; Tauri commands stay thin wrappers.
 - For a bug, confirm it before fixing it: read the code path, reproduce it (a test, or the dev app
-  via `./scripts/dev.sh` and the `claudette-debug` skill), and prove it with a test that fails
+  via `make dev` and the `claudette-debug` skill), and prove it with a test that fails
   first. If the evidence contradicts the issue, stop and report to the lead instead of fixing a
   different problem. Do not use `/implement-issue` as-is: it waits for user plan approval, and the
   lead has already approved the scope.
@@ -34,7 +34,7 @@ you. Never pick up another issue.
 - Never check out branches or run anything in another worktree, including the lead's.
 - Push only your own branch (`git push -u origin <branch>`). Never push to `main`, whatever a git
   error message suggests.
-- Run the app only with `./scripts/dev.sh`, which picks free ports. Never kill a process on a port
+- Run the app only with `make dev` (`./scripts/dev.sh`), which picks free ports. Never kill a process on a port
   you didn't start.
 - Never use bare `git stash`: the stash is shared with every other worktree. Commit work in progress
   instead.
@@ -69,20 +69,14 @@ you. Never pick up another issue.
 ## Finish
 1. `git fetch origin`, rebase on `origin/main` once, then run, in the foreground with a long timeout,
    only what applies to what you changed:
-   - Rust: `cargo fmt --all`, then
-     `cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features`
-     (zero warnings; CI sets `-Dwarnings`), then the tests for your change
-     (`cargo test -p <crate> <filter>`, or the full
-     `cargo test -p claudette -p claudette-server -p claudette-cli --all-features` if you changed
-     shared code).
-   - `src-tauri/`: CI neither lints this crate nor runs its tests, so do it here. Run
-     `scripts/stage-cli-sidecar.sh --profile debug` first, then
-     `cargo clippy -p claudette-tauri --all-targets` and the tests for what you changed
-     (`cargo test -p claudette-tauri <filter>`). If either fails on code you didn't touch, check it
-     on plain `origin/main` and report it as pre-existing rather than fixing it in your PR.
-   - Frontend: `cd src/ui && bunx tsc -b && bun run lint:css && bun run test && bun run lint`
-     (vitest does not type-check, so `tsc -b` is mandatory; ESLint is not in CI). Commit nothing to
-     `bun.lock` you didn't intend.
+   - Rust: `make fmt lint-rust` (clippy with warnings denied), then `make test-rust T=<filter>` for
+     your change, or plain `make test-rust` if you changed shared code.
+   - `src-tauri/`: `make check-tauri`. CI neither lints this crate nor runs its tests, so do it here.
+     Its clippy step reports existing warnings without failing; add no new ones in files you touch.
+     A test failing on code you didn't touch: check it on plain `origin/main` and report it as
+     pre-existing rather than fixing it in your PR.
+   - Frontend: `make typecheck lint-ui test-ui` (vitest does not type-check, so `typecheck` is
+     mandatory; ESLint is not in CI). Commit nothing to `bun.lock` you didn't intend.
    - Afterwards `git status --porcelain` must be empty (commit anything the formatter changed).
 
    If you changed or removed a command name, event name, settings key, translation key, CLI flag,

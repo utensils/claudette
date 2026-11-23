@@ -14,6 +14,6 @@ Use existing service wrappers in `src/ui/src/services/tauri/` (one module per do
 
 All colors outside `src/ui/src/styles/theme.css` must use CSS custom properties, usually `var(--token-name)` or `rgba(var(--token-rgb), alpha)`. Do not add raw hex/rgb/rgba literals to components or CSS modules.
 
-Prefer logic tests for behavior-heavy UI. Put pure behavior in helpers when possible and cover it with Vitest. For TypeScript changes, run `cd src/ui && bunx tsc -b`; test passing alone is not enough.
+Prefer logic tests for behavior-heavy UI. Put pure behavior in helpers when possible and cover it with Vitest. For TypeScript changes, run `make typecheck` (`bunx tsc -b`); test passing alone is not enough.
 
 Do not update `bun.lock` unless dependency changes are intentional. Use Bun commands, not npm or yarn.

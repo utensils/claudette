@@ -2,7 +2,7 @@
 
 ## Dev launcher (`dev.sh`, `dev.ps1` on Windows)
 
-Always launch the app this way, not with bare `cargo tauri dev` or `make run`.
+Always launch the app this way: `make dev` (pass flags as `ARGS=--new`), or the script directly. Not with bare `cargo tauri dev`. `make run` is an alias of `make dev`.
 
 - **Ports:** it probes free Vite and debug-eval ports (bases `14253` / `19432`). Vite runs with `strictPort: true`, so a race between the probe and Vite fails loudly. The base moved off Tauri's stock 1420 because other templates' dev scripts can rebind that port under a running webview.
 - **Discovery file:** it writes `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` so the `claudette-debug` skill finds the right instance.
@@ -18,7 +18,8 @@ Always launch the app this way, not with bare `cargo tauri dev` or `make run`.
 ## mise (non-Nix setup)
 
 - `mise.toml` pins `rust = "1.94"`, `bun = "latest"`, and `tauri-cli` from npm.
-- `make setup` runs `mise install`, `bun install` and `cargo fetch`.
+- `make setup` runs `mise trust` + `mise install` (skipped inside the Nix devshell), `bun install` and `cargo fetch`. Other make targets run through `mise exec` automatically when mise is installed and you're not in the Nix devshell. Override with `make RUN= <target>`.
+- The Nix devshell's `check`, `fmt`, `run-tests`, `coverage` and `docs-dev` commands delegate to make targets, so both paths run the same commands.
 - On macOS, `mise.toml` forces `CC=/usr/bin/cc` and per-target Cargo linkers so `-liconv` / `-lSystem` links succeed under `nix-darwin`'s `ld`. Leave those entries alone unless you're fixing them.
 
 ## Windows

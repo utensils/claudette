@@ -4,10 +4,11 @@ React + TypeScript (strict) + Zustand + CSS modules, built with Vite and Bun, te
 
 ## Checks
 
-Run all four after any change here, test files included:
+Run these from the repo root after any change here, test files included:
 
 ```bash
-bunx tsc -b && bun run lint:css && bun run test && bun run lint
+make typecheck lint-ui test-ui   # bunx tsc -b, lint:css + ESLint, vitest
+make test-ui T=src/path/to/file.test.ts
 ```
 
 vitest compiles with esbuild and does **not** type-check, so tests can pass while types are broken. CI runs `tsc` and `lint:css` but not ESLint.

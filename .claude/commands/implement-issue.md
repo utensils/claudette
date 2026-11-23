@@ -53,11 +53,7 @@ Implement the changes described in one or more GitHub issues passed via $ARGUMEN
    - Prefer agents over sequential execution whenever tasks don't depend on each other
 
 6. **Verify** — Ensure everything works:
-   - Detect the project's toolchain from config files (e.g., `package.json`, `Makefile`, `mix.exs`, `Cargo.toml`, `pyproject.toml`)
-   - Run the project's **format** command (e.g., `prettier`, `mix format`, `cargo fmt`, `ruff format`)
-   - Run the project's **lint** command (e.g., `eslint`, `mix credo`, `cargo clippy`, `ruff check`)
-   - Run the project's **typecheck** command if applicable (e.g., `tsc --noEmit`, `mypy`, `mix dialyzer`)
-   - Run the project's **test** command (e.g., `jest`, `mix test`, `cargo test`, `pytest`)
+   - Run `make check` (fmt-check, clippy, CSS tokens, ESLint, `tsc -b`, Rust + frontend tests; mirrors CI). If `src-tauri/` changed, also `make check-tauri`, which CI does not run. Run `make` to list targets.
    - If any check fails, fix the issues before proceeding
 
 7. **Report** — Summarize what was done:

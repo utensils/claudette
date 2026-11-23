@@ -3,8 +3,9 @@ Review all uncommitted changes and create a well-structured commit using convent
 ## Steps
 
 1. **Pre-flight checks** — Run what applies to what changed (see "Before you commit" in `AGENTS.md`):
-   - Rust (`*.rs`, `Cargo.*`): `cargo fmt --all`, then `cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features` with zero warnings, then the tests for the crate you touched (`cargo test -p <crate> <filter>`)
-   - Frontend (`src/ui/**`): `cd src/ui && bunx tsc -b && bun run lint:css && bun run test` (`tsc -b` is mandatory; vitest does not type-check)
+   - Rust (`*.rs`, `Cargo.*`): `make fmt lint-rust`, then `make test-rust T=<filter>` for what you changed; add `make check-tauri` if `src-tauri/` changed
+   - Frontend (`src/ui/**`): `make typecheck lint-ui test-ui` (`tsc -b` is mandatory; vitest does not type-check)
+   - Unsure what applies: `make check` runs everything CI checks
    - If any check fails, fix the underlying issue before proceeding. Never delete tests or weaken assertions to get green.
 
 2. **Review changes** — Understand what's being committed:

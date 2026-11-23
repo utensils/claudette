@@ -57,9 +57,12 @@ Claudette is a cross-platform desktop application built with [Tauri 2](https://t
 
 ## Getting started
 
+Common tasks are `make` targets that mirror CI; run `make` to list them. They work inside the Nix devshell (`nix develop`), and with [mise](https://mise.jdx.dev/), where they run through `mise exec` so `mise.toml`'s pinned toolchain applies. On Windows without `make`, run the commands the `Makefile` shows directly.
+
 ```sh
-# Install frontend dependencies
-cd src/ui && bun install && cd ../..
+make setup                       # install the mise toolchain (if you use mise) and fetch Rust + frontend deps
+make dev                         # run the app (see below)
+make check                       # what CI checks on a PR: fmt, clippy, CSS tokens, ESLint, tsc, tests
 ```
 
 ### Run in development mode
@@ -68,10 +71,11 @@ Pick the launcher that matches your platform — `--new`, `--clean`, and `-h`/`-
 
 ```sh
 # macOS / Linux — shell launcher
-./scripts/dev.sh                 # full-feature dev (required for macOS voice)
-./scripts/dev.sh --new           # fresh-user sandbox under TMPDIR
-./scripts/dev.sh --clone         # rsync mirror of your real setup; incremental on re-run
-./scripts/dev.sh --clean         # nuke /tmp/claudette-dev/ and exit
+make dev                         # full-feature dev via scripts/dev.sh (required for macOS voice)
+make dev ARGS=--new              # fresh-user sandbox under TMPDIR
+make dev ARGS=--clone            # rsync mirror of your real setup; incremental on re-run
+make dev ARGS=--clean            # nuke /tmp/claudette-dev/ and exit
+./scripts/dev.sh --help          # the launcher itself; same flags
 cargo tauri dev                  # quick path; no voice, no port probing
 ```
 
@@ -109,17 +113,15 @@ Both launchers do a few things `cargo tauri dev` doesn't:
 ### Build, test, lint
 
 ```sh
-# Build optimized release binary
-cargo tauri build
-
-# Run backend tests
-cargo test --all-features
-
-# Lint
-cargo clippy --workspace --all-targets
-
-# Check frontend types
-cd src/ui && bunx tsc --noEmit
+make build                       # optimized release build (cargo tauri build)
+make check                       # everything below, in the order CI runs it
+make fmt                         # cargo fmt + ESLint autofix
+make lint                        # clippy on the core crates (warnings denied) + CSS tokens + ESLint
+make typecheck                   # bunx tsc -b (vitest does not type-check)
+make test                        # Rust core tests + vitest
+make test-rust T=migrations      # filter Rust tests by name
+make check-tauri                 # clippy + tests for claudette-tauri, which CI does not run
+make coverage                    # Rust coverage report like CI (lcov.info + HTML)
 ```
 
 ## Project structure
