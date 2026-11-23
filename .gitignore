@@ -91,3 +91,6 @@ tags
 
 # Local pi agent skills/tools
 .pi/
+
+# Personal Claude Code instructions (see CLAUDE.md)
+CLAUDE.local.md

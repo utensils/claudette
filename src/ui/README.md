@@ -33,7 +33,7 @@ before committing frontend changes.
 
 - **Vite 8** with `@vitejs/plugin-react`.
 - **TypeScript** in strict mode (`noUnusedLocals`, `noUnusedParameters`,
-  `noFallthroughCasesInSwitch`); `any` is avoided by convention (see CLAUDE.md).
+  `noFallthroughCasesInSwitch`); `any` is avoided by convention (see `src/ui/AGENTS.md`).
 - **ESLint 9** flat config (`eslint.config.js`) with `typescript-eslint`,
   `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`.
 - **vitest** is the test runner (not Jest); DOM tests use `happy-dom`.

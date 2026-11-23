@@ -300,7 +300,7 @@ Claudette currently ships in English and Spanish, and we'd love help adding more
 
 - The project uses Rust edition 2024 and Bun as the frontend package manager.
 - The backend (`src/`) is a library crate consumed by the Tauri binary (`src-tauri/`).
-- See `CLAUDE.md` for detailed architecture and contribution guidelines.
+- See `AGENTS.md` (and the nested `AGENTS.md` files it lists) for architecture and contribution guidelines.
 
 ## Relationship to Anthropic
 
