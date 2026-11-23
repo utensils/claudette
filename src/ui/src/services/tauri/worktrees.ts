@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Workspace } from "../../types";
+import type { BackendWorkspace } from "../../types";
 
 export interface DiscoveredWorktree {
   path: string;
@@ -23,7 +23,7 @@ export interface WorktreeImport {
 export function importWorktrees(
   repoId: string,
   imports: WorktreeImport[]
-): Promise<Workspace[]> {
+): Promise<BackendWorkspace[]> {
   return invoke("import_worktrees", { repoId, imports });
 }
 

@@ -1,6 +1,7 @@
 export type { Repository } from "./repository";
 export type {
   Workspace,
+  BackendWorkspace,
   WorkspaceStatus,
   AgentStatus,
 } from "./workspace";

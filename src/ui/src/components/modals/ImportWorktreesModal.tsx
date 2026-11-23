@@ -126,8 +126,13 @@ export function ImportWorktreesModal() {
         name: r.editedName,
       }));
       const created = await importWorktrees(repoId, imports);
+      // The backend row has no `remote_connection_id`; stamp it as a
+      // local workspace. Left `undefined`, the env-prep hook treats the
+      // row as unhydrated and the chat sits on "Preparing workspace
+      // environment…" forever (import emits no `workspaces-changed`
+      // event that would stamp it later).
       for (const ws of created) {
-        addWorkspace(ws);
+        addWorkspace({ ...ws, remote_connection_id: null });
       }
       chainOrClose();
     } catch (e) {
