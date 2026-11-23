@@ -107,10 +107,14 @@ jobs:
         with:
           ref: ${{ needs.resolve-tag.outputs.tag }}
 
+      # Held at 1.99.1 to match the Desktop Tauri Check pin in ci.yml:
+      # tauri-build 2.5.6 mis-resolves the target dir under Rust 1.100's
+      # deeper build-script OUT_DIR layout and panics copying the CLI
+      # sidecar. Drop the pin once tauri-build handles the new layout.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.94"
+          toolchain: "1.99.1"
           targets: ${{ matrix.rust-target }}
 
       - name: Rust cache
