@@ -7,10 +7,11 @@ use claudette::agent::background::{
     parse_workflow_task_binding,
 };
 use claudette::agent::{
-    self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
-    CodexAppServerSession, CodexPermissionLevel, ControlRequestInner, FileAttachment,
-    InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
-    is_codex_approval_tool_name, normalize_codex_reasoning_effort,
+    self, AgentEvent, AgentSession, AgentSettings, AntigravityAcpOptions, AntigravityAcpSession,
+    AntigravityPermissionLevel, ClaudeCodeHarness, CodexAppServerOptions, CodexAppServerSession,
+    CodexPermissionLevel, ControlRequestInner, FileAttachment, InnerStreamEvent,
+    PersistentSessionStart, StartContentBlock, StreamEvent, is_codex_approval_tool_name,
+    normalize_antigravity_reasoning_effort, normalize_codex_reasoning_effort,
 };
 use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::base64_decode;
@@ -1452,6 +1453,12 @@ pub async fn send_chat_message(
         backend_runtime
             .hash
             .push_str(&format!("|codex-reasoning-effort:{codex_effort}"));
+    } else if backend_runtime.harness == AgentBackendRuntimeHarness::AntigravityAcp
+        && let Some(agy_effort) = normalize_antigravity_reasoning_effort(effort.as_deref())
+    {
+        backend_runtime
+            .hash
+            .push_str(&format!("|antigravity-reasoning-effort:{agy_effort}"));
     }
 
     // Resolve user-toggled `claude --help` flags from the cached defs.
@@ -2014,6 +2021,33 @@ pub async fn send_chat_message(
                         started,
                     )))
                 }
+                AgentBackendRuntimeHarness::AntigravityAcp => {
+                    let permission_level = match codex_permission_level_for_persistent {
+                        CodexPermissionLevel::Readonly => AntigravityPermissionLevel::Readonly,
+                        CodexPermissionLevel::Standard => AntigravityPermissionLevel::Standard,
+                        CodexPermissionLevel::Full => AntigravityPermissionLevel::Full,
+                    };
+                    let started = AntigravityAcpSession::start_with_options(
+                        std::path::Path::new(&worktree),
+                        env!("CARGO_PKG_VERSION"),
+                        AntigravityAcpOptions {
+                            model: settings.model.clone(),
+                            permission_level,
+                            plan_mode: settings.plan_mode,
+                            reasoning_effort: settings.effort.clone(),
+                            resume_session_id: is_resume.then(|| sid.clone()),
+                            custom_instructions: instructions.clone(),
+                            mcp_config: settings.mcp_config.clone(),
+                            workspace_env: Some(env.clone()),
+                            resolved_env: Some(resolved.clone()),
+                            probe_mode: false,
+                        },
+                    )
+                    .await?;
+                    Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_antigravity_acp(
+                        started,
+                    )))
+                }
             }
         }
     };
@@ -2063,7 +2097,8 @@ pub async fn send_chat_message(
                     // Injected unconditionally for the same reason as the
                     // spawn path above — scheduling tools ride this server.
                     AgentBackendRuntimeHarness::ClaudeCode
-                    | AgentBackendRuntimeHarness::CodexAppServer => {
+                    | AgentBackendRuntimeHarness::CodexAppServer
+                    | AgentBackendRuntimeHarness::AntigravityAcp => {
                         let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                             &app,
                             &state.db_path,
@@ -2244,7 +2279,9 @@ pub async fn send_chat_message(
             // tool, so it is injected unconditionally — the send_to_user
             // plugin toggle gates that tool's prompt nudge (above), not the
             // whole server. Codex consumes the same MCP server as Claude.
-            AgentBackendRuntimeHarness::ClaudeCode | AgentBackendRuntimeHarness::CodexAppServer => {
+            AgentBackendRuntimeHarness::ClaudeCode
+            | AgentBackendRuntimeHarness::CodexAppServer
+            | AgentBackendRuntimeHarness::AntigravityAcp => {
                 let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                     &app,
                     &state.db_path,

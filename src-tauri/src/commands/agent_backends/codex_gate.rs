@@ -46,6 +46,7 @@ pub(super) fn default_backends_for_gate(native_codex_enabled: bool) -> Vec<Agent
     if native_codex_enabled {
         backends.insert(3, AgentBackendConfig::builtin_codex_native());
     }
+    backends.push(AgentBackendConfig::builtin_antigravity());
     backends
 }
 

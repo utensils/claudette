@@ -3,7 +3,9 @@ use std::sync::Arc;
 use tauri::State;
 
 use claudette::agent::{
-    AgentSession, build_codex_approval_response_payload, build_codex_user_input_response_payload,
+    AgentSession, build_antigravity_approval_response_payload,
+    build_antigravity_user_input_response_payload, build_codex_approval_response_payload,
+    build_codex_user_input_response_payload, is_antigravity_acp_control_input,
     is_codex_approval_tool_name,
 };
 
@@ -123,7 +125,9 @@ pub async fn submit_agent_answer(
         }
     }
 
-    let response = if pending
+    let response = if is_antigravity_acp_control_input(&pending.original_input) {
+        build_antigravity_user_input_response_payload(&pending.original_input, &answers)?
+    } else if pending
         .original_input
         .get("codexMethod")
         .and_then(serde_json::Value::as_str)
@@ -189,6 +193,9 @@ fn build_attention_response(
     approved: bool,
     reason: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    if is_antigravity_acp_control_input(&pending.original_input) {
+        return build_antigravity_approval_response_payload(&pending.original_input, approved);
+    }
     if is_codex_approval_tool_name(&pending.tool_name) {
         return build_codex_approval_response_payload(
             &pending.tool_name,

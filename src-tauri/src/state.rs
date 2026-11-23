@@ -514,6 +514,9 @@ pub struct AppState {
     /// to the local-aggregate token totals. `None` until the first
     /// Codex session of the app lifetime publishes its seed.
     pub codex_rate_limits: RwLock<Option<CodexRateLimitSnapshot>>,
+    /// Short-lived cache for `agy -p /usage` snapshots (`(fetched_at_ms, snapshot)`).
+    /// Avoids spawning `agy` on every composer usage poll tick.
+    pub antigravity_usage_cache: RwLock<Option<(i64, claudette::usage::UsageSnapshot)>>,
     /// SCM + env-provider + language-grammar plugin registry.
     ///
     /// Wrapped as `RwLock<Arc<PluginRegistry>>` (rather than the simpler
@@ -679,6 +682,7 @@ impl AppState {
             next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),
             codex_rate_limits: RwLock::new(codex_rate_limits),
+            antigravity_usage_cache: RwLock::new(None),
             plugins: RwLock::new(Arc::new(plugins)),
             #[cfg(feature = "voice")]
             voice: Arc::new(VoiceProviderRegistry::new(

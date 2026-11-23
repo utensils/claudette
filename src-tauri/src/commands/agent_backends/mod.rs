@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use claudette::agent::resolve_codex_path;
+use claudette::agent::{resolve_agy_path, resolve_codex_path};
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendRuntimeHarness};
 use claudette::db::Database;
 use claudette::env_provider::ResolvedEnv;
@@ -20,6 +20,7 @@ use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use crate::state::AppState;
 
 const CODEX_LOGIN_COMPLETE_EVENT: &str = "codex://login-complete";
+const ANTIGRAVITY_LOGIN_COMPLETE_EVENT: &str = "antigravity://login-complete";
 
 #[derive(Clone, Serialize)]
 struct CodexLoginComplete {
@@ -41,8 +42,9 @@ pub use runtime_dispatch::{resolve_backend_request_defaults, resolve_backend_run
 
 use auto_detect::{
     apply_backend_auto_detections, backend_auto_detect_disabled,
-    persist_backend_auto_detect_opt_out, probe_codex_backend, probe_model_discovery_backend,
-    should_probe_backend_auto_detection, skipped_backend_auto_detection,
+    persist_backend_auto_detect_opt_out, probe_antigravity_backend, probe_codex_backend,
+    probe_model_discovery_backend, should_probe_backend_auto_detection,
+    skipped_backend_auto_detection,
 };
 use codex_gate::{
     LEGACY_NATIVE_CODEX_SETTING_KEY, NATIVE_CODEX_BACKEND_ID, NATIVE_CODEX_SETTING_KEY,
@@ -54,7 +56,7 @@ use config::{
     load_backend_configs, load_backend_configs_tolerant, normalize_backend,
     purge_retired_backend_settings, resolve_backend_list_default, save_backend_configs,
 };
-use discovery::{codex_cli_command, discover_models, test_backend_connectivity};
+use discovery::{agy_cli_command, codex_cli_command, discover_models, test_backend_connectivity};
 
 /// Read the stored secret (typically an API key / bearer token) for a
 /// configured agent backend. Returns `Ok(None)` when nothing is stored
@@ -100,10 +102,15 @@ pub async fn auto_detect_agent_backends(
         .iter()
         .find(|backend| backend.id == "ollama")
         .cloned();
+    let antigravity = backends
+        .iter()
+        .find(|backend| backend.id == "antigravity")
+        .cloned();
     let probe_codex = should_probe_backend_auto_detection(&db, NATIVE_CODEX_BACKEND_ID)?;
     let probe_ollama = should_probe_backend_auto_detection(&db, "ollama")?;
+    let probe_antigravity = should_probe_backend_auto_detection(&db, "antigravity")?;
 
-    let (codex_detection, ollama_detection) = tokio::join!(
+    let (codex_detection, ollama_detection, antigravity_detection) = tokio::join!(
         async move {
             if probe_codex {
                 probe_codex_backend(codex).await
@@ -118,8 +125,15 @@ pub async fn auto_detect_agent_backends(
                 skipped_backend_auto_detection("ollama")
             }
         },
+        async move {
+            if probe_antigravity {
+                probe_antigravity_backend(antigravity).await
+            } else {
+                skipped_backend_auto_detection("antigravity")
+            }
+        },
     );
-    let mut detections = vec![codex_detection, ollama_detection];
+    let mut detections = vec![codex_detection, ollama_detection, antigravity_detection];
     if detections.iter().any(|detection| {
         canonical_backend_id(&detection.backend_id) == NATIVE_CODEX_BACKEND_ID && detection.detected
     }) && !backend_auto_detect_disabled(&db, NATIVE_CODEX_BACKEND_ID)?
@@ -227,6 +241,7 @@ pub async fn delete_agent_backend(
             | "codex-subscription"
             | "codex"
             | "experimental-codex"
+            | "antigravity"
     ) {
         return Err("Built-in backends can be disabled but not deleted".to_string());
     }
@@ -414,6 +429,108 @@ pub async fn launch_codex_login(
         }
         let _ = app.emit(
             CODEX_LOGIN_COMPLETE_EVENT,
+            CodexLoginComplete {
+                success: true,
+                error: None,
+            },
+        );
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn launch_antigravity_login(
+    workspace_id: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let agy_path = resolve_agy_path().await;
+    let workspace_env = resolve_codex_login_workspace_env(&state, workspace_id.as_deref()).await?;
+    let mut command = agy_cli_command(agy_path);
+    command.args(["acp", "--login"]);
+    apply_resolved_env_to_codex_login(&mut command, workspace_env.as_ref());
+    let mut child = command.spawn().map_err(|e| {
+        claudette::missing_cli::map_spawn_err(&e, "agy", || {
+            format!("Failed to launch `agy acp --login`: {e}")
+        })
+    })?;
+
+    tokio::spawn(async move {
+        let status = child.wait().await;
+        let success = match status.as_ref() {
+            Ok(s) if s.success() => true,
+            Ok(s) => {
+                tracing::info!(
+                    target: "claudette::agent",
+                    code = ?s.code(),
+                    "`agy acp --login` exited non-zero; skipping Antigravity session sweep"
+                );
+                let _ = app.emit(
+                    ANTIGRAVITY_LOGIN_COMPLETE_EVENT,
+                    CodexLoginComplete {
+                        success: false,
+                        error: Some(format!("`agy acp --login` exited with {s}")),
+                    },
+                );
+                false
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    error = %err,
+                    "failed to wait for `agy acp --login` child; skipping Antigravity session sweep"
+                );
+                let _ = app.emit(
+                    ANTIGRAVITY_LOGIN_COMPLETE_EVENT,
+                    CodexLoginComplete {
+                        success: false,
+                        error: Some(format!("Failed to wait on `agy acp --login`: {err}")),
+                    },
+                );
+                false
+            }
+        };
+        if !success {
+            return;
+        }
+        claudette::usage::antigravity_account::clear_sign_in_hold();
+        let state = app.state::<AppState>();
+        *state.antigravity_usage_cache.write().await = None;
+        let stale_pids: Vec<(String, u32)> = {
+            let mut agents = state.agents.write().await;
+            let mut collected = Vec::new();
+            for (chat_session_id, session_state) in agents.iter_mut() {
+                let agy_pid = session_state.persistent_session.as_ref().and_then(|s| {
+                    (s.kind() == claudette::agent::AgentHarnessKind::AntigravityAcp)
+                        .then(|| s.pid())
+                });
+                if let Some(pid) = agy_pid {
+                    tracing::info!(
+                        target: "claudette::agent",
+                        chat_session_id = %chat_session_id,
+                        pid,
+                        "dropping Antigravity persistent session after successful `agy acp --login`"
+                    );
+                    session_state.persistent_session = None;
+                    session_state.active_pid = None;
+                    collected.push((chat_session_id.clone(), pid));
+                }
+            }
+            collected
+        };
+        for (chat_session_id, pid) in stale_pids {
+            if let Err(err) = claudette::agent::stop_agent_graceful(pid).await {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    chat_session_id = %chat_session_id,
+                    pid,
+                    error = %err,
+                    "failed to stop stale agy acp process after login"
+                );
+            }
+        }
+        let _ = app.emit(
+            ANTIGRAVITY_LOGIN_COMPLETE_EVENT,
             CodexLoginComplete {
                 success: true,
                 error: None,
@@ -2578,6 +2695,16 @@ data: [DONE]
         let backend = AgentBackendConfig::builtin_codex_native();
         let runtime = build_codex_app_server_runtime(&backend, Some("gpt-5.4"));
         assert_eq!(runtime.harness, AgentBackendRuntimeHarness::CodexAppServer);
+        assert!(runtime.env.is_empty());
+        assert!(!runtime.hash.is_empty());
+    }
+
+    #[test]
+    fn build_antigravity_acp_runtime_uses_empty_env() {
+        let backend = AgentBackendConfig::builtin_antigravity();
+        let runtime =
+            super::runtime_dispatch::build_antigravity_acp_runtime(&backend, Some("gemini-4-neon"));
+        assert_eq!(runtime.harness, AgentBackendRuntimeHarness::AntigravityAcp);
         assert!(runtime.env.is_empty());
         assert!(!runtime.hash.is_empty());
     }

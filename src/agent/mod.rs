@@ -18,9 +18,9 @@ use crate::agent_backend::AgentBackendRuntime;
 
 pub use antigravity_acp::{
     AntigravityAcpOptions, AntigravityAcpSession, AntigravityPermissionLevel,
-    build_antigravity_approval_response_payload, build_antigravity_user_input_response_payload,
-    is_antigravity_acp_control_input, normalize_antigravity_reasoning_effort,
-    parse_agy_model_listing,
+    apply_antigravity_acp_env, build_antigravity_approval_response_payload,
+    build_antigravity_user_input_response_payload, is_antigravity_acp_control_input,
+    normalize_antigravity_reasoning_effort, parse_agy_model_listing,
 };
 pub use args::{build_claude_args, build_stdin_message};
 pub use binary::{

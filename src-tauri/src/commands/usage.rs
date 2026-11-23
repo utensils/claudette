@@ -7,8 +7,10 @@ use claudette::agent::{CodexAppServerOptions, CodexAppServerSession};
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind};
 use claudette::db::Database;
 use claudette::usage::{
-    UsageSnapshot, anthropic_oauth, codex_account, local_aggregate, openrouter,
+    UsageSnapshot, anthropic_oauth, antigravity_account, codex_account, local_aggregate, openrouter,
 };
+
+const ANTIGRAVITY_USAGE_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 
 #[tauri::command]
 pub async fn get_claude_code_usage(state: State<'_, AppState>) -> Result<ClaudeCodeUsage, String> {
@@ -80,6 +82,18 @@ pub async fn get_session_usage(
         }
     }
 
+    if backend.kind == AgentBackendKind::Antigravity {
+        if let Some((fetched_at_ms, cached)) = state.antigravity_usage_cache.read().await.as_ref()
+            && now_ms.saturating_sub(*fetched_at_ms) < ANTIGRAVITY_USAGE_CACHE_TTL_MS
+        {
+            return Ok(cached.clone());
+        }
+        if let Ok(Some(snapshot)) = antigravity_account::fetch_usage_snapshot(now_ms).await {
+            *state.antigravity_usage_cache.write().await = Some((now_ms, snapshot.clone()));
+            return Ok(snapshot);
+        }
+    }
+
     // Non-Claude path: every backend gets the local-aggregate baseline,
     // and OpenRouter merges in its provider-specific credit bucket.
     let db = Database::open(&state.db_path).map_err(|e| format!("DB open failed: {e}"))?;
@@ -124,6 +138,7 @@ pub async fn get_session_usage(
             (String::from("OpenAI"), Vec::new())
         }
         AgentBackendKind::Ollama => (String::from("Ollama"), Vec::new()),
+        AgentBackendKind::Antigravity => (String::from("Antigravity"), Vec::new()),
         // Anthropic-family already handled above; fall through for
         // forward-compat if a new variant is added without a matching
         // dispatch arm.

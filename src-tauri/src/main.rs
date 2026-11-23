@@ -1312,6 +1312,7 @@ fn main() {
             commands::agent_backends::refresh_agent_backend_models,
             commands::agent_backends::test_agent_backend,
             commands::agent_backends::launch_codex_login,
+            commands::agent_backends::launch_antigravity_login,
             // Claude flags
             commands::claude_flags::list_claude_flags,
             commands::claude_flags::refresh_claude_flags,

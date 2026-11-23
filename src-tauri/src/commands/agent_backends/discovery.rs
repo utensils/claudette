@@ -14,7 +14,9 @@
 use std::collections::{HashMap, HashSet};
 
 use claudette::agent::{
-    CodexAppServerOptions, CodexAppServerSession, resolve_codex_path, stop_agent_graceful,
+    AntigravityAcpOptions, AntigravityAcpSession, CodexAppServerOptions, CodexAppServerSession,
+    apply_antigravity_acp_env, parse_agy_model_listing, resolve_agy_path, resolve_codex_path,
+    stop_agent_graceful,
 };
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind, AgentBackendModel};
 use claudette::plugin::load_secure_secret;
@@ -91,6 +93,7 @@ pub(super) async fn discover_models(
         AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await,
         AgentBackendKind::CodexSubscription => discover_codex_models().await,
         AgentBackendKind::CodexNative => discover_codex_native_models(backend).await,
+        AgentBackendKind::Antigravity => discover_antigravity_models(backend).await,
         _ => Ok(backend.manual_models.clone()),
     }
 }
@@ -112,6 +115,7 @@ pub(super) async fn test_backend_connectivity(
             ))
         }
         AgentBackendKind::CodexNative => test_codex_native_connectivity(backend).await,
+        AgentBackendKind::Antigravity => test_antigravity_connectivity(backend).await,
         AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await.map(|models| {
             BackendStatus::new(
                 true,
@@ -371,6 +375,85 @@ pub(super) fn codex_cli_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::
     claudette::process::sanitize_codex_subprocess_env(&mut command);
     command.env("PATH", claudette::env::enriched_path());
     command
+}
+
+pub(super) fn agy_cli_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut command = claudette::process::command(program);
+    command.env("PATH", claudette::env::enriched_path());
+    apply_antigravity_acp_env(
+        &mut command,
+        claudette::agent::antigravity_acp::agy_uses_api_key(dirs::home_dir().as_deref()),
+    );
+    command
+}
+
+pub(super) async fn discover_antigravity_models(
+    backend: &AgentBackendConfig,
+) -> Result<Vec<AgentBackendModel>, String> {
+    let agy_path = resolve_agy_path().await;
+    let mut command = agy_cli_command(agy_path);
+    let output = command.arg("models").output().await.map_err(|e| {
+        claudette::missing_cli::map_spawn_err(&e, "agy", || {
+            format!("Failed to run `agy models`: {e}")
+        })
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "`agy models` failed".to_string()
+        } else {
+            format!("`agy models` failed: {stderr}")
+        });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut models = parse_agy_model_listing(&stdout);
+    if backend.context_window_default > 0 {
+        for model in &mut models {
+            if model.context_window_tokens == 0 {
+                model.context_window_tokens = backend.context_window_default;
+            }
+        }
+    }
+    if models.is_empty() {
+        return Err("`agy models` returned no models".to_string());
+    }
+    Ok(models)
+}
+
+async fn test_antigravity_connectivity(
+    backend: &AgentBackendConfig,
+) -> Result<BackendStatus, String> {
+    let cwd = std::env::current_dir()
+        .ok()
+        .filter(|path| path.exists())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(std::env::temp_dir);
+    let session = AntigravityAcpSession::start_with_options(
+        &cwd,
+        env!("CARGO_PKG_VERSION"),
+        AntigravityAcpOptions {
+            probe_mode: true,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let pid = session.pid();
+    let result = async {
+        session.list_sessions_probe().await?;
+        let models = discover_antigravity_models(backend)
+            .await
+            .unwrap_or_default();
+        Ok(BackendStatus::new(
+            true,
+            format!(
+                "Antigravity ACP authenticated. Found {} model(s).",
+                models.len()
+            ),
+        ))
+    }
+    .await;
+    let _ = stop_agent_graceful(pid).await;
+    result
 }
 
 pub(super) fn filter_openai_models(models: Vec<AgentBackendModel>) -> Vec<AgentBackendModel> {

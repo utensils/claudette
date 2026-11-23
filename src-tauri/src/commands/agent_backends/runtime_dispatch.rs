@@ -72,6 +72,9 @@ pub async fn resolve_backend_runtime(
         AgentBackendRuntimeHarness::CodexAppServer => {
             Ok(build_codex_app_server_runtime(&backend, model))
         }
+        AgentBackendRuntimeHarness::AntigravityAcp => {
+            Ok(build_antigravity_acp_runtime(&backend, model))
+        }
         AgentBackendRuntimeHarness::ClaudeCode => {
             build_claude_code_runtime(state, &mut backend, model).await
         }
@@ -85,6 +88,18 @@ pub(super) fn build_codex_app_server_runtime(
     AgentBackendRuntime {
         backend_id: Some(backend.id.clone()),
         harness: AgentBackendRuntimeHarness::CodexAppServer,
+        env: Vec::new(),
+        hash: runtime_hash(backend, None, model),
+    }
+}
+
+pub(super) fn build_antigravity_acp_runtime(
+    backend: &AgentBackendConfig,
+    model: Option<&str>,
+) -> AgentBackendRuntime {
+    AgentBackendRuntime {
+        backend_id: Some(backend.id.clone()),
+        harness: AgentBackendRuntimeHarness::AntigravityAcp,
         env: Vec::new(),
         hash: runtime_hash(backend, None, model),
     }
