@@ -14,6 +14,7 @@
 //! - the [`pricing`] table used by the OpenAI/OpenRouter cost path.
 
 pub mod anthropic_oauth;
+pub mod antigravity_account;
 pub mod codex_account;
 pub mod local_aggregate;
 pub mod openrouter;

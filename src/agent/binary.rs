@@ -68,6 +68,27 @@ pub async fn resolve_codex_path() -> OsString {
     resolved
 }
 
+/// Resolve the full path to the `agy` (Antigravity) CLI binary (async-safe).
+///
+/// Mirrors [`resolve_codex_path`] with Antigravity-specific binary names and
+/// install directories (`~/.local/bin/agy`, `%LOCALAPPDATA%\agy\bin\agy.exe`).
+pub async fn resolve_agy_path() -> OsString {
+    if let Some(cached) = RESOLVED_AGY_PATH.get() {
+        return cached.clone();
+    }
+    #[cfg(unix)]
+    let resolved = tokio::task::spawn_blocking(resolve_agy_path_sync)
+        .await
+        .unwrap_or_else(|_| OsString::from(agy_bare_name()));
+    #[cfg(not(unix))]
+    let resolved = resolve_agy_path_sync();
+
+    if Path::new(&resolved).is_absolute() {
+        let _ = RESOLVED_AGY_PATH.set(resolved.clone());
+    }
+    resolved
+}
+
 /// Resolve the `claude` CLI path from a synchronous (non-async) context.
 ///
 /// Mirrors [`crate::git::resolve_git_path_blocking`] so callers that can't
@@ -147,6 +168,34 @@ pub fn resolve_codex_path_blocking() -> OsString {
     resolved
 }
 
+/// Resolve the `agy` (Antigravity) CLI path from a synchronous (non-async) context.
+pub fn resolve_agy_path_blocking() -> OsString {
+    if let Some(cached) = RESOLVED_AGY_PATH.get() {
+        return cached.clone();
+    }
+    let path = if crate::env::shell_path_is_cached() {
+        Some(crate::env::enriched_path())
+    } else {
+        std::env::var_os("PATH")
+    };
+    let resolved = resolve_agy_path_inner(
+        dirs::home_dir(),
+        path,
+        || {
+            if crate::env::shell_path_is_cached() {
+                login_shell_path()
+            } else {
+                None
+            }
+        },
+        is_executable_file,
+    );
+    if Path::new(&resolved).is_absolute() {
+        let _ = RESOLVED_AGY_PATH.set(resolved.clone());
+    }
+    resolved
+}
+
 /// Shared cache for [`resolve_claude_path`] and [`resolve_claude_path_blocking`].
 /// Only populated for absolute paths — the bare-`claude` fallback stays
 /// uncached so the next call gets a chance to find a real install.
@@ -156,6 +205,11 @@ static RESOLVED_CLAUDE_PATH: OnceLock<OsString> = OnceLock::new();
 /// Only populated for absolute paths so installing Codex during a running
 /// Claudette session can still be picked up on a later retry.
 static RESOLVED_CODEX_PATH: OnceLock<OsString> = OnceLock::new();
+
+/// Shared cache for [`resolve_agy_path`] and [`resolve_agy_path_blocking`].
+/// Only populated for absolute paths so installing Antigravity during a running
+/// Claudette session can still be picked up on a later retry.
+static RESOLVED_AGY_PATH: OnceLock<OsString> = OnceLock::new();
 
 /// Synchronous core of [`resolve_claude_path`]. Extracted so it can run
 /// inside `tokio::task::spawn_blocking` on Unix without juggling async
@@ -171,6 +225,15 @@ fn resolve_claude_path_sync() -> OsString {
 
 fn resolve_codex_path_sync() -> OsString {
     resolve_codex_path_inner(
+        dirs::home_dir(),
+        Some(crate::env::enriched_path()),
+        login_shell_path,
+        is_executable_file,
+    )
+}
+
+fn resolve_agy_path_sync() -> OsString {
+    resolve_agy_path_inner(
         dirs::home_dir(),
         Some(crate::env::enriched_path()),
         login_shell_path,
@@ -275,6 +338,33 @@ fn resolve_codex_path_inner(
     OsString::from(codex_bare_name())
 }
 
+fn resolve_agy_path_inner(
+    home: Option<PathBuf>,
+    process_path: Option<OsString>,
+    shell_path_probe: impl FnOnce() -> Option<OsString>,
+    exists: impl Fn(&Path) -> bool,
+) -> OsString {
+    if let Some(process_path) = process_path
+        && let Some(found) = search_path_dirs_for(&process_path, agy_binary_variants(), &exists)
+    {
+        return found;
+    }
+
+    if let Some(shell_path) = shell_path_probe()
+        && let Some(found) = search_path_dirs_for(&shell_path, agy_binary_variants(), &exists)
+    {
+        return found;
+    }
+
+    for p in agy_fallback_paths(home.as_deref()) {
+        if exists(&p) {
+            return p.into_os_string();
+        }
+    }
+
+    OsString::from(agy_bare_name())
+}
+
 /// Binary filename variants for the `claude` CLI on the current target.
 ///
 /// On Windows, the official Anthropic native installer ships `claude.exe`,
@@ -319,6 +409,78 @@ fn codex_bare_name() -> &'static str {
 #[cfg(not(windows))]
 fn codex_bare_name() -> &'static str {
     "codex"
+}
+
+#[cfg(windows)]
+fn agy_binary_variants() -> &'static [&'static str] {
+    &["agy.exe", "agy.cmd", "agy.bat", "agy.ps1"]
+}
+
+#[cfg(not(windows))]
+fn agy_binary_variants() -> &'static [&'static str] {
+    &["agy"]
+}
+
+#[cfg(windows)]
+fn agy_bare_name() -> &'static str {
+    "agy.exe"
+}
+
+#[cfg(not(windows))]
+fn agy_bare_name() -> &'static str {
+    "agy"
+}
+
+/// Well-known install locations for the `agy` (Antigravity) CLI on the current target.
+fn agy_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    #[cfg(windows)]
+    {
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            let dir = PathBuf::from(local_app_data).join("agy").join("bin");
+            if dir.is_absolute() {
+                for name in agy_binary_variants() {
+                    out.push(dir.join(name));
+                }
+            }
+        }
+        if let Some(home) = home {
+            for name in agy_binary_variants() {
+                out.push(
+                    home.join("AppData")
+                        .join("Local")
+                        .join("agy")
+                        .join("bin")
+                        .join(name),
+                );
+            }
+            out.push(home.join(".local").join("bin").join("agy.exe"));
+            for dir in windows_extra_package_manager_dirs(home) {
+                for name in agy_binary_variants() {
+                    out.push(dir.join(name));
+                }
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = home {
+            out.push(home.join(".local/bin/agy"));
+            out.push(home.join(".antigravity/bin/agy"));
+            out.push(home.join(".nix-profile/bin/agy"));
+            for dir in unix_extra_package_manager_dirs(home) {
+                out.push(dir.join("agy"));
+            }
+        }
+        out.push(PathBuf::from("/usr/local/bin/agy"));
+        out.push(PathBuf::from("/opt/homebrew/bin/agy"));
+        out.push(PathBuf::from("/run/current-system/sw/bin/agy"));
+        out.push(PathBuf::from("/nix/var/nix/profiles/default/bin/agy"));
+    }
+
+    out
 }
 
 /// Well-known install locations for the `claude` CLI on the current target.
@@ -912,5 +1074,41 @@ mod tests {
     #[test]
     fn test_codex_bare_name_is_exe_on_windows() {
         assert_eq!(codex_bare_name(), "codex.exe");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_resolve_agy_prefers_process_path() {
+        let path = OsString::from("/opt/custom/bin:/usr/bin");
+        let expected = PathBuf::from("/opt/custom/bin/agy");
+        let expected_clone = expected.clone();
+        let result = resolve_agy_path_inner(
+            Some(PathBuf::from("/Users/test")),
+            Some(path),
+            || panic!("shell probe should not run on process PATH hit"),
+            move |p| p == expected_clone,
+        );
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_resolve_agy_falls_back_to_local_bin() {
+        let home = PathBuf::from("/Users/test");
+        let expected = home.join(".local/bin/agy");
+        let expected_clone = expected.clone();
+        let result = resolve_agy_path_inner(
+            Some(home),
+            Some(OsString::from("/usr/bin")),
+            || None,
+            move |p| p == expected_clone,
+        );
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    #[test]
+    fn test_resolve_agy_falls_back_to_bare_name_when_missing() {
+        let result = resolve_agy_path_inner(None, None, || None, |_| false);
+        assert_eq!(result, OsString::from(agy_bare_name()));
     }
 }

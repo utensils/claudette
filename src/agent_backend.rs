@@ -9,6 +9,7 @@ pub enum AgentBackendKind {
     OpenAiApi,
     CodexSubscription,
     CodexNative,
+    Antigravity,
     CustomAnthropic,
     #[serde(rename = "custom_openai")]
     CustomOpenAi,
@@ -42,6 +43,7 @@ impl AgentBackendKind {
             | Self::OpenAiApi
             | Self::CustomOpenAi => AgentBackendRuntimeHarness::ClaudeCode,
             Self::CodexNative => AgentBackendRuntimeHarness::CodexAppServer,
+            Self::Antigravity => AgentBackendRuntimeHarness::AntigravityAcp,
         }
     }
 
@@ -57,6 +59,7 @@ impl AgentBackendKind {
             | Self::OpenAiApi
             | Self::CustomOpenAi => &[AgentBackendRuntimeHarness::ClaudeCode],
             Self::CodexNative => &[AgentBackendRuntimeHarness::CodexAppServer],
+            Self::Antigravity => &[AgentBackendRuntimeHarness::AntigravityAcp],
         }
     }
 }
@@ -67,6 +70,7 @@ pub enum AgentBackendRuntimeHarness {
     #[default]
     ClaudeCode,
     CodexAppServer,
+    AntigravityAcp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +114,17 @@ impl AgentBackendCapabilities {
             one_m_context: false,
             tools: true,
             vision: false,
+        }
+    }
+
+    pub fn antigravity() -> Self {
+        Self {
+            thinking: true,
+            effort: true,
+            fast_mode: false,
+            one_m_context: true,
+            tools: true,
+            vision: true,
         }
     }
 }
@@ -281,6 +296,44 @@ impl AgentBackendConfig {
             runtime_harness: None,
         }
     }
+
+    pub fn builtin_antigravity() -> Self {
+        Self {
+            id: "antigravity".to_string(),
+            label: "Antigravity".to_string(),
+            kind: AgentBackendKind::Antigravity,
+            base_url: None,
+            enabled: false,
+            default_model: Some("gemini-4-neon".to_string()),
+            manual_models: vec![
+                AgentBackendModel {
+                    id: "gemini-4-neon".to_string(),
+                    label: "Gemini 4 Neon".to_string(),
+                    context_window_tokens: 1_048_576,
+                    discovered: false,
+                },
+                AgentBackendModel {
+                    id: "gemini-4-argon".to_string(),
+                    label: "Gemini 4 Argon".to_string(),
+                    context_window_tokens: 1_048_576,
+                    discovered: false,
+                },
+                AgentBackendModel {
+                    id: "gemini-3.8-flash".to_string(),
+                    label: "Gemini 3.8 Flash".to_string(),
+                    context_window_tokens: 1_048_576,
+                    discovered: false,
+                },
+            ],
+            discovered_models: Vec::new(),
+            auth_ref: Some("antigravity-cli".to_string()),
+            capabilities: AgentBackendCapabilities::antigravity(),
+            context_window_default: 1_048_576,
+            model_discovery: true,
+            has_secret: false,
+            runtime_harness: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,6 +455,10 @@ mod tests {
                 AgentBackendRuntimeHarness::CodexAppServer,
             ),
             (
+                AgentBackendKind::Antigravity,
+                AgentBackendRuntimeHarness::AntigravityAcp,
+            ),
+            (
                 AgentBackendKind::CustomAnthropic,
                 AgentBackendRuntimeHarness::ClaudeCode,
             ),
@@ -489,6 +546,7 @@ mod tests {
         match harness {
             AgentBackendRuntimeHarness::ClaudeCode => "claude_code",
             AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
+            AgentBackendRuntimeHarness::AntigravityAcp => "antigravity_acp",
         }
     }
 
@@ -499,6 +557,7 @@ mod tests {
             AgentBackendKind::OpenAiApi => "openai_api",
             AgentBackendKind::CodexSubscription => "codex_subscription",
             AgentBackendKind::CodexNative => "codex_native",
+            AgentBackendKind::Antigravity => "antigravity",
             AgentBackendKind::CustomAnthropic => "custom_anthropic",
             AgentBackendKind::CustomOpenAi => "custom_openai",
         }
@@ -519,6 +578,7 @@ mod tests {
             AgentBackendKind::OpenAiApi,
             AgentBackendKind::CodexSubscription,
             AgentBackendKind::CodexNative,
+            AgentBackendKind::Antigravity,
             AgentBackendKind::CustomAnthropic,
             AgentBackendKind::CustomOpenAi,
         ];
@@ -599,6 +659,7 @@ mod tests {
             AgentBackendConfig::builtin_openai_api(),
             AgentBackendConfig::builtin_codex_subscription(),
             AgentBackendConfig::builtin_codex_native(),
+            AgentBackendConfig::builtin_antigravity(),
         ];
         for backend in builtins {
             assert!(
@@ -607,6 +668,39 @@ mod tests {
                 backend.kind,
             );
         }
+    }
+
+    #[test]
+    fn builtin_antigravity_uses_acp_harness_shape() {
+        let backend = AgentBackendConfig::builtin_antigravity();
+
+        assert_eq!(backend.id, "antigravity");
+        assert_eq!(backend.label, "Antigravity");
+        assert_eq!(backend.kind, AgentBackendKind::Antigravity);
+        assert_eq!(
+            backend.effective_harness(),
+            AgentBackendRuntimeHarness::AntigravityAcp
+        );
+        assert!(!backend.enabled);
+        assert!(!backend.kind.needs_gateway());
+        assert!(!backend.kind.is_anthropic_compatible());
+        assert!(backend.model_discovery);
+        assert!(backend.capabilities.thinking);
+        assert!(backend.capabilities.effort);
+        assert!(backend.capabilities.vision);
+        assert!(!backend.capabilities.fast_mode);
+        assert_eq!(backend.context_window_default, 1_048_576);
+        let default_model = backend
+            .default_model
+            .as_deref()
+            .expect("antigravity seeds a default");
+        assert!(
+            backend
+                .manual_models
+                .iter()
+                .any(|model| model.id == default_model),
+            "default `{default_model}` must appear in manual_models",
+        );
     }
 
     #[test]

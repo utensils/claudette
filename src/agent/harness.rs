@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::env::WorkspaceEnv;
 use crate::env_provider::ResolvedEnv;
 
+use super::antigravity_acp::AntigravityAcpSession;
 use super::codex_app_server::CodexAppServerSession;
 use super::{
     AgentEvent, AgentSettings, ControlResponsePayload, FileAttachment, PersistentSession,
@@ -14,6 +15,7 @@ use super::{
 pub enum AgentHarnessKind {
     ClaudeCode,
     CodexAppServer,
+    AntigravityAcp,
 }
 
 /// Capabilities that affect which chat/session features a harness can support
@@ -44,6 +46,17 @@ impl AgentHarnessCapabilities {
         Self {
             persistent_sessions: true,
             steer_turn: true,
+            host_permission_prompts: true,
+            remote_control: false,
+            mcp_config: true,
+            attachments: true,
+        }
+    }
+
+    pub const fn antigravity_acp() -> Self {
+        Self {
+            persistent_sessions: true,
+            steer_turn: false,
             host_permission_prompts: true,
             remote_control: false,
             mcp_config: true,
@@ -100,6 +113,7 @@ impl ClaudeCodeHarness {
 pub enum AgentSession {
     ClaudeCode(PersistentSession),
     CodexAppServer(CodexAppServerSession),
+    AntigravityAcp(AntigravityAcpSession),
 }
 
 impl AgentSession {
@@ -111,10 +125,15 @@ impl AgentSession {
         Self::CodexAppServer(session)
     }
 
+    pub fn from_antigravity_acp(session: AntigravityAcpSession) -> Self {
+        Self::AntigravityAcp(session)
+    }
+
     pub fn kind(&self) -> AgentHarnessKind {
         match self {
             Self::ClaudeCode(_) => AgentHarnessKind::ClaudeCode,
             Self::CodexAppServer(_) => AgentHarnessKind::CodexAppServer,
+            Self::AntigravityAcp(_) => AgentHarnessKind::AntigravityAcp,
         }
     }
 
@@ -122,6 +141,7 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(_) => AgentHarnessCapabilities::claude_code(),
             Self::CodexAppServer(_) => AgentHarnessCapabilities::codex_app_server(),
+            Self::AntigravityAcp(_) => AgentHarnessCapabilities::antigravity_acp(),
         }
     }
 
@@ -129,6 +149,7 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => session.pid(),
             Self::CodexAppServer(session) => session.pid(),
+            Self::AntigravityAcp(session) => session.pid(),
         }
     }
 
@@ -145,6 +166,7 @@ impl AgentSession {
                     .await
             }
             Self::CodexAppServer(session) => session.send_turn(prompt, attachments).await,
+            Self::AntigravityAcp(session) => session.send_turn(prompt, attachments).await,
         }
     }
 
@@ -156,6 +178,9 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => session.steer_user_message(prompt, attachments).await,
             Self::CodexAppServer(session) => session.steer_turn(prompt, attachments).await,
+            Self::AntigravityAcp(_) => {
+                Err("Antigravity ACP does not support mid-turn steering yet".to_string())
+            }
         }
     }
 
@@ -163,6 +188,7 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => session.subscribe(),
             Self::CodexAppServer(session) => session.subscribe(),
+            Self::AntigravityAcp(session) => session.subscribe(),
         }
     }
 
@@ -176,6 +202,9 @@ impl AgentSession {
             Self::CodexAppServer(session) => {
                 session.send_control_response(request_id, response).await
             }
+            Self::AntigravityAcp(session) => {
+                session.send_control_response(request_id, response).await
+            }
         }
     }
 
@@ -185,6 +214,9 @@ impl AgentSession {
             Self::CodexAppServer(_) => {
                 Err(format!("Codex app-server cannot stop task `{task_id}` yet"))
             }
+            Self::AntigravityAcp(_) => {
+                Err(format!("Antigravity ACP cannot stop task `{task_id}` yet"))
+            }
         }
     }
 
@@ -192,6 +224,7 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => super::process::stop_agent(session.pid()).await,
             Self::CodexAppServer(session) => session.interrupt_turn().await,
+            Self::AntigravityAcp(session) => session.interrupt_turn().await,
         }
     }
 
@@ -214,6 +247,10 @@ impl AgentSession {
                     .to_string(),
             ),
             Self::CodexAppServer(session) => session.start_compact().await,
+            Self::AntigravityAcp(_) => Err(
+                "Antigravity ACP does not expose a separate start_compact RPC; send `/compact` directly."
+                    .to_string(),
+            ),
         }
     }
 
@@ -225,6 +262,9 @@ impl AgentSession {
             Self::ClaudeCode(session) => session.set_remote_control(enabled).await,
             Self::CodexAppServer(_) => {
                 Err("Codex app-server does not support Claude Remote Control".to_string())
+            }
+            Self::AntigravityAcp(_) => {
+                Err("Antigravity ACP does not support Claude Remote Control".to_string())
             }
         }
     }
@@ -266,9 +306,25 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_acp_capabilities_are_harness_specific() {
+        assert_eq!(
+            AgentHarnessCapabilities::antigravity_acp(),
+            AgentHarnessCapabilities {
+                persistent_sessions: true,
+                steer_turn: false,
+                host_permission_prompts: true,
+                remote_control: false,
+                mcp_config: true,
+                attachments: true,
+            }
+        );
+    }
+
+    #[test]
     fn agent_session_capabilities_stay_explicit_per_variant() {
         assert!(AgentHarnessCapabilities::claude_code().remote_control);
         assert!(!AgentHarnessCapabilities::codex_app_server().remote_control);
+        assert!(!AgentHarnessCapabilities::antigravity_acp().remote_control);
     }
 
     #[test]
