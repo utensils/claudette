@@ -107,7 +107,7 @@ describe("ImportWorktreesModal", () => {
     expect(stored).toBeDefined();
     // `undefined` here makes useWorkspaceEnvironmentPreparation bail as
     // "not hydrated yet", stranding the chat on "Preparing workspace
-    // environment…" with no timeout (#1036).
+    // environment…" with no timeout (issue 1036).
     expect(stored!.remote_connection_id).toBeNull();
   });
 });
