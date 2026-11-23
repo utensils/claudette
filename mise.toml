@@ -11,7 +11,10 @@
 # can reach a transitive build script — the fix has to be at the env layer.
 
 [tools]
-rust = "1.94"
+# Held at 1.99.1 to match CI's Desktop Tauri Check pin: under Rust 1.100
+# tauri-build 2.5.6 mis-resolves the target dir and panics copying the CLI
+# sidecar during `cargo tauri dev`. Bump once tauri-build handles it.
+rust = "1.99.1"
 bun = "latest"
 # tauri-cli pinned to the same 2.x line the Nix devshell ships
 # (`pkgs.cargo-tauri`); mise takes a version prefix, not a semver range
