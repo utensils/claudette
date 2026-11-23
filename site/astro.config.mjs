@@ -94,6 +94,7 @@ export default defineConfig({
             { slug: 'features/providers' },
             { slug: 'features/providers/ollama' },
             { slug: 'features/providers/openai-codex' },
+            { slug: 'features/providers/antigravity' },
           ],
         },
         {

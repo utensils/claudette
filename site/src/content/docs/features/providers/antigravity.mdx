@@ -1,0 +1,73 @@
+---
+title: Antigravity
+description: Run Claudette agents through Google Antigravity's native Agent Client Protocol (ACP) harness (`agy acp`).
+---
+
+Claudette supports Google Antigravity natively through the `agy` CLI's Agent Client Protocol (`agy acp`), speaking newline-delimited JSON-RPC 2.0 over stdio directly to the `agy` subprocess without going through the Claude Code CLI or a local HTTP gateway.
+
+## Prerequisites
+
+1. Install the Antigravity CLI (`agy`) following Google's [Antigravity Getting Started guide](https://antigravity.google/docs/getting-started).
+2. Confirm `agy` is reachable on your `PATH` (or in `~/.local/bin/agy`, Homebrew, Nix, pnpm/bun/mise shims, or `%LOCALAPPDATA%\agy\bin\agy.exe` on Windows):
+
+```sh
+agy --version
+```
+
+3. Make sure **Settings > Models > Agent providers** is enabled.
+
+On startup Claudette checks whether `agy` is installed. When found, it automatically enables the **Antigravity** provider and populates its model catalog via `agy models` (unless you have manually disabled Antigravity in Settings, which records an opt-out).
+
+## Sign in
+
+Antigravity uses the `agy` CLI's own Google OAuth credentials rather than a Claudette-managed API key:
+
+1. Open **Settings > Models**, find the **Antigravity** card, and click **Run agy login**.
+2. Complete the Google OAuth flow in your browser.
+3. Alternatively, select any Antigravity model in chat and run `/login`, or run `agy acp --login` directly in a terminal.
+
+When sign-in finishes, Claudette automatically tears down any stale `agy acp` subprocesses so your next turn picks up the refreshed credentials.
+
+> **Using an API key instead of OAuth?** If `~/.gemini/antigravity-cli/settings.json` configures `modelProvider` for API-key authentication, Claudette preserves `GEMINI_API_KEY` and `GOOGLE_API_KEY`. Otherwise (for standard Google OAuth accounts), Claudette strips inherited `GEMINI_API_KEY` / `GOOGLE_API_KEY` variables from the `agy` subprocess so ambient keys in your shell do not hijack OAuth and trigger `401` errors.
+
+## Configure
+
+1. Open **Settings > Models** and locate the **Antigravity** backend card.
+2. Click **Test** to verify ACP connectivity and authentication (runs a lightweight `session/list` check without creating a conversation).
+3. Click **Refresh models** to pull the latest model catalog from `agy models`. Multi-level entries (for example `gemini-4-neon-low`, `gemini-4-neon-high`) are grouped into model families so you control reasoning depth from Claudette's effort selector instead of duplicating rows.
+4. Pick a default model if desired and keep **Enabled** toggled on.
+
+## Runtime behavior
+
+1. Claudette spawns `agy acp` in the workspace worktree with `AGY_CLI_DISABLE_AUTO_UPDATE=true` so background CLI updaters never interrupt active turns.
+2. Sessions use `session/new` for fresh conversations and `session/resume` (falling back to `session/load`) when continuing a saved chat session, preserving Claudette's custom instructions across resumes.
+3. Reasoning depth maps Claudette's effort levels (`Low`, `Medium`, `High`, `Extra High`) to Antigravity's ACP `thought_level` / `thinking_level` config option (`max` normalizes to `xhigh`; empty/`auto` normalizes to `high`). Toggle **Show thinking** in the chat toolbar to display or hide streamed `agent_thought_chunk` reasoning blocks.
+4. **Plan mode** sets Antigravity's ACP `mode` config option to `plan` and omits `--dangerously-skip-permissions`.
+5. **MCP servers** configured in Claudette (including Claudette's built-in scheduling and interaction bridge) are translated into ACP `mcpServers` entries (both `stdio` and `http` transports).
+6. **Image attachments** are forwarded as ACP `image` content blocks when the server advertises image capability; text attachments are forwarded as text blocks.
+7. **Tool approvals and interactive prompts** (`session/request_permission` and `elicitation/create`) surface in Claudette's inline approval and question cards. Interactive user prompts are never auto-approved.
+8. **Permission levels** map to Antigravity ACP flags and mode:
+
+| Claudette permission | CLI flag | ACP mode |
+|---|---|---|
+| Read-only | *(none)* | `default` |
+| Standard | *(none)* | `accept-edits` |
+| Full access | `--dangerously-skip-permissions` (when not in Plan mode) | `auto` |
+
+## Usage quota indicator
+
+When an Antigravity model is selected, the composer's usage meter is always active. For `agy >= 1.1.11`, Claudette queries `agy -p /usage --output-format json` (cached for 5 minutes) to display live Antigravity quota windows and reset times, falling back gracefully to Claudette's local per-session token aggregate if quota polling is unavailable or signed out.
+
+## Troubleshooting
+
+**Antigravity is not authenticated** — click **Sign in** in the in-chat auth callout, run `/login`, or click **Run agy login** in **Settings > Models**.
+
+**`agy` CLI not found** — install Antigravity CLI and verify `agy --version` works in your login shell, then restart Claudette or click **Test** in **Settings > Models**.
+
+**Unexpected 401 errors with Google OAuth** — ensure no custom `modelProvider` entry in `~/.gemini/antigravity-cli/settings.json` points at an expired API key.
+
+## See also
+
+- [Agent Providers overview](/claudette/features/providers/) — capability matrix and architecture
+- [OpenAI & Codex](/claudette/features/providers/openai-codex/) — native Codex app-server and OpenAI API setup
+- [Ollama](/claudette/features/providers/ollama/) — local model setup
