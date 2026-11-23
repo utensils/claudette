@@ -27,3 +27,13 @@ export interface Workspace {
   /** Non-null when this workspace belongs to a remote connection. */
   remote_connection_id: string | null;
 }
+
+/**
+ * A workspace row as the Rust backend serializes it. The Rust
+ * `claudette::model::Workspace` has no `remote_connection_id` (it is a
+ * UI-only routing tag), so the key is absent from IPC payloads. Typing
+ * IPC results with this alias forces every caller to stamp the field
+ * before the row reaches the store; a row with it `undefined` strands
+ * environment preparation (see `useWorkspaceEnvironmentPreparation`).
+ */
+export type BackendWorkspace = Omit<Workspace, "remote_connection_id">;

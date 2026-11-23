@@ -35,7 +35,8 @@ export interface SetupResult {
 }
 
 export interface CreateWorkspaceResult {
-  workspace: import("./workspace").Workspace;
+  /** Backend row: lacks `remote_connection_id`; stamp before storing. */
+  workspace: import("./workspace").BackendWorkspace;
   /**
    * Id of the chat session auto-created alongside the workspace. Use this
    * when posting initial system messages — after the multi-session refactor,

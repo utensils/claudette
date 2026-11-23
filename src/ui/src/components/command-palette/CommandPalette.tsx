@@ -252,7 +252,10 @@ export function CommandPalette() {
     try {
       const generated = await generateWorkspaceName();
       const result = await createWorkspaceService(repoId, generated.slug, true);
-      addWorkspace(result.workspace);
+      // Stamp the UI-only `remote_connection_id` as local. Don't rely on
+      // the backend's early `workspaces-changed` emit having stamped the
+      // row first; an `undefined` value strands environment preparation.
+      addWorkspace({ ...result.workspace, remote_connection_id: null });
       selectWorkspace(result.workspace.id);
       const sessionId = result.default_session_id;
       if (generated.message) {

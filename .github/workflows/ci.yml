@@ -93,7 +93,13 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
             libasound2-dev
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned: Rust 1.100's Cargo puts build-script OUT_DIRs one level
+      # deeper (`target/debug/build/<pkg>/<hash>/out`). tauri-build 2.5.6
+      # derives the target dir as OUT_DIR's 3rd parent, so it resolves to
+      # `target/debug/build` and the `binaries/claudette` sidecar copy
+      # panics on the `build/claudette/` directory (IsADirectory). Drop
+      # the pin once tauri-build handles the new layout.
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
       - name: Stage Tauri sidecars
         run: scripts/stage-cli-sidecar.sh --profile debug
