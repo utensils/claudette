@@ -73,31 +73,67 @@ pub fn std_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Comman
     cmd
 }
 
-/// Remove Claude Code harness environment that is valid for inference but can
-/// break nested Claude CLI features such as Remote Control. Real Anthropic API
-/// keys are preserved.
+/// Remove Claude Code harness environment that is valid for inference or
+/// nested-session bookkeeping but can break child Claude CLI launches (such as
+/// Remote Control or nested session detection). Real Anthropic API keys are
+/// preserved.
 pub fn sanitize_claude_subprocess_env(cmd: &mut tokio::process::Command) {
     if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
         && !key.starts_with("sk-ant-api")
     {
         cmd.env_remove("ANTHROPIC_API_KEY");
     }
-    cmd.env_remove("ANTHROPIC_AUTH_TOKEN");
-    cmd.env_remove("ANTHROPIC_FOUNDRY_API_KEY");
-    cmd.env_remove("ANTHROPIC_UNIX_SOCKET");
-    cmd.env_remove("AWS_BEARER_TOKEN_BEDROCK");
-    cmd.env_remove("CLAUDE_BRIDGE_OAUTH_TOKEN");
-    cmd.env_remove("CLAUDE_SESSION_INGRESS_TOKEN_FILE");
-    cmd.env_remove("CLAUDE_TRUSTED_DEVICE_TOKEN");
-    cmd.env_remove("CLAUDECODE");
-    cmd.env_remove("CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR");
-    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_REFRESH_TOKEN");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_SCOPES");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR");
-    cmd.env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN");
-    cmd.env_remove("CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR");
+    for key in [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_FOUNDRY_API_KEY",
+        "ANTHROPIC_UNIX_SOCKET",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "CLAUDE_AGENT_SDK_VERSION",
+        "CLAUDE_BRIDGE_OAUTH_TOKEN",
+        "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_DESKTOP_APP_VERSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_HOST_SESSION_ID",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+        "CLAUDE_CODE_OAUTH_SCOPES",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+        "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR",
+        "CLAUDE_EFFORT",
+        "CLAUDE_PID",
+        "CLAUDE_SESSION_INGRESS_TOKEN_FILE",
+        "CLAUDE_TRUSTED_DEVICE_TOKEN",
+        "CLAUDECODE",
+    ] {
+        cmd.env_remove(key);
+    }
+}
+
+/// Remove inherited Codex parent-session and desktop-registration environment
+/// variables so a Codex child spawned by Claudette never inherits an unrelated
+/// parent Codex session or Codex Desktop's Windows registered-core marker.
+pub fn sanitize_codex_subprocess_env(cmd: &mut tokio::process::Command) {
+    for key in [
+        "CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS",
+        "CODEX_CI",
+        "CODEX_PERMISSION_PROFILE",
+        "CODEX_PLUGIN_METRICS_OUTPUT",
+        "CODEX_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "CODEX_TOOL_CALL_ID",
+        "CODEX_VERSION",
+        "CODEX_WINDOWS_REGISTERED_CORE",
+    ] {
+        cmd.env_remove(key);
+    }
 }
 
 #[cfg(windows)]
@@ -151,6 +187,40 @@ mod tests {
     /// We don't actually spawn — that would require a known-present Unix/Windows
     /// binary and makes tests flaky. The compile-and-mutate check is enough to
     /// catch breakage of the trait's shape (return type, method name, impls).
+    #[test]
+    fn sanitize_codex_subprocess_env_clears_parent_session_vars() {
+        let mut cmd = crate::process::command("true");
+        cmd.env("CODEX_THREAD_ID", "thread-1")
+            .env("CODEX_WINDOWS_REGISTERED_CORE", "1");
+        sanitize_codex_subprocess_env(&mut cmd);
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        assert!(
+            envs.iter()
+                .any(|(k, v)| *k == "CODEX_THREAD_ID" && v.is_none())
+        );
+        assert!(
+            envs.iter()
+                .any(|(k, v)| *k == "CODEX_WINDOWS_REGISTERED_CORE" && v.is_none())
+        );
+    }
+
+    #[test]
+    fn sanitize_claude_subprocess_env_clears_parent_session_stamps() {
+        let mut cmd = crate::process::command("true");
+        cmd.env("CLAUDE_CODE_CHILD_SESSION", "1")
+            .env("CLAUDE_CODE_SESSION_ID", "sess-1");
+        sanitize_claude_subprocess_env(&mut cmd);
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        assert!(
+            envs.iter()
+                .any(|(k, v)| *k == "CLAUDE_CODE_CHILD_SESSION" && v.is_none())
+        );
+        assert!(
+            envs.iter()
+                .any(|(k, v)| *k == "CLAUDE_CODE_SESSION_ID" && v.is_none())
+        );
+    }
+
     #[test]
     fn std_command_chain_typechecks() {
         let mut cmd = crate::process::std_command("true");

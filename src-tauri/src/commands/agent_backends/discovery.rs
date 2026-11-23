@@ -334,7 +334,10 @@ async fn start_codex_native_control_session() -> Result<CodexAppServerSession, S
     CodexAppServerSession::start_with_options(
         &cwd,
         env!("CARGO_PKG_VERSION"),
-        CodexAppServerOptions::default(),
+        CodexAppServerOptions {
+            probe_mode: true,
+            ..Default::default()
+        },
     )
     .await
 }
@@ -365,6 +368,7 @@ pub(super) async fn codex_login_status() -> Result<String, String> {
 
 pub(super) fn codex_cli_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
     let mut command = claudette::process::command(program);
+    claudette::process::sanitize_codex_subprocess_env(&mut command);
     command.env("PATH", claudette::env::enriched_path());
     command
 }

@@ -21,6 +21,10 @@ type CodexStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
 type PendingRequests = Arc<tokio::sync::Mutex<BTreeMap<JsonRpcId, PendingCodexRequest>>>;
 type TurnOutputBuffer = Arc<tokio::sync::Mutex<CodexTurnOutput>>;
 const MAX_CODEX_STDOUT_PREAMBLE_LINES: usize = 256;
+const MAX_CODEX_MODEL_PAGES: usize = 20;
+const CODEX_INIT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CODEX_CONTROL_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const CODEX_STDERR_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
 struct PendingCodexRequest {
     method: String,
@@ -57,6 +61,11 @@ pub struct CodexAppServerOptions {
     pub mcp_config: Option<String>,
     pub workspace_env: Option<crate::env::WorkspaceEnv>,
     pub resolved_env: Option<crate::env_provider::ResolvedEnv>,
+    /// Short-lived control/discovery probe mode: disables plugins and
+    /// project-root config discovery so probes neither leak marketplace
+    /// subprocesses nor have their global model catalog overridden by an
+    /// unrelated repo's `.codex/config.toml`.
+    pub probe_mode: bool,
 }
 
 impl Default for CodexAppServerOptions {
@@ -72,6 +81,7 @@ impl Default for CodexAppServerOptions {
             mcp_config: None,
             workspace_env: None,
             resolved_env: None,
+            probe_mode: false,
         }
     }
 }
@@ -134,7 +144,7 @@ impl CodexAppServerSession {
         crate::missing_cli::precheck_cwd(working_dir)?;
 
         let codex_path = super::binary::resolve_codex_path().await;
-        let args = codex_app_server_args()
+        let args = codex_app_server_args_for_probe(options.probe_mode)
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
@@ -149,6 +159,8 @@ impl CodexAppServerSession {
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+
+        crate::process::sanitize_codex_subprocess_env(&mut cmd);
 
         if let Some(env) = options.workspace_env.as_ref() {
             env.apply(&mut cmd);
@@ -205,8 +217,8 @@ impl CodexAppServerSession {
         };
 
         session.spawn_stdout_reader(stdout);
-        session.spawn_stderr_reader(stderr);
-        session.spawn_exit_watcher(child);
+        let stderr_task = session.spawn_stderr_reader(stderr);
+        session.spawn_exit_watcher(child, stderr_task);
         let _ = session.event_tx.send(codex_command_line_event());
         if let Err(err) = session.initialize(client_version).await {
             fail_pending_requests(&session.pending, "Codex app-server initialize failed").await;
@@ -536,7 +548,10 @@ impl CodexAppServerSession {
         refresh_token: bool,
     ) -> Result<CodexAppServerAccountStatus, String> {
         let response = self
-            .send_request(build_account_read_request(self.next_id(), refresh_token))
+            .send_request_with_timeout(
+                build_account_read_request(self.next_id(), refresh_token),
+                Some(CODEX_CONTROL_REQUEST_TIMEOUT),
+            )
             .await?;
         account_status_from_response(&response)
     }
@@ -548,7 +563,10 @@ impl CodexAppServerSession {
     /// fresh after this initial seed; see [`CodexNotificationEvent::RateLimitsUpdated`].
     pub async fn read_rate_limits(&self) -> Result<GetAccountRateLimitsResponse, String> {
         let response = self
-            .send_request(build_account_rate_limits_read_request(self.next_id()))
+            .send_request_with_timeout(
+                build_account_rate_limits_read_request(self.next_id()),
+                Some(CODEX_CONTROL_REQUEST_TIMEOUT),
+            )
             .await?;
         rate_limits_from_response(&response)
     }
@@ -556,16 +574,19 @@ impl CodexAppServerSession {
     pub async fn list_models(&self) -> Result<Vec<CodexAppServerModel>, String> {
         let mut cursor: Option<String> = None;
         let mut models = Vec::new();
-        loop {
+        for _ in 0..MAX_CODEX_MODEL_PAGES {
             let response = self
-                .send_request(build_model_list_request(self.next_id(), cursor.as_deref()))
+                .send_request_with_timeout(
+                    build_model_list_request(self.next_id(), cursor.as_deref()),
+                    Some(CODEX_CONTROL_REQUEST_TIMEOUT),
+                )
                 .await?;
             let page = model_list_from_response(&response)?;
             models.extend(page.models);
-            cursor = page.next_cursor;
-            if cursor.is_none() {
+            if page.next_cursor.is_none() || page.next_cursor == cursor {
                 break;
             }
+            cursor = page.next_cursor;
         }
         Ok(models)
     }
@@ -587,7 +608,8 @@ impl CodexAppServerSession {
 
     async fn initialize(&self, client_version: &str) -> Result<(), String> {
         let request = build_initialize_request(self.next_id(), client_version);
-        self.send_request(request).await?;
+        self.send_request_with_timeout(request, Some(CODEX_INIT_REQUEST_TIMEOUT))
+            .await?;
         self.send_notification(build_initialized_notification())
             .await
     }
@@ -626,6 +648,14 @@ impl CodexAppServerSession {
     }
 
     async fn send_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, String> {
+        self.send_request_with_timeout(request, None).await
+    }
+
+    async fn send_request_with_timeout(
+        &self,
+        request: JsonRpcRequest,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<JsonRpcResponse, String> {
         let stdin = self
             .stdin
             .as_ref()
@@ -650,7 +680,22 @@ impl CodexAppServerSession {
             pending.remove(&request.id);
             return Err(err);
         }
-        match rx.await.map_err(|_| {
+        let awaited = match timeout {
+            Some(limit) => match tokio::time::timeout(limit, rx).await {
+                Ok(result) => result,
+                Err(_) => {
+                    let mut pending = self.pending.lock().await;
+                    pending.remove(&request.id);
+                    return Err(format!(
+                        "Codex app-server `{}` timed out after {}s",
+                        request.method,
+                        limit.as_secs()
+                    ));
+                }
+            },
+            None => rx.await,
+        };
+        match awaited.map_err(|_| {
             format!(
                 "Codex app-server response channel closed for `{}`",
                 request.method
@@ -735,7 +780,10 @@ impl CodexAppServerSession {
         });
     }
 
-    fn spawn_stderr_reader(&self, stderr: tokio::process::ChildStderr) {
+    fn spawn_stderr_reader(
+        &self,
+        stderr: tokio::process::ChildStderr,
+    ) -> tokio::task::JoinHandle<()> {
         let event_tx = self.event_tx.clone();
         let pending = self.pending.clone();
         let auth_expired = self.auth_expired.clone();
@@ -750,6 +798,13 @@ impl CodexAppServerSession {
                     Ok(_) => {
                         let line = line.trim();
                         if line.is_empty() {
+                            continue;
+                        }
+                        if codex_stderr_indicates_missing_app_server(line) {
+                            fail_pending_requests(&pending, CODEX_MISSING_APP_SERVER_MESSAGE).await;
+                            let _ = event_tx.send(AgentEvent::Stderr(
+                                CODEX_MISSING_APP_SERVER_MESSAGE.to_string(),
+                            ));
                             continue;
                         }
                         // Codex's own login subsystem emits these phrases on
@@ -811,7 +866,7 @@ impl CodexAppServerSession {
                     }
                 }
             }
-        });
+        })
     }
 
     /// True once the stderr reader has flagged the session as terminally
@@ -822,11 +877,18 @@ impl CodexAppServerSession {
         self.auth_expired.load(Ordering::SeqCst)
     }
 
-    fn spawn_exit_watcher(&self, mut child: tokio::process::Child) {
+    fn spawn_exit_watcher(
+        &self,
+        mut child: tokio::process::Child,
+        stderr_task: tokio::task::JoinHandle<()>,
+    ) {
         let event_tx = self.event_tx.clone();
         let pending = self.pending.clone();
         tokio::spawn(async move {
             let status = child.wait().await.ok().and_then(|status| status.code());
+            // Give the stderr reader a brief window to flush final diagnostic
+            // lines (version/auth errors) before signaling ProcessExited.
+            let _ = tokio::time::timeout(CODEX_STDERR_DRAIN_TIMEOUT, stderr_task).await;
             fail_pending_requests(&pending, "Codex app-server process exited").await;
             let _ = event_tx.send(AgentEvent::ProcessExited(status));
         });
@@ -1017,6 +1079,16 @@ async fn route_app_server_message(
 /// token has been rotated out from under us. The exact phrasing matches
 /// what the UI surfaces verbatim — keep it short and actionable.
 pub(crate) const CODEX_AUTH_EXPIRED_MESSAGE: &str = "Codex authentication expired. Run /login (or `codex login` in a terminal), then send the message again.";
+const CODEX_MISSING_APP_SERVER_MESSAGE: &str = "Installed Codex CLI does not support `app-server`. Update Codex CLI (`npm install -g @openai/codex@latest`) and retry.";
+
+/// Recognise stderr lines from older Codex CLIs that predate `app-server`.
+pub(crate) fn codex_stderr_indicates_missing_app_server(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("app-server")
+        && (lower.contains("unrecognized subcommand")
+            || lower.contains("unexpected argument")
+            || lower.contains("invalid subcommand"))
+}
 
 /// Recognise stderr lines emitted by Codex's `codex_login::auth::manager`
 /// and `codex_api::endpoint::responses_websocket` subsystems that indicate
@@ -1024,17 +1096,37 @@ pub(crate) const CODEX_AUTH_EXPIRED_MESSAGE: &str = "Codex authentication expire
 /// Substring match because the lines are wrapped in ANSI escapes and a
 /// timestamp prefix that varies per call.
 pub(crate) fn codex_stderr_indicates_auth_expiry(line: &str) -> bool {
-    line.contains("Failed to refresh token")
-        || line.contains("Please log out and sign in again")
+    let lower = line.to_ascii_lowercase();
+    // API-key users cannot query ChatGPT rate limits; that refusal is expected
+    // and must not invalidate an otherwise working API-key session.
+    if lower.contains("chatgpt authentication required to read rate limits") {
+        return false;
+    }
+    lower.contains("failed to refresh token")
+        || lower.contains("please log out and sign in again")
+        || lower.contains("access token could not be refreshed")
+        || lower.contains("authentication session could not be refreshed")
+        || lower.contains("refresh token has expired")
+        || lower.contains("refresh token was already used")
+        || lower.contains("refresh token was revoked")
+        || lower.contains("you have since logged out or signed in to another account")
+        || lower.contains("please reauthenticate")
+        || lower.contains("token_revoked")
+        || lower.contains("token_expired")
+        || lower.contains("token_invalidated")
+        || lower.contains("invalidated oauth token")
         || (line.contains("401 Unauthorized")
             && (line.contains("wss://chatgpt.com/backend-api/codex/responses")
                 || line.contains("wss://api.openai.com/v1/responses")))
 }
 
 fn codex_error_indicates_auth_expiry(message: &str) -> bool {
-    message
-        .to_ascii_lowercase()
-        .contains("codex account authentication required")
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("chatgpt authentication required to read rate limits") {
+        return false;
+    }
+    lower.contains("codex account authentication required")
+        || codex_stderr_indicates_auth_expiry(message)
 }
 
 async fn fail_pending_requests(pending: &PendingRequests, reason: &str) {
@@ -1604,6 +1696,24 @@ pub fn build_codex_server_request_response(
 
 pub fn codex_app_server_args() -> [&'static str; 3] {
     ["app-server", "--listen", "stdio://"]
+}
+
+pub fn codex_app_server_args_for_probe(probe_mode: bool) -> Vec<&'static str> {
+    if probe_mode {
+        vec![
+            "-c",
+            "approval_policy=never",
+            "-c",
+            "features.plugins=false",
+            "-c",
+            "project_root_markers=[]",
+            "app-server",
+            "--listen",
+            "stdio://",
+        ]
+    } else {
+        codex_app_server_args().to_vec()
+    }
 }
 
 pub fn build_initialize_request(id: i64, client_version: &str) -> JsonRpcRequest {
@@ -5771,5 +5881,58 @@ mod tests {
                 "expected user-facing re-auth message, got: {err}"
             ),
         }
+    }
+
+    #[test]
+    fn probe_mode_prepends_isolation_overrides() {
+        let normal = codex_app_server_args_for_probe(false);
+        assert_eq!(normal, vec!["app-server", "--listen", "stdio://"]);
+
+        let probe = codex_app_server_args_for_probe(true);
+        assert_eq!(
+            probe,
+            vec![
+                "-c",
+                "approval_policy=never",
+                "-c",
+                "features.plugins=false",
+                "-c",
+                "project_root_markers=[]",
+                "app-server",
+                "--listen",
+                "stdio://",
+            ]
+        );
+    }
+
+    #[test]
+    fn detects_expanded_codex_auth_expiry_and_excludes_api_key_rate_limits() {
+        for line in [
+            "access token could not be refreshed",
+            "refresh token was revoked",
+            "ERROR: token_invalidated during request",
+            "Please reauthenticate to continue",
+        ] {
+            assert!(
+                codex_stderr_indicates_auth_expiry(line),
+                "should classify as auth expiry: {line}"
+            );
+        }
+        assert!(!codex_stderr_indicates_auth_expiry(
+            "ChatGPT authentication required to read rate limits"
+        ));
+        assert!(!codex_error_indicates_auth_expiry(
+            "ChatGPT authentication required to read rate limits"
+        ));
+    }
+
+    #[test]
+    fn detects_missing_app_server_subcommand() {
+        assert!(codex_stderr_indicates_missing_app_server(
+            "error: unrecognized subcommand 'app-server'"
+        ));
+        assert!(!codex_stderr_indicates_missing_app_server(
+            "app-server listening on stdio"
+        ));
     }
 }

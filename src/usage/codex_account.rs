@@ -49,11 +49,27 @@ pub fn format_plan_label(plan_type: Option<&str>) -> String {
 /// and `"Weekly (week)"` reads redundant. The 5h/24h cases keep
 /// their parenthetical because the prefix (`"Session"`, `"Daily"`)
 /// doesn't already imply the exact length.
+/// Classify a Codex window duration into a standard slot (`"Session"` vs
+/// `"Weekly"`) with a ±1 minute tolerance, falling back to `positional_prefix`
+/// when duration is absent or custom. Older/variant Codex snapshots can swap
+/// primary/secondary ordering or drift by 1 minute (e.g. 299..=301 for 5h or
+/// 10079..=10081 for 7d).
+fn window_prefix_for_duration(
+    duration_mins: Option<i64>,
+    positional_prefix: &'static str,
+) -> &'static str {
+    match duration_mins {
+        Some(299..=301) => "Session",
+        Some(10079..=10081) => "Weekly",
+        _ => positional_prefix,
+    }
+}
+
 pub fn format_window_label(prefix: &str, duration_mins: Option<i64>) -> String {
     match duration_mins {
-        Some(300) => format!("{prefix} (5h)"),
-        Some(1440) => format!("{prefix} (24h)"),
-        Some(10080) | Some(43200) => prefix.to_string(),
+        Some(299..=301) => format!("{prefix} (5h)"),
+        Some(1439..=1441) => format!("{prefix} (24h)"),
+        Some(10079..=10081) | Some(43200) => prefix.to_string(),
         Some(mins) if mins >= 1440 && mins % 1440 == 0 => {
             format!("{prefix} ({}d)", mins / 1440)
         }
@@ -128,17 +144,19 @@ pub fn snapshot_from_rate_limits(
 
     let mut buckets = Vec::new();
     if let Some(ref primary) = snapshot.primary {
+        let prefix = window_prefix_for_duration(primary.window_duration_mins, "Session");
         buckets.push(bucket_from_window(
             "codex_primary",
-            "Session",
+            prefix,
             primary,
             fetched_at_ms,
         ));
     }
     if let Some(ref secondary) = snapshot.secondary {
+        let prefix = window_prefix_for_duration(secondary.window_duration_mins, "Weekly");
         buckets.push(bucket_from_window(
             "codex_secondary",
-            "Weekly",
+            prefix,
             secondary,
             fetched_at_ms,
         ));
@@ -357,5 +375,26 @@ mod tests {
         });
         let usage = snapshot_from_rate_limits(AgentBackendKind::CodexNative, &snapshot, "Codex", 0);
         assert!(usage.buckets.iter().all(|b| b.key != "codex_credits"));
+    }
+
+    #[test]
+    fn snapshot_classifies_swapped_and_drifted_window_durations() {
+        use crate::agent_backend::AgentBackendKind;
+        let mut snapshot = sample_snapshot();
+        // Swapped slots with ±1 minute duration drift.
+        snapshot.primary = Some(CodexRateLimitWindow {
+            used_percent: 40,
+            resets_at: None,
+            window_duration_mins: Some(10079),
+        });
+        snapshot.secondary = Some(CodexRateLimitWindow {
+            used_percent: 15,
+            resets_at: None,
+            window_duration_mins: Some(301),
+        });
+        snapshot.credits = None;
+        let usage = snapshot_from_rate_limits(AgentBackendKind::CodexNative, &snapshot, "Codex", 0);
+        assert_eq!(usage.buckets[0].label, "Weekly");
+        assert_eq!(usage.buckets[1].label, "Session (5h)");
     }
 }

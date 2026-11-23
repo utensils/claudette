@@ -1952,6 +1952,7 @@ pub async fn send_chat_message(
                             mcp_config: settings.mcp_config.clone(),
                             workspace_env: Some(env.clone()),
                             resolved_env: Some(resolved.clone()),
+                            probe_mode: false,
                         },
                     )
                     .await?;

@@ -371,6 +371,11 @@ fn claude_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
                     .join("claude")
                     .join("claude.exe"),
             );
+            for dir in windows_extra_package_manager_dirs(home) {
+                for name in claude_binary_variants() {
+                    out.push(dir.join(name));
+                }
+            }
         }
     }
 
@@ -380,6 +385,9 @@ fn claude_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
             out.push(home.join(".local/bin/claude"));
             out.push(home.join(".claude/local/claude"));
             out.push(home.join(".nix-profile/bin/claude"));
+            for dir in unix_extra_package_manager_dirs(home) {
+                out.push(dir.join("claude"));
+            }
         }
         out.push(PathBuf::from("/usr/local/bin/claude"));
         out.push(PathBuf::from("/opt/homebrew/bin/claude"));
@@ -397,6 +405,16 @@ fn codex_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
     #[cfg(windows)]
     {
         if let Some(home) = home {
+            // Official OpenAI Codex Windows installer location.
+            out.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join("OpenAI")
+                    .join("Codex")
+                    .join("bin")
+                    .join("codex.exe"),
+            );
             out.push(home.join(".local").join("bin").join("codex.exe"));
             out.push(
                 home.join("AppData")
@@ -417,6 +435,11 @@ fn codex_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
                     .join("codex")
                     .join("codex.exe"),
             );
+            for dir in windows_extra_package_manager_dirs(home) {
+                for name in codex_binary_variants() {
+                    out.push(dir.join(name));
+                }
+            }
         }
     }
 
@@ -426,6 +449,9 @@ fn codex_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
             out.push(home.join(".local/bin/codex"));
             out.push(home.join(".codex/bin/codex"));
             out.push(home.join(".nix-profile/bin/codex"));
+            for dir in unix_extra_package_manager_dirs(home) {
+                out.push(dir.join("codex"));
+            }
         }
         out.push(PathBuf::from("/usr/local/bin/codex"));
         out.push(PathBuf::from("/opt/homebrew/bin/codex"));
@@ -434,6 +460,32 @@ fn codex_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
     }
 
     out
+}
+
+#[cfg(windows)]
+fn windows_extra_package_manager_dirs(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join("AppData").join("Local").join("pnpm"),
+        home.join("AppData").join("Local").join("Yarn").join("bin"),
+        home.join(".bun").join("bin"),
+        home.join(".volta").join("bin"),
+        home.join(".local").join("share").join("mise").join("shims"),
+    ]
+}
+
+#[cfg(not(windows))]
+fn unix_extra_package_manager_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        home.join(".bun/bin"),
+        home.join(".volta/bin"),
+        home.join(".local/share/mise/shims"),
+        home.join(".local/share/pnpm"),
+    ];
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(home.join("Library/pnpm"));
+    }
+    dirs
 }
 
 /// Search PATH directories for a `claude` binary, trying each platform
@@ -590,6 +642,20 @@ mod tests {
         let expected = home.join(".claude/local/claude");
         let result = resolve_claude_path_inner(Some(home), None, no_shell, |p| p == expected);
         assert_eq!(result, expected.into_os_string());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_codex_falls_back_to_bun_and_mise_dirs() {
+        let home = PathBuf::from("/home/user");
+        let bun_codex = home.join(".bun/bin/codex");
+        let result =
+            resolve_codex_path_inner(Some(home.clone()), None, no_shell, |p| p == bun_codex);
+        assert_eq!(result, bun_codex.into_os_string());
+
+        let mise_claude = home.join(".local/share/mise/shims/claude");
+        let result = resolve_claude_path_inner(Some(home), None, no_shell, |p| p == mise_claude);
+        assert_eq!(result, mise_claude.into_os_string());
     }
 
     #[cfg(unix)]

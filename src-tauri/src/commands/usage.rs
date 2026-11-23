@@ -192,6 +192,7 @@ pub async fn prefetch_codex_rate_limits(
         env!("CARGO_PKG_VERSION"),
         CodexAppServerOptions {
             model: backend.default_model.clone(),
+            probe_mode: true,
             ..Default::default()
         },
     )
