@@ -26,7 +26,7 @@ jobs:
           )"
 
           if [ -n "$changed" ]; then
-            echo "::error title=Released migration changed::Released migration files are immutable; do not edit, rename, or delete them. Add a new forward migration instead. See CLAUDE.md Schema migrations."
+            echo "::error title=Released migration changed::Released migration files are immutable; do not edit, rename, or delete them. Add a new forward migration instead. See src/migrations/AGENTS.md."
             echo "Changed released migration files:" >&2
             while IFS=$'\t' read -r status path rest; do
               [ -n "$status" ] || continue

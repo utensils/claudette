@@ -33,13 +33,12 @@ Feature suggestions are welcome! Please open an issue describing:
 1. **Fork the repository** and create a feature branch from `main`.
 2. **Set up the development environment** — see the [README](README.md#prerequisites) for prerequisites.
 3. **Make your changes** following the guidelines below.
-4. **Test your changes** — run the full test and lint suite before submitting:
+4. **Test your changes** — run the same checks CI runs before submitting:
    ```sh
-   cargo test --all-features
-   cargo clippy --workspace --all-targets
-   cargo fmt --all --check
-   cd src/ui && bunx tsc --noEmit
+   make check          # fmt, clippy, CSS tokens, ESLint, tsc -b, Rust + frontend tests
+   make check-tauri    # also run this if you touched src-tauri/ (CI doesn't lint or test it)
    ```
+   Run `make` to list every target. On Windows without `make`, run the commands the `Makefile` shows directly.
 5. **Commit your changes** using [conventional commit](#commit-conventions) format.
 6. **Open a pull request** against `main` with a clear description of your changes.
 
@@ -50,11 +49,11 @@ Feature suggestions are welcome! Please open an issue describing:
 git clone https://github.com/<your-username>/claudette.git
 cd claudette
 
-# Install frontend dependencies
-cd src/ui && bun install && cd ../..
+# Install the toolchain (mise users) and fetch Rust + frontend dependencies
+make setup
 
-# Run in development mode (macOS / Linux)
-./scripts/dev.sh
+# Run in development mode (macOS / Linux) — wraps ./scripts/dev.sh
+make dev
 ```
 
 ```powershell
@@ -145,8 +144,8 @@ Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `ci`, `chore`
 ### Rust
 
 - Edition 2024 — use modern idioms
-- Run `cargo fmt` before committing (CI enforces formatting)
-- Run `cargo clippy` with zero warnings (CI sets `RUSTFLAGS="-Dwarnings"`)
+- Run `make fmt` before committing (CI checks formatting with `make fmt-check`)
+- Run `make lint` with zero warnings (CI sets `RUSTFLAGS="-Dwarnings"`)
 
 ### TypeScript
 
@@ -155,7 +154,7 @@ Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `ci`, `chore`
 
 ## Architecture Overview
 
-Claudette is a Tauri 2 desktop app with a Rust backend and React/TypeScript frontend. See `CLAUDE.md` for the full architecture guide.
+Claudette is a Tauri 2 desktop app with a Rust backend and React/TypeScript frontend. See `AGENTS.md` for the architecture guide.
 
 Key principles:
 
@@ -199,9 +198,9 @@ If you'd like to fix a mistranslation or polish wording in an existing language,
 
 ### What CI checks
 
-- `cargo test --all-features` runs `locales_have_identical_key_sets` in `src/i18n/mod.rs`, which fails if the backend locales it includes (currently `es`, `pt-BR`, `ja`, and `zh-CN`, each compared against `en`) disagree on which keys exist. The check only covers the locales explicitly compared in the test, so when adding a new backend locale make sure to extend the test to include it (see the registration step above). Run the suite locally before opening a PR.
-- `cd src/ui && bunx tsc -b` enforces frontend type safety, which transitively catches mistyped translation keys consumed via `useTranslation()`.
-- `cargo clippy --workspace --all-targets` and `cargo fmt --all --check` round out the standard checks.
+- `make test-rust` (CI: `Test`) runs `locales_have_identical_key_sets` in `src/i18n/mod.rs`, which fails if the backend locales it includes (currently `es`, `pt-BR`, `ja`, and `zh-CN`, each compared against `en`) disagree on which keys exist. The check only covers the locales explicitly compared in the test, so when adding a new backend locale make sure to extend the test to include it (see the registration step above). Run the suite locally before opening a PR.
+- `make typecheck` (`bunx tsc -b`) enforces frontend type safety, which transitively catches mistyped translation keys consumed via `useTranslation()`.
+- `make lint` and `make fmt-check` round out the standard checks; `make check` runs all of them.
 
 If you're not sure where to start, [open an issue](https://github.com/utensils/Claudette/issues/new) to claim a language so two contributors don't unknowingly translate in parallel.
 

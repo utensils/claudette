@@ -12,6 +12,8 @@ On Windows-relevant changes, check every new or moved subprocess spawn for the `
 
 Prefer additive compatibility for persisted data and public-ish contracts. Existing databases, settings rows, plugin manifests, CLI output, Tauri command parameters, and saved workspace/session state should keep working across upgrades.
 
+Green CI does not cover everything. `claudette-tauri` tests are compiled but never run and that crate is not linted, ESLint is not run, there is no Windows build on PRs, and only `Format` and `Test` are required checks. When a PR changes `src-tauri/` tests, `#[cfg(windows)]` code, or anything ESLint would catch, ask for the local evidence.
+
 Every non-trivial fix should include the narrowest test that would have failed before the fix. If tests are impractical, the PR should include a concrete manual UAT checklist with the exact workflow and expected result.
 
 For large-file edits, verify the change is local to the requested feature. If a god file grew because new behavior was added, consider whether a helper module, child component, store slice, or service function would better preserve ownership and reduce future regression risk.
