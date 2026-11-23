@@ -21,7 +21,7 @@ Implement the changes described in one or more GitHub issues passed via $ARGUMEN
 2. **Understand the context** — Research the codebase before making changes:
    - Identify which domains, files, and systems are affected across all issues
    - Read the relevant source files to understand the current behavior
-   - Check `docs/` for any existing documentation on the affected areas
+   - Check `site/src/content/docs/features/` for existing documentation on the affected areas
    - Review related tests to understand expected behavior and edge cases
    - If any issue references other issues or PRs, fetch those for additional context
    - When working with multiple issues, identify shared concerns, overlapping files, and dependencies between the issues
@@ -42,11 +42,11 @@ Implement the changes described in one or more GitHub issues passed via $ARGUMEN
    - Wait for the user to approve the plan before proceeding
 
 5. **Implement the changes** — Execute the plan:
-   - Follow the patterns and conventions documented in CLAUDE.md
+   - Follow the patterns and conventions documented in AGENTS.md
    - Write tests alongside the implementation (not after)
    - Reference issue numbers in code comments only when the context isn't self-evident
-   - Update documentation in `docs/` if the changes affect documented features
-   - **Leverage agents and teams for parallel work** — when the implementation involves independent workstreams (e.g., DAL + API route + UI, or multiple unrelated files), use subagents to work on them concurrently. Examples:
+   - Update the docs under `site/src/content/docs/` if user-visible behavior changes (see "Documentation discipline" in AGENTS.md)
+   - **Leverage agents and teams for parallel work** — when the implementation involves independent workstreams (e.g., `claudette` crate logic + Tauri command wrapper + `src/ui` changes, or multiple unrelated files), use subagents to work on them concurrently. Examples:
      - Spawn agents to research different parts of the codebase in parallel during the planning phase
      - Use agents to implement independent modules simultaneously (e.g., one for the data layer, one for tests)
      - Delegate verification tasks (format, lint, typecheck, test) to a background agent while continuing work
