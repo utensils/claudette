@@ -5,6 +5,7 @@ import {
   submitPlanApproval,
 } from "../../services/tauri";
 import type { AttachmentInput } from "../../types/chat";
+import { SubagentControlCards } from "./SubagentControlCards";
 import { AgentApprovalCard } from "./AgentApprovalCard";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
@@ -52,6 +53,7 @@ export function PendingControlCards({
 }) {
   return (
     <>
+      {activeSessionId && ws && <SubagentControlCards sessionId={activeSessionId} connectionId={ws.remote_connection_id} setError={setError} />}
       {pendingQuestion && (
         <AgentQuestionCard
           question={pendingQuestion}

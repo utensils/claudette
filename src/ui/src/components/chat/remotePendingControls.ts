@@ -9,6 +9,7 @@ import {
 
 /** One entry of a `get_chat_snapshot` response's `pending_controls`. */
 export interface PendingAgentControl {
+  child_owned?: boolean;
   tool_use_id: string;
   tool_name: string;
   input: unknown;
@@ -110,7 +111,7 @@ export async function hydrateRemotePendingControls(
   })) as ChatSnapshotResponse | null;
   reconcilePendingControls(
     sessionId,
-    snapshot?.pending_controls ?? [],
+    snapshot?.pending_controls?.filter((entry) => !entry.child_owned) ?? [],
     cardBefore,
   );
 
