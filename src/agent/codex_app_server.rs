@@ -1,3 +1,5 @@
+mod subagents;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -736,12 +738,19 @@ impl CodexAppServerSession {
         let active_turn_id = self.active_turn_id.clone();
         let manual_compaction_in_flight = self.manual_compaction_in_flight.clone();
         let turn_output = self.turn_output.clone();
+        let thread_id = self.thread_id.clone();
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
+            let mut children = subagents::ChildThreads::default();
             loop {
                 match read_jsonrpc_message(&mut reader).await {
                     Ok(Some(message)) => {
+                        if let Some(root) = thread_id.lock().await.as_deref()
+                            && children.route(root, &message, &event_tx)
+                        {
+                            continue;
+                        }
                         route_app_server_message(
                             pid,
                             &event_tx,

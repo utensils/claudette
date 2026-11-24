@@ -22,6 +22,8 @@
 //!   `combinedOutput`, `exitCode`, etc.) and never auto-approves
 //!   `interaction_*` user questions.
 
+mod subagents;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -909,12 +911,23 @@ impl AntigravityAcpSession {
         let pending = self.pending.clone();
         let stdin = self.stdin.clone();
         let turn_state = self.turn_state.clone();
+        let root_session = self.acp_session_id.clone();
+        let resume_session = self.resume_session_id.clone();
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
             loop {
                 match read_acp_message(&mut reader).await {
                     Ok(Some(message)) => {
+                        if let Some(root) = root_session
+                            .lock()
+                            .await
+                            .as_deref()
+                            .or(resume_session.as_deref())
+                            && subagents::route(root, &message, &event_tx)
+                        {
+                            continue;
+                        }
                         route_acp_message(
                             pid,
                             &event_tx,
