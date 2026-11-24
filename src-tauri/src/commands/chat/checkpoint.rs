@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use claudette::agent::history_seeder::build_migration_prelude;
 use claudette::db::Database;
@@ -27,6 +27,7 @@ pub async fn rollback_to_checkpoint(
     session_id: String,
     checkpoint_id: String,
     restore_files: bool,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -104,6 +105,10 @@ pub async fn rollback_to_checkpoint(
     // session so sibling tabs are untouched.
     db.delete_session_messages_after(&chat_session_id, &checkpoint.message_id)
         .map_err(|e| e.to_string())?;
+    let _ = app.emit(
+        "subagent-runs-invalidated",
+        serde_json::json!({"session_id":chat_session_id}),
+    );
     db.delete_session_checkpoints_after(&chat_session_id, checkpoint.turn_index)
         .map_err(|e| e.to_string())?;
 
@@ -208,6 +213,7 @@ pub async fn rollback_to_checkpoint(
 pub async fn clear_conversation(
     session_id: String,
     restore_files: bool,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -262,6 +268,10 @@ pub async fn clear_conversation(
     db.delete_chat_messages_for_session(&chat_session_id)
         .map_err(|e| e.to_string())?;
     // Checkpoints cascade via FK, but delete explicitly for clarity.
+    let _ = app.emit(
+        "subagent-runs-invalidated",
+        serde_json::json!({"session_id":chat_session_id}),
+    );
     db.delete_session_checkpoints_after(&chat_session_id, -1)
         .map_err(|e| e.to_string())?;
 

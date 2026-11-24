@@ -32,6 +32,7 @@ pub(super) fn observe_process(
     app: &AppHandle,
     workspace: &str,
     session: &str,
+    pid: u32,
     mut rx: Receiver<AgentEvent>,
 ) {
     let app = app.clone();
@@ -43,11 +44,12 @@ pub(super) fn observe_process(
         loop {
             match rx.recv().await {
                 Ok(AgentEvent::SubagentControl(request)) => {
-                    super::send::route_turn_control_request(
+                    super::send::route_process_control_request(
                         &app,
                         &workspace,
                         &session,
                         &AgentEvent::Stream(request),
+                        Some(pid),
                     )
                     .await;
                 }
@@ -57,10 +59,28 @@ pub(super) fn observe_process(
                 }
                 Ok(event) => {
                     if let Some(update) = tracker.observe(&event) {
+                        let state = app.state::<AppState>();
+                        let agents = state.agents.read().await;
+                        if agents
+                            .get(&session)
+                            .and_then(|s| s.persistent_session.as_ref())
+                            .is_none_or(|ps| ps.pid() != pid)
+                        {
+                            break;
+                        }
                         persist(&app, &path, &session, &update);
                     }
                 }
             }
+        }
+        let state = app.state::<AppState>();
+        let agents = state.agents.read().await;
+        if agents
+            .get(&session)
+            .and_then(|s| s.persistent_session.as_ref())
+            .is_some_and(|ps| ps.pid() != pid)
+        {
+            return;
         }
         for update in tracker.disconnected() {
             persist(&app, &path, &session, &update);

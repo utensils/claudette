@@ -69,6 +69,11 @@ impl Database {
         Ok(Some((child, changed)))
     }
 
+    /// Preserve the last provider timestamp when the observing host restarts.
+    pub fn disconnect_orphaned_subagents(&self) -> rusqlite::Result<usize> {
+        self.conn.execute("UPDATE subagent_runs SET status='disconnected',revision=revision+1 WHERE status IN ('running','needs_approval','delegated')",[])
+    }
+
     pub fn list_subagent_runs(&self, session: &str) -> rusqlite::Result<Vec<SubagentRun>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {COLUMNS} FROM subagent_runs WHERE session_id=?1 ORDER BY rowid"
@@ -86,6 +91,9 @@ impl Database {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
         let current = tx.query_row(&format!("SELECT {COLUMNS} FROM subagent_runs WHERE session_id=?1 AND harness=?2 AND run_id=?3"),
             params![session, update.harness, update.run_id], read).optional()?;
+        if current.is_none() && update.status.as_deref() == Some("disconnected") {
+            return Ok(None);
+        }
         let mut next = current
             .as_ref()
             .map(|r| r.native.clone())
@@ -119,8 +127,8 @@ impl Database {
         if current.as_ref().is_some_and(|row| row.native == next) {
             return Ok(None);
         }
-        let sql = format!("INSERT INTO subagent_runs(session_id,harness,run_id,parent_run_id,assignment,status,summary,tool_use_id,updated_at,revision)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,1) ON CONFLICT(session_id,harness,run_id) DO UPDATE SET
+        let sql = format!("INSERT INTO subagent_runs(session_id,harness,run_id,parent_run_id,assignment,status,summary,tool_use_id,updated_at,revision,launch_message_id)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,1,(SELECT id FROM chat_messages WHERE chat_session_id=?1 AND role='user' ORDER BY rowid DESC LIMIT 1)) ON CONFLICT(session_id,harness,run_id) DO UPDATE SET
             parent_run_id=excluded.parent_run_id,assignment=excluded.assignment,status=excluded.status,summary=excluded.summary,
             tool_use_id=excluded.tool_use_id,updated_at=excluded.updated_at,revision=revision+1 RETURNING {COLUMNS}");
         let row = tx.query_row(
@@ -246,6 +254,39 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn rollback_removes_only_workers_launched_in_discarded_turns() {
+        use crate::db::test_support::{make_chat_msg, setup_db_with_workspace};
+        use crate::model::ChatRole;
+        let db = setup_db_with_workspace();
+        let session = db.default_session_id_for_workspace("w1").unwrap().unwrap();
+        for id in ["first", "second"] {
+            let message = make_chat_msg(&db, id, "w1", ChatRole::User, "review");
+            db.insert_chat_message(&message).unwrap();
+            let update = SubagentRunUpdate {
+                run_id: id.into(),
+                harness: "codex".into(),
+                status: Some("running".into()),
+                ..Default::default()
+            };
+            db.observe_subagent(&session, &update).unwrap();
+        }
+        let update = SubagentRunUpdate {
+            run_id: "first".into(),
+            harness: "codex".into(),
+            status: Some("completed".into()),
+            ..Default::default()
+        };
+        db.observe_subagent(&session, &update).unwrap();
+        assert_eq!(db.disconnect_orphaned_subagents().unwrap(), 1);
+        db.delete_session_messages_after(&session, "first").unwrap();
+        let rows = db.list_subagent_runs(&session).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].native, update);
+        db.delete_chat_messages_for_session(&session).unwrap();
+        assert!(db.list_subagent_runs(&session).unwrap().is_empty());
     }
 
     #[test]

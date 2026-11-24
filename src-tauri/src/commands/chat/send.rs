@@ -181,6 +181,16 @@ pub(super) async fn route_turn_control_request(
     chat_session_id: &str,
     event: &AgentEvent,
 ) -> bool {
+    route_process_control_request(app, workspace_id, chat_session_id, event, None).await
+}
+
+pub(super) async fn route_process_control_request(
+    app: &AppHandle,
+    workspace_id: &str,
+    chat_session_id: &str,
+    event: &AgentEvent,
+    owner_pid: Option<u32>,
+) -> bool {
     let AgentEvent::Stream(StreamEvent::ControlRequest {
         request_id,
         request:
@@ -196,6 +206,14 @@ pub(super) async fn route_turn_control_request(
 
     let app_state = app.state::<AppState>();
     let mut agents = app_state.agents.write().await;
+    if let Some(owner) = owner_pid
+        && agents
+            .get(chat_session_id)
+            .and_then(|s| s.persistent_session.as_ref())
+            .is_none_or(|ps| ps.pid() != owner)
+    {
+        return false;
+    }
     let mut permission_response = None;
     let kind = if let Some(session) = agents.get_mut(chat_session_id) {
         match route_control_request_session_state(
@@ -1907,16 +1925,12 @@ pub async fn send_chat_message(
     // can't move `app` into it directly — clone here, re-clone per
     // invocation, then re-clone again for the spawned task.
     let app_for_persistent = app.clone();
-    let observed_session = chat_session_id.clone();
-    let observed_workspace = workspace_id.clone();
     let start_persistent = move |worktree: String,
                                  sid: String,
                                  is_resume: bool,
                                  tools: Vec<String>,
                                  instructions: Option<String>,
                                  settings: AgentSettings| {
-        let observed_session = observed_session.clone();
-        let observed_workspace = observed_workspace.clone();
         let env = ws_env_for_persistent.clone();
         let resolved = resolved_env_for_persistent.clone();
         let app_handle_for_this_call = app_for_persistent.clone();
@@ -1931,7 +1945,7 @@ pub async fn send_chat_message(
             // `handle_err` themselves, which keeps event emission attributed
             // to the actual decision-to-fail rather than to the speculative
             // first attempt of a resume.
-            let ps = match settings.backend_runtime.harness {
+            match settings.backend_runtime.harness {
                 AgentBackendRuntimeHarness::ClaudeCode => {
                     let started = ClaudeCodeHarness::start_persistent(PersistentSessionStart {
                         working_dir: std::path::Path::new(&worktree),
@@ -2052,17 +2066,11 @@ pub async fn send_chat_message(
                         started,
                     )))
                 }
-            }?;
-            super::subagents::observe_process(
-                &app_handle_for_this_call,
-                &observed_workspace,
-                &observed_session,
-                ps.subscribe(),
-            );
-            Ok::<_, String>(ps)
+            }
         }
     };
 
+    let mut child_events = None;
     let turn_handle = if let Some(ref ps) = existing_persistent {
         // Reuse existing persistent process — send turn via stdin. Mark the
         // process busy before writing so the Remote Control monitor does not
@@ -2228,6 +2236,7 @@ pub async fn send_chat_message(
                     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                     session.remember_local_user_message_uuid(local_user_message_uuid.clone());
                 }
+                child_events = Some(ps.subscribe());
                 let handle = if is_native_compact {
                     ps.start_compact().await?
                 } else {
@@ -2386,6 +2395,7 @@ pub async fn send_chat_message(
             let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
             session.remember_local_user_message_uuid(local_user_message_uuid.clone());
         }
+        child_events = Some(ps.subscribe());
         let handle = if is_native_compact {
             ps.start_compact().await?
         } else {
@@ -2459,6 +2469,10 @@ pub async fn send_chat_message(
         }
     }
     drop(agents);
+
+    if let Some(rx) = child_events {
+        super::subagents::observe_process(&app, &workspace_id, &chat_session_id, spawned_pid, rx);
+    }
 
     // Capture rename context before the bridge spawn.
     let has_repo = repo.is_some();

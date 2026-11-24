@@ -535,6 +535,9 @@ fn main() {
     // resumed CLI transcripts, per the warning above.
     if peer_instances.is_empty() {
         if let Ok(db) = Database::open(&db_path) {
+            if let Err(error) = db.disconnect_orphaned_subagents() {
+                tracing::warn!(%error,"failed to reconcile subagent runs");
+            }
             match db.resolve_orphaned_workflow_activities() {
                 Ok(0) => {}
                 Ok(count) => tracing::info!(
