@@ -637,17 +637,14 @@ fn windows_extra_package_manager_dirs(home: &Path) -> Vec<PathBuf> {
 
 #[cfg(not(windows))]
 fn unix_extra_package_manager_dirs(home: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![
+    vec![
         home.join(".bun/bin"),
         home.join(".volta/bin"),
         home.join(".local/share/mise/shims"),
         home.join(".local/share/pnpm"),
-    ];
-    #[cfg(target_os = "macos")]
-    {
-        dirs.push(home.join("Library/pnpm"));
-    }
-    dirs
+        #[cfg(target_os = "macos")]
+        home.join("Library/pnpm"),
+    ]
 }
 
 /// Search PATH directories for a `claude` binary, trying each platform
