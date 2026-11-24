@@ -32,24 +32,54 @@ impl ModelPricing {
 /// Lookup pricing for a model id. Returns `None` for unknown models, so
 /// callers drop the dollar figure rather than guess. Matching is
 /// case-insensitive and tolerant of common id variants (`gpt-5.4`,
-/// `gpt-5.4-2026-04-01`, `openai/gpt-5.4`, `claude-opus-5-5[1m]`, ...).
+/// `gpt-5.4-2026-04-01`, `openai/gpt-5.4`, `codex-subscription/gpt-5.4`,
+/// `gpt-5.3-codex-spark`, `claude-opus-5-5[1m]`, ...).
 ///
 /// Rates come from the [`llm_prices`] table, which records each model's
 /// list price with the provider's pricing page and the date it was checked.
+/// Only OpenAI and Anthropic rows are used: those are the providers the
+/// backends bill through. An open-weight model such as `gpt-oss-20b` served
+/// from a local endpoint therefore gets no price instead of a reseller's.
+///
 /// A trailing context-window tag such as `[1m]` is stripped first: the
 /// gateway uses it to select the 1M-context variant, which bills at the
-/// same per-token rates as the bare model id.
+/// same per-token rates as the bare model id. If the id still misses, it is
+/// retried on the part after the last `/` (any namespace prefix), then with
+/// trailing `-` segments trimmed one at a time, so a variant such as
+/// `gpt-5.3-codex-spark` takes the `gpt-5.3-codex` price.
 pub fn lookup(model_id: &str) -> Option<ModelPricing> {
     let id = model_id.trim();
     let id = match id.rfind('[') {
         Some(i) if id.ends_with(']') => &id[..i],
         _ => id,
     };
-    let price = llm_prices::lookup(id)?;
+    let bare = id.rsplit_once('/').map_or(id, |(_, tail)| tail);
+    let price = billed_row(id).or_else(|| {
+        let mut candidate = bare;
+        loop {
+            if let Some(price) = billed_row(candidate) {
+                return Some(price);
+            }
+            candidate = candidate.rsplit_once('-')?.0;
+        }
+    })?;
     Some(ModelPricing {
         prompt_per_mtok_usd: price.input?,
         completion_per_mtok_usd: price.output?,
     })
+}
+
+/// The OpenAI or Anthropic row for `id`, if either provider lists it.
+fn billed_row(id: &str) -> Option<&'static llm_prices::Price> {
+    if id.is_empty() {
+        return None;
+    }
+    [
+        llm_prices::Provider::OpenAi,
+        llm_prices::Provider::Anthropic,
+    ]
+    .into_iter()
+    .find_map(|p| p.lookup(id).filter(|row| row.provider == p.as_str()))
 }
 
 #[cfg(test)]
@@ -127,6 +157,26 @@ mod tests {
         assert_rates("claude-fable-5-2[1m]", 8.00, 40.00);
         assert_rates("claude-opus-5-5[1m]", 4.00, 20.00);
         assert_rates("claude-sonnet-5[1m]", 2.00, 10.00);
+    }
+
+    #[test]
+    fn variant_and_namespaced_ids_resolve() {
+        // Codex discovery returns variant ids such as `gpt-5.3-codex-spark`;
+        // they take the base model's price.
+        assert_rates("gpt-5.3-codex-spark", 1.75, 14.00);
+        // Provider-qualified ids with namespaces the crate doesn't know.
+        assert_rates("codex-subscription/gpt-5.4", 2.50, 15.00);
+        assert_rates("mygw/gpt-5.4", 2.50, 15.00);
+        assert_rates("mygw/gpt-5.4-mini", 0.75, 4.50);
+    }
+
+    #[test]
+    fn self_hosted_open_weight_models_get_no_price() {
+        // Only resellers price gpt-oss; served locally it costs the user nothing.
+        assert!(lookup("gpt-oss-20b").is_none());
+        assert!(lookup("openai/gpt-oss-20b").is_none());
+        assert!(lookup("lmstudio/gpt-oss-20b").is_none());
+        assert!(lookup("totally-unknown-model").is_none());
     }
 
     #[test]
