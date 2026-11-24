@@ -95,6 +95,21 @@ impl Database {
         Ok(())
     }
 
+    /// The observer that owned this chat process is gone. Include workers
+    /// first seen through the Claude hook socket as well as streamed workers.
+    pub fn disconnect_subagent_process(
+        &self,
+        session: &str,
+        generation: i64,
+    ) -> rusqlite::Result<Vec<SubagentRun>> {
+        let sql=format!("UPDATE subagent_runs SET status='disconnected',revision=revision+1
+            WHERE session_id=?1 AND observer_id=?2 AND status IN ('running','delegated','needs_approval')
+            AND EXISTS(SELECT 1 FROM chat_sessions WHERE id=?1 AND subagent_generation=?3) RETURNING {COLUMNS}");
+        let mut stmt = self.conn.prepare(&sql)?;
+        stmt.query_map(params![session, observer_id(), generation], read)?
+            .collect()
+    }
+
     pub fn list_subagent_runs(&self, session: &str) -> rusqlite::Result<Vec<SubagentRun>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {COLUMNS}, observer_id FROM subagent_runs WHERE session_id=?1 ORDER BY rowid"

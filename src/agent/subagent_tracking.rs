@@ -9,37 +9,10 @@ use std::collections::HashSet;
 #[derive(Default)]
 pub struct SubagentTracker {
     agent_tools: HashSet<String>,
-    active_runs: HashSet<(String, String)>,
 }
 
 impl SubagentTracker {
     pub fn observe(&mut self, event: &AgentEvent) -> Option<SubagentRunUpdate> {
-        let update = self.map(event)?;
-        let key = (update.harness.clone(), update.run_id.clone());
-        match update.status.as_deref() {
-            Some("completed" | "stopped" | "failed") => {
-                self.active_runs.remove(&key);
-            }
-            Some("running" | "resumed" | "delegated" | "needs_approval") => {
-                self.active_runs.insert(key);
-            }
-            _ => {}
-        }
-        Some(update)
-    }
-
-    pub fn disconnected(&mut self) -> impl Iterator<Item = SubagentRunUpdate> + '_ {
-        self.active_runs
-            .drain()
-            .map(|(harness, run_id)| SubagentRunUpdate {
-                harness,
-                run_id,
-                status: Some("disconnected".into()),
-                ..Default::default()
-            })
-    }
-
-    fn map(&mut self, event: &AgentEvent) -> Option<SubagentRunUpdate> {
         match event {
             AgentEvent::SubagentRun(update) => Some(update.clone()),
             AgentEvent::Stream(StreamEvent::Stream {

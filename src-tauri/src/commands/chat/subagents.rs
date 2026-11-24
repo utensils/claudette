@@ -139,8 +139,15 @@ pub(super) fn observe_process(
         {
             return;
         }
-        for update in tracker.disconnected() {
-            persist(&app, &path, &session, generation, &update);
+        match Database::open(&path)
+            .and_then(|db| db.disconnect_subagent_process(&session, generation))
+        {
+            Ok(rows) => {
+                for row in rows {
+                    let _ = app.emit("subagent-run-updated", &row);
+                }
+            }
+            Err(error) => tracing::warn!(%error,"failed to disconnect child observations"),
         }
     });
 }

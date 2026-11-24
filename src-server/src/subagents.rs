@@ -7,6 +7,7 @@ use tokio::sync::broadcast::{Receiver, error::RecvError};
 pub(crate) fn observe_process(
     state: Arc<ServerState>,
     session: String,
+    pid: u32,
     generation: i64,
     mut rx: Receiver<AgentEvent>,
 ) {
@@ -35,8 +36,23 @@ pub(crate) fn observe_process(
                 }
             }
         }
-        for update in tracker.disconnected() {
-            persist(&update);
+        let agents = state.agents.read().await;
+        if agents
+            .get(&session)
+            .and_then(|s| s.persistent_session.as_ref())
+            .is_some_and(|ps| ps.pid() != pid)
+        {
+            return;
+        }
+        match Database::open(&state.db_path)
+            .and_then(|db| db.disconnect_subagent_process(&session, generation))
+        {
+            Ok(rows) => {
+                for row in rows {
+                    state.emit(serde_json::json!({"event":"subagent-run-updated","payload":row}));
+                }
+            }
+            Err(error) => tracing::warn!(%error,"failed to disconnect child observations"),
         }
     });
 }
