@@ -2243,7 +2243,7 @@ pub async fn send_chat_message(
                     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                     session.remember_local_user_message_uuid(local_user_message_uuid.clone());
                 }
-                child_events = Some((ps.subscribe(), generation));
+                child_events = Some((ps.subscribe(), ps.child_control_replay(), generation));
                 let handle = if is_native_compact {
                     ps.start_compact().await?
                 } else {
@@ -2402,7 +2402,7 @@ pub async fn send_chat_message(
             let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
             session.remember_local_user_message_uuid(local_user_message_uuid.clone());
         }
-        child_events = Some((ps.subscribe(), generation));
+        child_events = Some((ps.subscribe(), ps.child_control_replay(), generation));
         let handle = if is_native_compact {
             ps.start_compact().await?
         } else {
@@ -2477,7 +2477,7 @@ pub async fn send_chat_message(
     }
     drop(agents);
 
-    if let Some((rx, generation)) = child_events {
+    if let Some((rx, controls, generation)) = child_events {
         super::subagents::observe_process(
             &app,
             &workspace_id,
@@ -2485,6 +2485,7 @@ pub async fn send_chat_message(
             spawned_pid,
             generation,
             rx,
+            controls,
         );
     }
 

@@ -397,6 +397,10 @@ impl AntigravityAcpSession {
         self.pid
     }
 
+    pub(super) fn child_control_replay(&self) -> super::ChildControlReplay {
+        self.child_approvals.replay("antigravity")
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
         self.event_tx.subscribe()
     }

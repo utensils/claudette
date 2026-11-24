@@ -44,6 +44,7 @@ pub use naming::{
     generate_branch_name, generate_session_name, persist_claude_custom_title, sanitize_branch_name,
 };
 pub use process::{AgentEvent, TurnHandle, run_turn, stop_agent, stop_agent_graceful};
+pub use provider_subagents::ChildControlReplay;
 pub use session::PersistentSession;
 pub use types::{
     AssistantMessage, CompactMetadata, ContentBlock, ControlRequestInner, ControlResponsePayload,

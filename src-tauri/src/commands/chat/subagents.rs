@@ -1,5 +1,7 @@
 use crate::state::AppState;
-use claudette::agent::{AgentEvent, SubagentRunUpdate, subagent_tracking::SubagentTracker};
+use claudette::agent::{
+    AgentEvent, ChildControlReplay, SubagentRunUpdate, subagent_tracking::SubagentTracker,
+};
 use claudette::db::Database;
 use claudette::model::SubagentRun;
 use std::path::Path;
@@ -71,6 +73,7 @@ pub(super) fn observe_process(
     pid: u32,
     generation: i64,
     mut rx: Receiver<AgentEvent>,
+    mut controls: Option<ChildControlReplay>,
 ) {
     let app = app.clone();
     let workspace = workspace.to_owned();
@@ -78,40 +81,40 @@ pub(super) fn observe_process(
     let path = app.state::<AppState>().db_path.clone();
     tokio::spawn(async move {
         let mut tracker = SubagentTracker::default();
+        // A resumed worker can already be waiting before the host subscribes.
+        let mut restore_controls = true;
         loop {
+            if restore_controls && let Some(replay) = &mut controls {
+                sync_controls(
+                    &app,
+                    &workspace,
+                    &session,
+                    pid,
+                    generation,
+                    replay.reconcile(true),
+                )
+                .await;
+            }
+            restore_controls = false;
             match rx.recv().await {
-                Ok(AgentEvent::SubagentControlResolved { tool_use_id }) => {
-                    // Normal submissions remove the permission when claiming
-                    // it. A process exit can close a still-unanswered prompt.
-                    let state = app.state::<AppState>();
-                    {
-                        let mut agents = state.agents.write().await;
-                        if let Some(agent) = agents.get_mut(&session)
-                            && agent.pending_permissions.remove(&tool_use_id).is_some()
-                            && agent.pending_permissions.is_empty()
-                        {
-                            agent.reset_attention();
-                        }
+                Ok(AgentEvent::SubagentControl(_) | AgentEvent::SubagentControlResolved { .. }) => {
+                    if let Some(replay) = &mut controls {
+                        sync_controls(
+                            &app,
+                            &workspace,
+                            &session,
+                            pid,
+                            generation,
+                            replay.reconcile(false),
+                        )
+                        .await;
                     }
-                    let _ = app.emit(
-                        "subagent-control-resolved",
-                        serde_json::json!({"chat_session_id":session,"tool_use_id":tool_use_id}),
-                    );
-                }
-                Ok(AgentEvent::SubagentControl(request)) => {
-                    super::send::route_process_control_request(
-                        &app,
-                        &workspace,
-                        &session,
-                        &AgentEvent::Stream(request),
-                        Some(pid),
-                    )
-                    .await;
                 }
                 Ok(AgentEvent::ProcessExited(_)) | Err(RecvError::Closed) => break,
                 Err(RecvError::Lagged(count)) => {
                     tracing::warn!(count, "subagent observer missed process events");
                     disconnect(&app, &path, &session, pid, generation).await;
+                    restore_controls = true;
                 }
                 Ok(event) => {
                     if let Some(update) = tracker.observe(&event) {
@@ -131,8 +134,60 @@ pub(super) fn observe_process(
                 }
             }
         }
+        if let Some(replay) = &mut controls {
+            sync_controls(&app, &workspace, &session, pid, generation, replay.finish()).await;
+        }
         disconnect(&app, &path, &session, pid, generation).await;
     });
+}
+
+async fn sync_controls(
+    app: &AppHandle,
+    workspace: &str,
+    session: &str,
+    pid: u32,
+    generation: i64,
+    changes: Vec<AgentEvent>,
+) {
+    for change in changes {
+        match change {
+            AgentEvent::SubagentControlResolved { tool_use_id } => {
+                // Normal submissions remove the permission when claiming
+                // it. A process exit can close a still-unanswered prompt.
+                let state = app.state::<AppState>();
+                {
+                    let mut agents = state.agents.write().await;
+                    if let Some(agent) = agents.get_mut(session)
+                        && agent.pending_permissions.remove(&tool_use_id).is_some()
+                        && agent.pending_permissions.is_empty()
+                    {
+                        agent.reset_attention();
+                    }
+                }
+                let _ = app.emit(
+                    "subagent-control-resolved",
+                    serde_json::json!({"chat_session_id":session,"tool_use_id":tool_use_id}),
+                );
+            }
+            AgentEvent::SubagentControl(request) => {
+                super::send::route_process_control_request(
+                    app,
+                    workspace,
+                    session,
+                    &AgentEvent::Stream(request),
+                    Some(pid),
+                )
+                .await;
+            }
+            AgentEvent::SubagentRun(update) => {
+                let state = app.state::<AppState>();
+                persist(app, &state.db_path, session, generation, &update);
+            }
+            _ => unreachable!(
+                "reconciliation only returns worker controls and attention observations"
+            ),
+        }
+    }
 }
 
 async fn disconnect(app: &AppHandle, path: &Path, session: &str, pid: u32, generation: i64) {

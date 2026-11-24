@@ -691,6 +691,7 @@ async fn ensure_persistent_session_for_remote_control(
         pid,
         generation,
         child_events,
+        ps.child_control_replay(),
     );
     Ok((ps, pid))
 }
