@@ -25,10 +25,10 @@ use crate::agent_mcp::protocol::{
     BridgePayload, BridgeRequest, BridgeResponse, JsonRpcRequest, JsonRpcResponse,
     MCP_PROTOCOL_VERSION, error_codes,
 };
-use crate::agent_mcp::tools::interaction;
 use crate::agent_mcp::tools::send_to_user::{
     ALLOWED_DOCUMENT_TYPES, ALLOWED_IMAGE_TYPES, allowed_text_types,
 };
+use crate::agent_mcp::tools::{interaction, progress};
 
 pub const ENV_SOCKET_ADDR: &str = "CLAUDETTE_MCP_SOCKET";
 pub const ENV_TOKEN: &str = "CLAUDETTE_MCP_TOKEN";
@@ -160,6 +160,8 @@ fn initialize_result(interaction_enabled: bool) -> Value {
             `CronList`, and `CronDelete` for recurring routines, and `Monitor` \
             to subscribe to background task output without polling."
         .to_string();
+    instructions.push(' ');
+    instructions.push_str(progress::GUIDANCE);
     // Only advertise the interaction tools when the experimental feature is on
     // — otherwise they aren't in `tools/list` and steering toward them would
     // point the model at tools it can't call.
@@ -285,7 +287,7 @@ fn tools_list_result(interaction_enabled: bool) -> Value {
                 },
                 "required": ["task_id"]
             }
-        }, {
+        }, progress::definition(), {
             "name": ASK_USER_TOOL_NAME,
             "description": "REQUIRED way to ask the user a question in Claudette. Ask one or more \
                            questions and BLOCK until they answer. Use this instead of asking in \
@@ -425,6 +427,22 @@ async fn handle_tools_call(
         }
         CRON_DELETE_TOOL_NAME => handle_cron_delete_tool(id, args, socket_addr, token).await,
         MONITOR_TOOL_NAME => handle_monitor_tool(id, args, socket_addr, token).await,
+        progress::NAME => {
+            let report: progress::ProgressReport = match serde_json::from_value(args) {
+                Ok(report) => report,
+                Err(e) => return generic_tool_error_result(id, &e.to_string()),
+            };
+            if let Err(e) = report.validate() {
+                return generic_tool_error_result(id, e);
+            }
+            handle_simple_bridge_tool(
+                id,
+                BridgePayload::ReportAgentProgress { report },
+                socket_addr,
+                token,
+            )
+            .await
+        }
         ASK_USER_TOOL_NAME => handle_ask_user_tool(id, args, socket_addr, token).await,
         REQUEST_REVIEW_TOOL_NAME => handle_request_review_tool(id, args, socket_addr, token).await,
         PRESENT_CONCLUSION_TOOL_NAME => {
@@ -932,6 +950,7 @@ mod tests {
         assert!(names.contains(&SCHEDULE_WAKEUP_TOOL_NAME));
         assert!(names.contains(&CRON_CREATE_TOOL_NAME));
         assert!(names.contains(&MONITOR_TOOL_NAME));
+        assert!(names.contains(&progress::NAME));
         assert!(names.contains(&ASK_USER_TOOL_NAME));
         assert!(names.contains(&REQUEST_REVIEW_TOOL_NAME));
         assert!(names.contains(&PRESENT_CONCLUSION_TOOL_NAME));
@@ -982,6 +1001,7 @@ mod tests {
             .collect();
         assert!(names.contains(&SEND_TO_USER_TOOL_NAME));
         assert!(names.contains(&MONITOR_TOOL_NAME));
+        assert!(names.contains(&progress::NAME));
         assert!(!names.contains(&ASK_USER_TOOL_NAME), "{names:?}");
         assert!(!names.contains(&REQUEST_REVIEW_TOOL_NAME), "{names:?}");
         assert!(!names.contains(&PRESENT_CONCLUSION_TOOL_NAME), "{names:?}");
@@ -1059,6 +1079,50 @@ mod tests {
                 BridgeResponse::ok("att-from-bridge")
             })
         }
+    }
+
+    #[tokio::test]
+    async fn progress_reports_only_send_annotations_for_the_authenticated_session() {
+        let sink = Arc::new(EchoSink {
+            count: AtomicU32::new(0),
+        });
+        let session = McpBridgeSession::start(Arc::clone(&sink)).await.unwrap();
+        let bridge = session.handle();
+        let call = |arguments| {
+            format!(
+                "{}\n",
+                json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": { "name": progress::NAME, "arguments": arguments }
+                })
+            )
+        };
+        let valid = json!({ "run_id": "worker-1", "kind": "result", "summary": "Tests passed." });
+        let result = drive_serve(
+            &call(valid.clone()),
+            &bridge.socket_addr,
+            &bridge.token,
+            false,
+        )
+        .await;
+        assert_eq!(result[0]["result"]["isError"], false);
+
+        for (key, value) in [
+            ("kind", "completed"),
+            ("summary", " "),
+            ("session_id", "other"),
+            ("harness", "codex"),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[key] = json!(value);
+            let result =
+                drive_serve(&call(invalid), &bridge.socket_addr, &bridge.token, false).await;
+            assert_eq!(
+                result[0]["result"]["isError"], true,
+                "accepted {key}={value}"
+            );
+        }
+        assert_eq!(sink.count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

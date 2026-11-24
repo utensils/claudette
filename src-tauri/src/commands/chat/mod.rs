@@ -19,6 +19,7 @@ use claudette::git;
 
 use crate::agent_mcp_sink::ChatBridgeSink;
 use claudette::agent::AgentEvent;
+use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::agent_mcp::bridge::{BridgeHandle, McpBridgeSession};
 
 /// Frontend-facing input for a file attachment (base64-encoded).
@@ -87,10 +88,11 @@ pub(crate) async fn start_bridge_and_inject_mcp(
     db_path: &std::path::Path,
     workspace_id: &str,
     chat_session_id: &str,
+    harness: AgentBackendRuntimeHarness,
     base_mcp_config: Option<String>,
     interaction_enabled: bool,
 ) -> Result<(Arc<McpBridgeSession>, Option<String>), String> {
-    let bridge = start_chat_bridge(app, db_path, workspace_id, chat_session_id).await?;
+    let bridge = start_chat_bridge(app, db_path, workspace_id, chat_session_id, harness).await?;
     let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle(), interaction_enabled)?;
     Ok((bridge, merged))
 }
@@ -100,12 +102,14 @@ pub(crate) async fn start_chat_bridge(
     db_path: &std::path::Path,
     workspace_id: &str,
     chat_session_id: &str,
+    harness: AgentBackendRuntimeHarness,
 ) -> Result<Arc<McpBridgeSession>, String> {
     let sink = Arc::new(ChatBridgeSink {
         app: app.clone(),
         db_path: db_path.to_path_buf(),
         workspace_id: workspace_id.to_string(),
         chat_session_id: chat_session_id.to_string(),
+        harness,
     });
     Ok(Arc::new(McpBridgeSession::start(sink).await?))
 }

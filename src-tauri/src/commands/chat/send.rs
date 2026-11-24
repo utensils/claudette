@@ -2104,6 +2104,7 @@ pub async fn send_chat_message(
                             &state.db_path,
                             &workspace_id,
                             &chat_session_id,
+                            agent_settings.backend_runtime.harness,
                             agent_settings.mcp_config.clone(),
                             interaction_enabled,
                         )
@@ -2287,6 +2288,7 @@ pub async fn send_chat_message(
                     &state.db_path,
                     &workspace_id,
                     &chat_session_id,
+                    agent_settings.backend_runtime.harness,
                     agent_settings.mcp_config.clone(),
                     interaction_enabled,
                 )

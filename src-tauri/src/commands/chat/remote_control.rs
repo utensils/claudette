@@ -583,6 +583,7 @@ async fn ensure_persistent_session_for_remote_control(
             &state.db_path,
             &workspace_id,
             &chat_session_id,
+            agent_settings.backend_runtime.harness,
             agent_settings.mcp_config.clone(),
             interaction_enabled,
         )
