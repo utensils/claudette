@@ -131,6 +131,7 @@ struct IpcAttachment {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct PendingAgentControl {
+    child_owned: bool,
     tool_use_id: String,
     tool_name: String,
     input: serde_json::Value,
@@ -584,6 +585,7 @@ fn pending_controls_for_session(
         .pending_permissions
         .iter()
         .map(|(tool_use_id, pending)| PendingAgentControl {
+            child_owned: pending.child_owned,
             tool_use_id: tool_use_id.clone(),
             tool_name: pending.tool_name.clone(),
             input: pending.original_input.clone(),
@@ -1851,6 +1853,7 @@ mod tests {
         agent.pending_permissions.insert(
             "toolu_ask".into(),
             crate::state::PendingPermission {
+                child_owned: false,
                 request_id: "req-1".into(),
                 tool_name: "AskUserQuestion".into(),
                 original_input: json!({"questions": [{"question": "Proceed?"}]}),
@@ -1859,6 +1862,7 @@ mod tests {
         agent.pending_permissions.insert(
             "toolu_plan".into(),
             crate::state::PendingPermission {
+                child_owned: false,
                 request_id: "req-2".into(),
                 tool_name: "ExitPlanMode".into(),
                 original_input: json!({"plan": "Do it"}),

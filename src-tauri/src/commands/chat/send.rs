@@ -130,6 +130,7 @@ fn queue_control_prompt(
     session.pending_permissions.insert(
         tool_use_id,
         PendingPermission {
+            child_owned: false,
             request_id,
             tool_name,
             original_input: input,
@@ -223,7 +224,13 @@ pub(super) async fn route_process_control_request(
             tool_use_id,
             input,
         ) {
-            ControlRequestSessionRoute::Interactive { kind } => Some(kind),
+            ControlRequestSessionRoute::Interactive { kind } => {
+                // Only the process-owned subagent listener supplies owner_pid.
+                if let Some(pending) = session.pending_permissions.get_mut(tool_use_id) {
+                    pending.child_owned = owner_pid.is_some();
+                }
+                Some(kind)
+            }
             ControlRequestSessionRoute::PermissionResponse { response } => {
                 permission_response = session.persistent_session.clone().map(|ps| (ps, response));
                 None
@@ -243,6 +250,7 @@ pub(super) async fn route_process_control_request(
             "workspace_id": workspace_id,
             "chat_session_id": chat_session_id,
             "tool_use_id": tool_use_id,
+            "child_owned": owner_pid.is_some(),
             "tool_name": tool_name,
             "input": input,
         });
@@ -1328,7 +1336,7 @@ pub async fn send_chat_message(
     // AgentQuestionCard dismissed on a new user message — the CLI is actually
     // blocked mid-turn and needs an explicit control_response. The drain is
     // synchronous (under the lock); the deny sends happen after we drop it.
-    let to_deny_new_turn = drain_pending_permissions(session);
+    let to_deny_new_turn = super::interaction::drain_parent_permissions(session);
 
     // If a previous turn is still running and there's no persistent session,
     // stop the stale process. With a persistent session, the process is shared
@@ -1460,8 +1468,7 @@ pub async fn send_chat_message(
         Some(claude_mcp_rules.as_str()),
     );
     session.turn_count += 1;
-    session.needs_attention = false;
-    session.attention_kind = None;
+    session.refresh_pending_attention();
 
     // backend_runtime / resolved_model were resolved up front (before
     // persist). Reuse them here instead of re-resolving.
@@ -2610,7 +2617,9 @@ pub async fn send_chat_message(
         while let Some(event) = rx.recv().await {
             if matches!(
                 event,
-                AgentEvent::SubagentRun(_) | AgentEvent::SubagentControl(_)
+                AgentEvent::SubagentRun(_)
+                    | AgentEvent::SubagentControl(_)
+                    | AgentEvent::SubagentControlResolved { .. }
             ) {
                 continue;
             }
@@ -3485,6 +3494,34 @@ mod tests {
             posted_env_trust_warning: false,
             pending_history_prelude: None,
         }
+    }
+
+    #[test]
+    fn parent_turn_preserves_overlapping_child_controls_and_attention() {
+        let mut session = test_agent_session_state();
+        for (key, child_owned) in [("parent", false), ("child-a", true), ("child-b", true)] {
+            queue_control_prompt(
+                &mut session,
+                key.into(),
+                "AskUserQuestion".into(),
+                key.into(),
+                serde_json::json!({}),
+            );
+            session
+                .pending_permissions
+                .get_mut(key)
+                .unwrap()
+                .child_owned = child_owned;
+        }
+        super::super::interaction::drain_parent_permissions(&mut session);
+        assert!(!session.pending_permissions.contains_key("parent"));
+        session.pending_permissions.remove("child-a");
+        session.refresh_pending_attention();
+        assert!(session.pending_permissions.contains_key("child-b"));
+        assert!(session.needs_attention);
+        session.pending_permissions.remove("child-b");
+        session.refresh_pending_attention();
+        assert!(!session.needs_attention);
     }
 
     #[test]

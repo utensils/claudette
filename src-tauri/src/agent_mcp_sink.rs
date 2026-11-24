@@ -371,6 +371,7 @@ async fn block_on_interactive(
         session.pending_permissions.insert(
             tool_use_id.clone(),
             PendingPermission {
+                child_owned: false,
                 // MCP-origin requests have no CLI control_request to answer; the
                 // request_id is unused for routing but kept stable for the
                 // notification dedup check below.

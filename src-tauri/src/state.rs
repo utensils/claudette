@@ -66,6 +66,7 @@ pub enum AttentionKind {
 /// resolve them using the tool_use_id they already track.
 #[derive(Debug, Clone)]
 pub struct PendingPermission {
+    pub child_owned: bool,
     pub request_id: String,
     pub tool_name: String,
     /// Original tool input sent by the model — used verbatim as the base for
@@ -282,6 +283,22 @@ impl AgentSessionState {
         self.needs_attention = false;
         self.attention_kind = None;
         self.attention_notification_sent = false;
+    }
+
+    /// Answering one worker can leave another worker or the parent waiting.
+    pub fn refresh_pending_attention(&mut self) {
+        let pending = &self.pending_permissions;
+        if pending.is_empty() {
+            self.reset_attention();
+        } else {
+            self.needs_attention = true;
+            self.attention_kind =
+                Some(if pending.values().any(|p| p.tool_name == "ExitPlanMode") {
+                    AttentionKind::Plan
+                } else {
+                    AttentionKind::Ask
+                });
+        }
     }
 
     pub fn remember_local_user_message_uuid(&mut self, uuid: String) {
