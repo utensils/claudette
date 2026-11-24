@@ -3,6 +3,13 @@ use rusqlite::{OptionalExtension, Row, Transaction, TransactionBehavior, params}
 
 use super::Database;
 
+/// A host can read a database used by another desktop or standalone server.
+/// Only its own live process can attest that a stored observation is current.
+fn observer_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
+
 const COLUMNS: &str = "session_id,harness,run_id,parent_run_id,assignment,status,summary,tool_use_id,report_kind,report_summary,updated_at,revision,
     (SELECT linked_session_id FROM team_agent_tabs WHERE subagent_runs.harness='claude'
         AND parent_session_id=subagent_runs.session_id AND team_agent_tabs.tool_use_id=subagent_runs.tool_use_id)";
@@ -69,16 +76,18 @@ impl Database {
         Ok(Some((child, changed)))
     }
 
-    /// Preserve the last provider timestamp when the observing host restarts.
-    pub fn disconnect_orphaned_subagents(&self) -> rusqlite::Result<usize> {
-        self.conn.execute("UPDATE subagent_runs SET status='disconnected',revision=revision+1 WHERE status IN ('running','needs_approval','delegated')",[])
-    }
-
     pub fn list_subagent_runs(&self, session: &str) -> rusqlite::Result<Vec<SubagentRun>> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {COLUMNS} FROM subagent_runs WHERE session_id=?1 ORDER BY rowid"
+            "SELECT {COLUMNS}, observer_id FROM subagent_runs WHERE session_id=?1 ORDER BY rowid"
         ))?;
-        stmt.query_map([session], read)?.collect()
+        stmt.query_map([session], |r| {
+            let mut row = read(r)?;
+            if r.get::<_, String>(13)? != observer_id() && !terminal(row.native.status.as_deref()) {
+                row.native.status = Some("disconnected".into());
+            }
+            Ok(row)
+        })?
+        .collect()
     }
 
     /// Return only changed snapshots. Take the write lock before reading so a
@@ -89,14 +98,21 @@ impl Database {
         update: &SubagentRunUpdate,
     ) -> rusqlite::Result<Option<SubagentRun>> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
-        let current = tx.query_row(&format!("SELECT {COLUMNS} FROM subagent_runs WHERE session_id=?1 AND harness=?2 AND run_id=?3"),
-            params![session, update.harness, update.run_id], read).optional()?;
+        let sql = format!(
+            "SELECT {COLUMNS}, observer_id FROM subagent_runs
+            WHERE session_id=?1 AND harness=?2 AND run_id=?3"
+        );
+        let current = tx
+            .query_row(&sql, params![session, update.harness, update.run_id], |r| {
+                Ok((read(r)?, r.get::<_, String>(13)?))
+            })
+            .optional()?;
         if current.is_none() && update.status.as_deref() == Some("disconnected") {
             return Ok(None);
         }
         let mut next = current
             .as_ref()
-            .map(|r| r.native.clone())
+            .map(|(row, _)| row.native.clone())
             .unwrap_or_default();
         next.harness.clone_from(&update.harness);
         next.run_id.clone_from(&update.run_id);
@@ -112,7 +128,11 @@ impl Database {
         // A replayed start must never reopen a finished worker. Only an explicit
         // native resume operation may start work again under the same identity.
         let resumed = update.status.as_deref() == Some("resumed");
-        if resumed || !terminal(next.status.as_deref()) || terminal(update.status.as_deref()) {
+        if resumed
+            || update.status.is_none()
+            || !terminal(next.status.as_deref())
+            || terminal(update.status.as_deref())
+        {
             if let Some(status) = &update.status {
                 next.status = Some(if resumed {
                     "running".into()
@@ -124,12 +144,15 @@ impl Database {
                 next.summary = Some(value.clone());
             }
         }
-        if current.as_ref().is_some_and(|row| row.native == next) {
+        if current
+            .as_ref()
+            .is_some_and(|(row, owner)| row.native == next && owner == observer_id())
+        {
             return Ok(None);
         }
-        let sql = format!("INSERT INTO subagent_runs(session_id,harness,run_id,parent_run_id,assignment,status,summary,tool_use_id,updated_at,revision,launch_message_id)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,1,(SELECT id FROM chat_messages WHERE chat_session_id=?1 AND role='user' ORDER BY rowid DESC LIMIT 1)) ON CONFLICT(session_id,harness,run_id) DO UPDATE SET
-            parent_run_id=excluded.parent_run_id,assignment=excluded.assignment,status=excluded.status,summary=excluded.summary,
+        let sql = format!("INSERT INTO subagent_runs(session_id,harness,run_id,parent_run_id,assignment,status,summary,tool_use_id,updated_at,revision,observer_id,launch_message_id)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10,(SELECT id FROM chat_messages WHERE chat_session_id=?1 AND role='user' ORDER BY rowid DESC LIMIT 1)) ON CONFLICT(session_id,harness,run_id) DO UPDATE SET
+            observer_id=excluded.observer_id,parent_run_id=excluded.parent_run_id,assignment=excluded.assignment,status=excluded.status,summary=excluded.summary,
             tool_use_id=excluded.tool_use_id,updated_at=excluded.updated_at,revision=revision+1 RETURNING {COLUMNS}");
         let row = tx.query_row(
             &sql,
@@ -142,7 +165,8 @@ impl Database {
                 next.status,
                 next.summary,
                 next.tool_use_id,
-                now()
+                now(),
+                observer_id()
             ],
             read,
         )?;
@@ -280,7 +304,15 @@ mod tests {
             ..Default::default()
         };
         db.observe_subagent(&session, &update).unwrap();
-        assert_eq!(db.disconnect_orphaned_subagents().unwrap(), 1);
+        db.conn
+            .execute(
+                "UPDATE subagent_runs SET observer_id='previous-process'",
+                [],
+            )
+            .unwrap();
+        let snapshot = db.list_subagent_runs(&session).unwrap();
+        assert_eq!(snapshot[0].native.status.as_deref(), Some("completed"));
+        assert_eq!(snapshot[1].native.status.as_deref(), Some("disconnected"));
         db.delete_session_messages_after(&session, "first").unwrap();
         let rows = db.list_subagent_runs(&session).unwrap();
         assert_eq!(rows.len(), 1);
@@ -321,5 +353,10 @@ mod tests {
         u.status = Some("running".into());
         assert!(db.observe_subagent(&session, &u).unwrap().is_none());
         assert_eq!(db.list_subagent_runs(&session).unwrap(), vec![done]);
+        u.status = None;
+        u.summary = Some("Late final answer".into());
+        let late = db.observe_subagent(&session, &u).unwrap().unwrap();
+        assert_eq!(late.native.status.as_deref(), Some("completed"));
+        assert_eq!(late.native.summary, u.summary);
     }
 }

@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS subagent_runs (
     session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
     launch_message_id TEXT REFERENCES chat_messages(id) ON DELETE CASCADE,
+    observer_id TEXT NOT NULL,
     harness TEXT NOT NULL,
     run_id TEXT NOT NULL,
     parent_run_id TEXT,

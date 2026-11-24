@@ -27,7 +27,7 @@ A delegated agent appears in **Tasks** even when its assignment needs no checkli
 - **Codex** identifies each worker by its thread. Spawning or waiting on several workers can update each one independently.
 - **Antigravity** can expose a delegation without a child conversation ID. In that case Claudette shows **Delegated**. The launch call returning only confirms the handoff.
 
-An agent can report a milestone, a blocker, or a result through Claudette. A reported result and the provider's completion state appear separately. Reopening the chat or reconnecting to a shared desktop reloads the saved run details.
+An agent can report a milestone, a blocker, or a result through Claudette. A reported result and the provider's completion state appear separately. Reopening the chat or reconnecting to a shared desktop reloads the saved run details. A standalone server records the Claude lifecycle events it receives. Claudette’s MCP reporting tool and the Codex and Antigravity harnesses are available on desktop hosts.
 
 ![Tasks showing two active agents and the result of a completed test run](../../../assets/screenshots/subagent-runs.png)
 
