@@ -3,10 +3,11 @@
 use tokio::sync::broadcast;
 
 use super::{AcpRpcMessage, acp_server_request_to_control_event};
-use crate::agent::{AgentEvent, SubagentRunUpdate, provider_subagents::child_control};
+use crate::agent::{AgentEvent, SubagentRunUpdate, provider_subagents::ChildApprovals};
 
 /// Inspect the wire envelope before its sessionId is discarded by turn decoding.
 pub(super) fn route(
+    approvals: &ChildApprovals,
     root: &str,
     message: &AcpRpcMessage,
     tx: &broadcast::Sender<AgentEvent>,
@@ -65,18 +66,8 @@ pub(super) fn route(
             let sid = r.params.as_ref().and_then(|p| p["sessionId"].as_str());
             if let Some(sid) = sid.filter(|s| *s != root)
                 && let Ok(Some(event)) = acp_server_request_to_control_event(r)
-                && let Some(event) = child_control(event, sid)
+                && approvals.forward(event, "antigravity", sid, tx)
             {
-                emit(
-                    tx,
-                    SubagentRunUpdate {
-                        run_id: sid.into(),
-                        harness: "antigravity".into(),
-                        status: Some("needs_approval".into()),
-                        ..Default::default()
-                    },
-                );
-                let _ = tx.send(event);
                 return true;
             }
             false
@@ -105,7 +96,8 @@ mod tests {
 
     #[test]
     fn captured_agy_delegation_return_leaves_the_worker_delegated() {
-        let (tx, mut rx) = broadcast::channel(4);
+        let (tx, mut rx) = broadcast::channel(8);
+        let approvals = ChildApprovals::default();
         for (kind, status) in [
             ("tool_call", "in_progress"),
             ("tool_call_update", "completed"),
@@ -115,7 +107,7 @@ mod tests {
                 "parent",
                 json!({"sessionUpdate":kind,"toolCallId":"call_2188173920729769838","name":"invoke_subagent","rawInput":{"Role":"Short Reply Assistant","TypeName":"self","Prompt":"Reply with blue."},"kind":"other","status":status,"title":"Run invoke_subagent"}),
             );
-            assert!(!route("parent", &message, &tx));
+            assert!(!route(&approvals, "parent", &message, &tx));
             let AgentEvent::SubagentRun(run) = rx.try_recv().unwrap() else {
                 panic!()
             };
@@ -124,6 +116,7 @@ mod tests {
             assert_eq!(run.status.as_deref(), Some("delegated"));
         }
         assert!(route(
+            &approvals,
             "parent",
             &notification(
                 "child",
@@ -136,7 +129,8 @@ mod tests {
 
     #[test]
     fn child_approval_keeps_rpc_reply_id_and_session_identity() {
-        let (tx, mut rx) = broadcast::channel(4);
+        let (tx, mut rx) = broadcast::channel(8);
+        let approvals = ChildApprovals::default();
         let request = AcpRpcMessage::Request(AcpRpcRequest {
             id: AcpRpcId::Integer(4),
             method: "session/request_permission".into(),
@@ -144,7 +138,7 @@ mod tests {
                 json!({"sessionId":"child","toolCall":{"toolCallId":"t","kind":"execute"},"options":[]}),
             ),
         });
-        assert!(route("parent", &request, &tx));
+        assert!(route(&approvals, "parent", &request, &tx));
         let AgentEvent::SubagentRun(run) = rx.try_recv().unwrap() else {
             panic!()
         };
@@ -158,5 +152,24 @@ mod tests {
         };
         assert_eq!(request_id, "4");
         assert_eq!(input["subagent_run_id"], "child");
+        let AcpRpcMessage::Request(mut second) = request else {
+            panic!()
+        };
+        second.id = AcpRpcId::Integer(5);
+        assert!(route(
+            &approvals,
+            "parent",
+            &AcpRpcMessage::Request(second),
+            &tx
+        ));
+        rx.try_recv().unwrap();
+        rx.try_recv().unwrap();
+        approvals.answered("4", "antigravity", &tx);
+        assert!(rx.try_recv().is_err());
+        approvals.answered("5", "antigravity", &tx);
+        let AgentEvent::SubagentRun(run) = rx.try_recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(run.status.as_deref(), Some("running"));
     }
 }

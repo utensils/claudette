@@ -42,6 +42,7 @@ use super::codex_app_server::{
     CODEX_COMMAND_APPROVAL_TOOL, CODEX_FILE_CHANGE_APPROVAL_TOOL, CODEX_PERMISSIONS_APPROVAL_TOOL,
 };
 use super::environment::build_agent_command;
+use super::provider_subagents::ChildApprovals;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
     InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle, UserContentBlock,
@@ -239,6 +240,7 @@ impl AcpTurnState {
 
 pub struct AntigravityAcpSession {
     pid: u32,
+    child_approvals: ChildApprovals,
     stdin: Option<AcpStdin>,
     event_tx: broadcast::Sender<AgentEvent>,
     pending: PendingAcpRequests,
@@ -316,6 +318,7 @@ impl AntigravityAcpSession {
         let session = Self {
             pid,
             stdin: Some(Arc::new(tokio::sync::Mutex::new(stdin))),
+            child_approvals: ChildApprovals::default(),
             event_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
@@ -372,6 +375,7 @@ impl AntigravityAcpSession {
         Self {
             pid,
             stdin: None,
+            child_approvals: ChildApprovals::default(),
             event_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
@@ -601,7 +605,10 @@ impl AntigravityAcpSession {
             .as_ref()
             .ok_or_else(|| "Antigravity ACP stdin is not available".to_string())?;
         let mut writer = stdin.lock().await;
-        write_acp_message(&mut *writer, &server_response).await
+        write_acp_message(&mut *writer, &server_response).await?;
+        self.child_approvals
+            .answered(request_id, "antigravity", &self.event_tx);
+        Ok(())
     }
 
     async fn initialize(&self, client_version: &str) -> Result<(), String> {
@@ -908,6 +915,7 @@ impl AntigravityAcpSession {
 
     fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
         let event_tx = self.event_tx.clone();
+        let approvals = self.child_approvals.clone();
         let pending = self.pending.clone();
         let stdin = self.stdin.clone();
         let turn_state = self.turn_state.clone();
@@ -924,7 +932,7 @@ impl AntigravityAcpSession {
                             .await
                             .as_deref()
                             .or(resume_session.as_deref())
-                            && subagents::route(root, &message, &event_tx)
+                            && subagents::route(&approvals, root, &message, &event_tx)
                         {
                             continue;
                         }

@@ -5,14 +5,22 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 
 use super::{JsonRpcMessage, codex_server_request_to_control_event};
-use crate::agent::{AgentEvent, SubagentRunUpdate, provider_subagents::child_control};
+use crate::agent::{AgentEvent, SubagentRunUpdate, provider_subagents::ChildApprovals};
 
 #[derive(Default)]
 pub(super) struct ChildThreads {
     known: HashSet<String>,
+    approvals: ChildApprovals,
 }
 
 impl ChildThreads {
+    pub(super) fn new(approvals: ChildApprovals) -> Self {
+        Self {
+            approvals,
+            ..Self::default()
+        }
+    }
+
     /// Consume child traffic before it can mutate the active parent turn.
     /// The reader is owned by one app-server connection for one Claudette chat.
     pub fn route(
@@ -68,12 +76,8 @@ impl ChildThreads {
         }
         if let JsonRpcMessage::Request(request) = message {
             if let Ok(Some(event)) = codex_server_request_to_control_event(request)
-                && let Some(event) = child_control(event, thread)
+                && self.approvals.forward(event, "codex", thread, tx)
             {
-                let mut update = child_update(thread);
-                update.status = Some("needs_approval".into());
-                emit(tx, update);
-                let _ = tx.send(event);
                 return true;
             }
             // Let the normal handler reply to unsupported JSON-RPC requests.
