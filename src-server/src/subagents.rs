@@ -27,7 +27,8 @@ pub(crate) fn observe_process(
             match rx.recv().await {
                 Ok(AgentEvent::ProcessExited(_)) | Err(RecvError::Closed) => break,
                 Err(RecvError::Lagged(count)) => {
-                    tracing::warn!(count, "subagent observer missed process events")
+                    tracing::warn!(count, "subagent observer missed process events");
+                    disconnect(&state, &session, pid, generation).await;
                 }
                 Ok(event) => {
                     if let Some(update) = tracker.observe(&event) {
@@ -36,23 +37,27 @@ pub(crate) fn observe_process(
                 }
             }
         }
-        let agents = state.agents.read().await;
-        if agents
-            .get(&session)
-            .and_then(|s| s.persistent_session.as_ref())
-            .is_some_and(|ps| ps.pid() != pid)
-        {
-            return;
-        }
-        match Database::open(&state.db_path)
-            .and_then(|db| db.disconnect_subagent_process(&session, generation))
-        {
-            Ok(rows) => {
-                for row in rows {
-                    state.emit(serde_json::json!({"event":"subagent-run-updated","payload":row}));
-                }
-            }
-            Err(error) => tracing::warn!(%error,"failed to disconnect child observations"),
-        }
+        disconnect(&state, &session, pid, generation).await;
     });
+}
+
+async fn disconnect(state: &ServerState, session: &str, pid: u32, generation: i64) {
+    let agents = state.agents.read().await;
+    if agents
+        .get(session)
+        .and_then(|s| s.persistent_session.as_ref())
+        .is_some_and(|ps| ps.pid() != pid)
+    {
+        return;
+    }
+    match Database::open(&state.db_path)
+        .and_then(|db| db.disconnect_subagent_process(session, generation))
+    {
+        Ok(rows) => {
+            for row in rows {
+                state.emit(serde_json::json!({"event":"subagent-run-updated","payload":row}));
+            }
+        }
+        Err(error) => tracing::warn!(%error,"failed to disconnect child observations"),
+    }
 }
