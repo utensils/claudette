@@ -8,7 +8,9 @@ pub mod harness;
 pub mod history_seeder;
 mod naming;
 mod process;
+mod provider_subagents;
 mod session;
+pub mod subagent_tracking;
 mod types;
 pub mod workflow_progress;
 

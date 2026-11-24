@@ -157,6 +157,17 @@ async fn handle_payload(
             .await
         }
         BridgePayload::HookEvent { input } => {
+            if harness == AgentBackendRuntimeHarness::ClaudeCode
+                && let Some(update) =
+                    claudette::agent::subagent_tracking::claude_subagent_hook(&input)
+            {
+                crate::commands::chat::subagents::persist(
+                    &app,
+                    &db_path,
+                    &chat_session_id,
+                    &update,
+                );
+            }
             let _ = app.emit(
                 "agent-hook-event",
                 AgentHookEvent {

@@ -7,6 +7,7 @@ mod naming;
 pub mod remote_control;
 pub mod send;
 pub mod session;
+pub(crate) mod subagents;
 
 use std::sync::Arc;
 

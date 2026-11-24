@@ -341,6 +341,14 @@ pub async fn dispatch(
                 .unwrap_or(false);
             handle_list_chat_sessions(state, &workspace_id, include_archived)
         }
+        "get_subagent_runs" => {
+            let db = open_db(state)?;
+            serde_json::to_value(
+                db.list_subagent_runs(&param_chat_session_id(&params))
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())
+        }
         "get_chat_session" => {
             let chat_session_id = param_chat_session_id(&params);
             handle_get_chat_session(state, &chat_session_id)
@@ -920,6 +928,11 @@ async fn handle_send_chat_message(
                     return Err(e);
                 }
             };
+            crate::subagents::observe_process(
+                state.clone(),
+                chat_session_id.clone(),
+                ps.subscribe(),
+            );
             let arc = Arc::new(ps);
             session.persistent_session = Some(Arc::clone(&arc));
             session.spawn_signature = spawn_signature;

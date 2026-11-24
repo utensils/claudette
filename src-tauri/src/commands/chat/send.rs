@@ -1907,12 +1907,16 @@ pub async fn send_chat_message(
     // can't move `app` into it directly — clone here, re-clone per
     // invocation, then re-clone again for the spawned task.
     let app_for_persistent = app.clone();
+    let observed_session = chat_session_id.clone();
+    let observed_workspace = workspace_id.clone();
     let start_persistent = move |worktree: String,
                                  sid: String,
                                  is_resume: bool,
                                  tools: Vec<String>,
                                  instructions: Option<String>,
                                  settings: AgentSettings| {
+        let observed_session = observed_session.clone();
+        let observed_workspace = observed_workspace.clone();
         let env = ws_env_for_persistent.clone();
         let resolved = resolved_env_for_persistent.clone();
         let app_handle_for_this_call = app_for_persistent.clone();
@@ -1927,7 +1931,7 @@ pub async fn send_chat_message(
             // `handle_err` themselves, which keeps event emission attributed
             // to the actual decision-to-fail rather than to the speculative
             // first attempt of a resume.
-            match settings.backend_runtime.harness {
+            let ps = match settings.backend_runtime.harness {
                 AgentBackendRuntimeHarness::ClaudeCode => {
                     let started = ClaudeCodeHarness::start_persistent(PersistentSessionStart {
                         working_dir: std::path::Path::new(&worktree),
@@ -2048,7 +2052,14 @@ pub async fn send_chat_message(
                         started,
                     )))
                 }
-            }
+            }?;
+            super::subagents::observe_process(
+                &app_handle_for_this_call,
+                &observed_workspace,
+                &observed_session,
+                ps.subscribe(),
+            );
+            Ok::<_, String>(ps)
         }
     };
 
@@ -2583,6 +2594,12 @@ pub async fn send_chat_message(
         let mut notified_via_result = false;
         let mut assistant_auth_failure_seen = false;
         while let Some(event) = rx.recv().await {
+            if matches!(
+                event,
+                AgentEvent::SubagentRun(_) | AgentEvent::SubagentControl(_)
+            ) {
+                continue;
+            }
             if let AgentEvent::Stderr(line) = &event {
                 stderr_lines.push(line.clone());
             }
@@ -2692,7 +2709,12 @@ pub async fn send_chat_message(
             }
 
             background_task_inputs.observe_bash_input_delta(&event);
-            team_agent_inputs.observe_event(&event, team_agent_tabs_enabled, &app, &ws_id);
+            team_agent_inputs.observe_event(
+                &event,
+                team_agent_tabs_enabled,
+                &app,
+                &chat_session_id_for_stream,
+            );
             background_task_inputs
                 .observe_bash_input_stop(
                     &event,

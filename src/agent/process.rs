@@ -25,6 +25,8 @@ use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 pub enum AgentEvent {
     /// A provider observation of a delegated worker.
     SubagentRun(crate::model::SubagentRunUpdate),
+    /// A child-owned request routed independently of parent turn lifetime.
+    SubagentControl(StreamEvent),
     /// A parsed stream event from stdout.
     Stream(StreamEvent),
     /// A raw stderr line from the agent process.
