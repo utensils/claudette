@@ -1,4 +1,6 @@
 import i18n from "../i18n";
+import { EMPTY_RUNS, subagentSessionKey, type SubagentRun } from "../types/subagent";
+import { isLiveSubagentStatus, mergeSubagentTaskRuns, type AgentDetails } from "./mergeSubagentTaskRuns";
 import { useMemo } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../stores/useAppStore";
@@ -26,6 +28,7 @@ export interface TaskTrackerResult {
 }
 
 export interface TaskRun extends TaskTrackerResult {
+  agent?: AgentDetails;
   id: string;
   sequence: number;
   startedAt?: string;
@@ -55,6 +58,7 @@ export interface TaskTrackerWithHistory {
 }
 
 export interface SubagentTaskRun extends TaskTrackerResult {
+  agent?: AgentDetails;
   /// Stable key for React — sourced from the parent Agent activity's
   /// `toolUseId`. Same `toolUseId` across renders → same key.
   id: string;
@@ -411,9 +415,8 @@ function finalizeSnapshotRun(run: SnapshotRunDraft): TaskRun {
 function deriveSubagentRunFromActivity(
   activity: ToolActivity,
   syntheticIdSeed: { value: number },
-): SubagentTaskRun | null {
-  const calls = activity.agentToolCalls;
-  if (!calls || calls.length === 0) return null;
+): SubagentTaskRun {
+  const calls = activity.agentToolCalls ?? [];
 
   const taskMap = new Map<string, TrackedTask>();
   const todoMap = new Map<string, TrackedTask>();
@@ -513,8 +516,6 @@ function deriveSubagentRunFromActivity(
   }
 
   const tasks = [...taskMap.values(), ...todoMap.values(), ...planMap.values()];
-  if (tasks.length === 0) return null;
-
   const { label, tooltip } = formatSubagentLabel(activity);
   return {
     ...taskResult(tasks, planMeta.explanation),
@@ -892,20 +893,23 @@ function deriveTaskStateFromEntries(
   for (const toolUseId of agentToolUseOrder) {
     const entry = latestAgentByToolUseId.get(toolUseId)!;
     const run = deriveSubagentRunFromActivity(entry.act, nextSyntheticId);
-    if (!run) continue;
+    const status = run.status?.toLowerCase() ?? (entry.act.agentResultText ? "completed" : entry.turnId ? "unknown" : "delegated");
+    run.agent = { status, nativeId: entry.act.agentTaskId ?? undefined, summary: entry.act.agentResultText ?? undefined };
+    run.status = status;
     // Normalize the agent status before deciding live-vs-archived.
     // Upstream emits both `"running"` and `"Running"` depending on the
     // pipeline stage, and the in-flight `"starting"` state also counts
     // as live — archiving it would surface a still-spawning teammate
     // as history. Mirrors `toolActivityGroups.groupHasRunningActivity`.
-    const normalizedStatus = (run.status ?? "").toLowerCase();
-    if (normalizedStatus === "running" || normalizedStatus === "starting") {
+    if (isLiveSubagentStatus(status)) {
       subagents.push(run);
     } else {
       history.push({
         tasks: run.tasks,
         completedCount: run.completedCount,
         totalCount: run.totalCount,
+        agent: run.agent,
+        tooltip: run.tooltip,
         id: `subagent-${run.id}`,
         sequence: runSequence++,
         label: run.label,
@@ -1019,6 +1023,7 @@ export function finalizeTaskState(
       tasks: sub.tasks,
       completedCount: sub.completedCount,
       totalCount: sub.totalCount,
+      agent: sub.agent,
       id: `final-subagent-${sub.id}`,
       sequence: nextSeq++,
       label: sub.label,
@@ -1038,18 +1043,15 @@ export function finalizeTaskState(
 export function deriveTaskState(
   completedTurns: TaskActivityTurn[],
   toolActivities: ToolActivity[],
+  runs: SubagentRun[] = EMPTY_RUNS,
 ): TaskTrackerWithHistory {
-  if (completedTurns.length === 0 && toolActivities.length === 0) {
-    return EMPTY_WITH_HISTORY;
-  }
-
-  return deriveTaskStateFromEntries([
-    ...completedTurns.map((turn) => ({
-      activities: turn.activities,
-      turnId: turn.id,
-    })),
-    { activities: toolActivities },
-  ]);
+  const state = completedTurns.length || toolActivities.length
+    ? deriveTaskStateFromEntries([
+        ...completedTurns.map((turn) => ({ activities: turn.activities, turnId: turn.id })),
+        { activities: toolActivities },
+      ])
+    : EMPTY_WITH_HISTORY;
+  return mergeSubagentTaskRuns(state, runs);
 }
 
 const TASK_TOOL_NAMES = new Set([
@@ -1089,11 +1091,18 @@ export function useTaskTrackerWithHistory(
     (s) => (sessionId ? s.toolActivities[sessionId] : null) ?? EMPTY_ACTIVITIES,
   );
 
+  const runs = useAppStore((s) => {
+    const connection = s.workspaces.find((ws) => ws.id === s.selectedWorkspaceId)?.remote_connection_id;
+    return sessionId && connection !== undefined
+      ? s.subagentRuns[subagentSessionKey(connection, sessionId)] ?? EMPTY_RUNS
+      : EMPTY_RUNS;
+  });
+
   return useMemo(
     () =>
       sessionId
-        ? deriveTaskState(completedTurns, toolActivities)
+        ? deriveTaskState(completedTurns, toolActivities, runs)
         : EMPTY_WITH_HISTORY,
-    [sessionId, completedTurns, toolActivities],
+    [sessionId, completedTurns, toolActivities, runs],
   );
 }

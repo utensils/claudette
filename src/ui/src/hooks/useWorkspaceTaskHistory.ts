@@ -6,6 +6,7 @@ import {
   listChatSessions,
   sendRemoteCommand,
 } from "../services/tauri";
+import { subagentSessionKey } from "../types/subagent";
 import type { ChatSession } from "../types/chat";
 import type { CompletedTurnData } from "../types/checkpoint";
 import {
@@ -177,6 +178,7 @@ export function useWorkspaceTaskHistory(
       : EMPTY_SESSIONS,
   );
   const activeState = useTaskTrackerWithHistory(activeSessionId);
+  const durableRuns = useAppStore((s) => s.subagentRuns);
   const [fetchedSessions, setFetchedSessions] = useState<ChatSession[]>([]);
   const [turnsBySession, setTurnsBySession] = useState<
     Record<string, TaskActivityTurn[]>
@@ -251,10 +253,11 @@ export function useWorkspaceTaskHistory(
     Promise.all(
       sessionsToLoad.map(async (session) => {
         try {
-          return [
-            session.id,
-            await loadSessionTurns(session.id, remoteConnectionId),
-          ] as const;
+          const [turns] = await Promise.all([
+            loadSessionTurns(session.id, remoteConnectionId),
+            useAppStore.getState().reloadSubagentRuns(remoteConnectionId, session.id),
+          ]);
+          return [session.id, turns] as const;
         } catch (err) {
           console.error("Failed to load task history turns:", err);
           return null;
@@ -300,8 +303,11 @@ export function useWorkspaceTaskHistory(
       continue;
     }
 
-    const derived = deriveTaskState(turnsBySession[session.id] ?? [], []);
-    if (session.agent_status === "Running") {
+    const derived = deriveTaskState(
+      turnsBySession[session.id] ?? [], [],
+      durableRuns[subagentSessionKey(remoteConnectionId, session.id)],
+    );
+    if (session.agent_status === "Running" || derived.subagents.some((run) => run.agent?.updatedAt)) {
       if (derived.current.tasks.length > 0 || derived.subagents.length > 0) {
         siblings.push({
           session,
@@ -338,19 +344,19 @@ export function useWorkspaceTaskHistory(
   // Agent activity carries its own task list (Claude Code's agent-teams
   // flow).
   const subagentTaskCount = activeState.subagents.reduce(
-    (sum, run) => sum + run.totalCount,
+    (sum, run) => sum + Math.max(1, run.totalCount),
     0,
   );
   const historyTaskCount = histories.reduce(
     (sum, session) =>
-      sum + session.runs.reduce((s, run) => s + run.totalCount, 0),
+      sum + session.runs.reduce((s, run) => s + (run.agent ? Math.max(1, run.totalCount) : run.totalCount), 0),
     0,
   );
   const siblingTaskCount = siblings.reduce(
     (sum, sibling) =>
       sum +
       sibling.current.totalCount +
-      sibling.subagents.reduce((s, sub) => s + sub.totalCount, 0),
+      sibling.subagents.reduce((s, sub) => s + Math.max(1, sub.totalCount), 0),
     0,
   );
   const totalBadgeCount =

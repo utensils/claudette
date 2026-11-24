@@ -42,6 +42,7 @@ vi.mock("../settings/SettingsPage", () => ({ SettingsPage: () => <div /> }));
 vi.mock("./ResizeHandle", () => ({ ResizeHandle: () => <div /> }));
 vi.mock("./Toast", () => ({ ToastContainer: () => <div /> }));
 vi.mock("../shared/AppTooltip", () => ({ AppTooltip: () => <div /> }));
+vi.mock("../../hooks/useSubagentRunSync", () => ({ useSubagentRunSync: () => {} }));
 vi.mock("../../hooks/useAgentStream", () => ({ useAgentStream: vi.fn() }));
 vi.mock("../../hooks/useWorkflowActivityStatus", () => ({
   useWorkflowActivityStatus: vi.fn(),

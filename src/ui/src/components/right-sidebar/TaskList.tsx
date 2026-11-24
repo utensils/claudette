@@ -9,6 +9,7 @@ import type {
 } from "../../hooks/useTaskTracker";
 import type { WorkspaceTaskHistoryResult } from "../../hooks/useWorkspaceTaskHistory";
 import { useActiveTaskScroll } from "../../hooks/useActiveTaskScroll";
+import { SubagentDetails, SubagentStatus } from "./SubagentDetails";
 import { BoundedScrollPane } from "../shared/BoundedScrollPane";
 import styles from "./TaskList.module.css";
 
@@ -138,10 +139,10 @@ function SubagentSection({ run }: { run: SubagentTaskRun }) {
         <span className={styles.subagentLabel} title={run.tooltip ?? run.label}>
           {run.label}
         </span>
-        <span className={styles.sectionMeta}>
-          {run.completedCount}/{run.totalCount}
-        </span>
+        {run.agent && <SubagentStatus status={run.agent.status} />}
+        {run.totalCount > 0 && <span className={styles.sectionMeta}>{run.completedCount}/{run.totalCount}</span>}
       </div>
+      {run.agent && <SubagentDetails agent={run.agent} />}
       <TaskRows tasks={run.tasks} />
     </section>
   );
@@ -176,12 +177,12 @@ function RunSummary({
         >
           {run.label ?? t("tasks_run_n", { sequence: run.sequence })}
         </span>
-        <span className={styles.runMeta}>
-          {run.completedCount}/{run.totalCount}
-        </span>
+        {run.agent && <SubagentStatus status={run.agent.status} />}
+        {(!run.agent || run.totalCount > 0) && <span className={styles.runMeta}>{run.completedCount}/{run.totalCount}</span>}
       </button>
       {expanded && (
         <div className={styles.runTasks}>
+          {run.agent && <SubagentDetails agent={run.agent} />}
           {run.explanation && (
             <div className={styles.explanation}>{run.explanation}</div>
           )}

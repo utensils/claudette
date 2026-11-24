@@ -2,6 +2,7 @@
 export interface SubagentRun {
   session_id: string;
   run_id: string;
+  linked_session_id: string | null;
   harness: string;
   parent_run_id: string | null;
   assignment: string | null;
