@@ -28,7 +28,7 @@ Wakeups and routines survive app restarts. If a fire time passes while Claudette
 
 A parent agent or a child with MCP access can call `report_agent_progress` with the child’s `run_id`, a `kind` of `milestone`, `blocked`, or `result`, and a short `summary`. For example, a test worker might report “All 94 regression tests passed.” The Tasks panel shows the latest report alongside the status observed by the provider. A result can arrive while the worker is still running.
 
-The run ID comes from the delegation. Use the Claude agent ID, Codex child thread ID, or Antigravity child session ID. When Antigravity exposes only a delegation call, use its tool call ID. The tool accepts runs belonging to the current chat and provider.
+The run ID comes from the delegation. Use the Claude agent ID, Codex child thread ID, or Antigravity child session ID. When Antigravity exposes only a delegation on the main session, use its tool call ID. The tool accepts runs belonging to the current chat and provider.
 
 ## Background task completion
 
