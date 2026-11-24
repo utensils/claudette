@@ -90,6 +90,7 @@ pub async fn set_claude_remote_control(
         disable_1m_context,
         backend_id,
     };
+    let startup = state.session_startup.acquire(&chat_session_id).await;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let chat_session = db
         .get_chat_session(&chat_session_id)
@@ -152,6 +153,7 @@ pub async fn set_claude_remote_control(
         };
         (ps, pid)
     };
+    drop(startup);
 
     if enabled && should_pin_title_before_control_request(&chat_session) {
         let title_messages = {

@@ -1,3 +1,5 @@
+mod session_startup;
+use session_startup::SessionStartup;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -496,6 +498,7 @@ pub struct AppState {
     /// Each value carries its owning `workspace_id` for reverse lookups
     /// (tray aggregation, notifications, worktree path resolution).
     pub agents: RwLock<HashMap<String, AgentSessionState>>,
+    pub(crate) session_startup: SessionStartup,
     /// Active PTY processes keyed by pty_id.
     pub ptys: RwLock<HashMap<u64, PtyHandle>>,
     /// Active file-tail streams for agent-owned background task terminal tabs.
@@ -688,6 +691,7 @@ impl AppState {
             db_path,
             worktree_base_dir: RwLock::new(worktree_base_dir),
             agents: RwLock::new(HashMap::new()),
+            session_startup: SessionStartup::default(),
             ptys: RwLock::new(HashMap::new()),
             agent_task_tailers: RwLock::new(HashMap::new()),
             next_pty_id: AtomicU64::new(1),

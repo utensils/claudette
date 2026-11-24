@@ -1110,6 +1110,7 @@ pub async fn send_chat_message(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let startup = state.session_startup.acquire(&session_id).await;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let chat_session_id = session_id;
@@ -2488,6 +2489,8 @@ pub async fn send_chat_message(
             controls,
         );
     }
+
+    drop(startup);
 
     // Capture rename context before the bridge spawn.
     let has_repo = repo.is_some();
