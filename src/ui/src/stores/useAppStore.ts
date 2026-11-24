@@ -1,3 +1,4 @@
+import { createSubagentRunsSlice, type SubagentRunsSlice } from "./slices/subagentRunsSlice";
 import { create } from "zustand";
 import { setRemoteRoutingResolver } from "../services/tauri/remoteRouting";
 import {
@@ -104,6 +105,7 @@ export type AppState = RepositoriesSlice &
   WorkspacesSlice &
   ChatSessionsSlice &
   ChatSlice &
+  SubagentRunsSlice &
   AgentInteractionSlice &
   CheckpointsSlice &
   NotificationsSlice &
@@ -128,6 +130,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createWorkspacesSlice(...a),
   ...createChatSessionsSlice(...a),
   ...createChatSlice(...a),
+  ...createSubagentRunsSlice(...a),
   ...createAgentInteractionSlice(...a),
   ...createCheckpointsSlice(...a),
   ...createNotificationsSlice(...a),

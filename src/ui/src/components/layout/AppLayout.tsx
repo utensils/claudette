@@ -18,6 +18,7 @@ import { SchedulerPage } from "../scheduler/SchedulerPage";
 import { ResizeHandle } from "./ResizeHandle";
 import { ToastContainer } from "./Toast";
 import { AppTooltip } from "../shared/AppTooltip";
+import { useSubagentRunSync } from "../../hooks/useSubagentRunSync";
 import { useAgentStream } from "../../hooks/useAgentStream";
 import { useWorkflowActivityStatus } from "../../hooks/useWorkflowActivityStatus";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
@@ -47,6 +48,7 @@ export function AppLayout() {
   const commandPaletteOpen = useAppStore((s) => s.commandPaletteOpen);
 
   useAgentStream();
+  useSubagentRunSync();
   useWorkflowActivityStatus();
   useKeyboardShortcuts();
   useBranchRefresh();
