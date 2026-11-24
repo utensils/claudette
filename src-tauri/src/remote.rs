@@ -318,8 +318,8 @@ fn notify_events_lost(app: &AppHandle, connection_id: &str) {
 
 fn tag_remote_payload(mut payload: serde_json::Value, connection_id: &str) -> serde_json::Value {
     if let Some(obj) = payload.as_object_mut() {
-        obj.entry("remote_connection_id")
-            .or_insert_with(|| serde_json::Value::String(connection_id.to_string()));
+        // The authenticated connection owns the event and its response route.
+        obj.insert("remote_connection_id".into(), connection_id.into());
     }
     payload
 }
@@ -376,6 +376,10 @@ mod tests {
         assert_eq!(
             tag_remote_payload(json!({"a": 1}), "c1"),
             json!({"a": 1, "remote_connection_id": "c1"})
+        );
+        assert_eq!(
+            tag_remote_payload(json!({"remote_connection_id": "other"}), "c1"),
+            json!({"remote_connection_id": "c1"})
         );
         assert_eq!(tag_remote_payload(json!("x"), "c1"), json!("x"));
     }
