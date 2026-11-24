@@ -27,6 +27,8 @@ pub enum AgentEvent {
     SubagentRun(crate::model::SubagentRunUpdate),
     /// A child-owned request routed independently of parent turn lifetime.
     SubagentControl(StreamEvent),
+    /// The provider accepted a reply to this worker prompt.
+    SubagentControlResolved { tool_use_id: String },
     /// A parsed stream event from stdout.
     Stream(StreamEvent),
     /// A raw stderr line from the agent process.

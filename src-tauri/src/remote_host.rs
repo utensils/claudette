@@ -26,6 +26,7 @@ use crate::state::AppState;
 const FORWARDED_EVENTS: &[&str] = &[
     "agent-stream",
     "subagent-run-updated",
+    "subagent-control-resolved",
     "subagent-runs-invalidated",
     "agent-permission-prompt",
     "agent-background-task",

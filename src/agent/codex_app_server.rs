@@ -905,6 +905,7 @@ impl CodexAppServerSession {
         stderr_task: tokio::task::JoinHandle<()>,
     ) {
         let event_tx = self.event_tx.clone();
+        let approvals = self.child_approvals.clone();
         let pending = self.pending.clone();
         tokio::spawn(async move {
             let status = child.wait().await.ok().and_then(|status| status.code());
@@ -912,6 +913,7 @@ impl CodexAppServerSession {
             // lines (version/auth errors) before signaling ProcessExited.
             let _ = tokio::time::timeout(CODEX_STDERR_DRAIN_TIMEOUT, stderr_task).await;
             fail_pending_requests(&pending, "Codex app-server process exited").await;
+            approvals.closed(&event_tx);
             let _ = event_tx.send(AgentEvent::ProcessExited(status));
         });
     }

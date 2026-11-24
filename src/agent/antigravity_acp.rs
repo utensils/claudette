@@ -924,6 +924,7 @@ impl AntigravityAcpSession {
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
+            let mut delegations = subagents::Delegations::default();
             loop {
                 match read_acp_message(&mut reader).await {
                     Ok(Some(message)) => {
@@ -932,7 +933,7 @@ impl AntigravityAcpSession {
                             .await
                             .as_deref()
                             .or(resume_session.as_deref())
-                            && subagents::route(&approvals, root, &message, &event_tx)
+                            && delegations.route(&approvals, root, &message, &event_tx)
                         {
                             continue;
                         }
@@ -1019,11 +1020,13 @@ impl AntigravityAcpSession {
         stderr_task: tokio::task::JoinHandle<()>,
     ) {
         let event_tx = self.event_tx.clone();
+        let approvals = self.child_approvals.clone();
         let pending = self.pending.clone();
         tokio::spawn(async move {
             let status = child.wait().await.ok().and_then(|s| s.code());
             let _ = tokio::time::timeout(ACP_STDERR_DRAIN_TIMEOUT, stderr_task).await;
             fail_pending_requests(&pending, "Antigravity ACP process exited").await;
+            approvals.closed(&event_tx);
             let _ = event_tx.send(AgentEvent::ProcessExited(status));
         });
     }

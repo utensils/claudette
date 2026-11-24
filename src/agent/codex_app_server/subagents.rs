@@ -32,7 +32,43 @@ impl ChildThreads {
         let (method, params) = match message {
             JsonRpcMessage::Notification(n) => (&n.method, &n.params),
             JsonRpcMessage::Request(r) => (&r.method, &r.params),
-            _ => return false,
+            JsonRpcMessage::Response(response) => {
+                // Resume returns the root thread's historical items. Rebuild
+                // membership without replaying old states onto durable rows.
+                if response
+                    .result
+                    .pointer("/thread/id")
+                    .and_then(Value::as_str)
+                    == Some(root)
+                    && let Some(turns) = response
+                        .result
+                        .pointer("/thread/turns")
+                        .and_then(Value::as_array)
+                {
+                    for item in turns
+                        .iter()
+                        .filter_map(|turn| turn["items"].as_array())
+                        .flatten()
+                    {
+                        match item["type"].as_str() {
+                            Some("subAgentActivity") => {
+                                self.known.extend(string(&item["agentThreadId"]))
+                            }
+                            Some("collabAgentToolCall") => {
+                                if let Some(ids) = item["receiverThreadIds"].as_array() {
+                                    self.known.extend(ids.iter().filter_map(string));
+                                }
+                                if let Some(states) = item["agentsStates"].as_object() {
+                                    self.known.extend(states.keys().cloned());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                return false;
+            }
+            JsonRpcMessage::Error(_) => return false,
         };
         let Some(p) = params else { return false };
         if method == "thread/started"
@@ -87,6 +123,13 @@ impl ChildThreads {
             let mut update = child_update(thread);
             match method.as_str() {
                 "turn/started" => update.status = Some("resumed".into()),
+                "turn/failed" => {
+                    update.status = Some("failed".into());
+                    update.summary = p
+                        .pointer("/turn/error/message")
+                        .or_else(|| p.pointer("/error/message"))
+                        .and_then(string);
+                }
                 "turn/completed" => {
                     update.status = match p.pointer("/turn/status").and_then(Value::as_str) {
                         Some("completed") => Some("completed".into()),
@@ -196,6 +239,7 @@ impl ChildThreads {
                 Some("completed") => Some("completed"),
                 Some("interrupted" | "shutdown") => Some("stopped"),
                 Some("errored") => Some("failed"),
+                Some("notFound") => Some("disconnected"),
                 None if spawn => Some("delegated"),
                 _ => None,
             }
@@ -283,7 +327,7 @@ mod tests {
             panic!()
         };
         assert_eq!(request_id, "27");
-        assert_eq!(tool_use_id, "subagent-approval-27");
+        assert!(tool_use_id.starts_with("subagent-approval-") && tool_use_id.ends_with("-27"));
         assert_eq!(input["subagent_run_id"], "b");
         for (id, status) in [("a", "failed"), ("b", "completed")] {
             assert!(children.route(
@@ -310,6 +354,33 @@ mod tests {
             ),
             &tx
         ));
+    }
+
+    #[test]
+    fn resume_recovers_worker_membership_without_replaying_completed_history() {
+        let (tx, mut rx) = broadcast::channel(4);
+        let mut children = ChildThreads::default();
+        let response = serde_json::from_value(
+            json!({"id":2,"result":{"thread":{"id":"parent","turns":[{"items":[
+                {"type":"subAgentActivity","agentThreadId":"worker","kind":"started"}
+            ]}]}}}),
+        )
+        .unwrap();
+        assert!(!children.route("parent", &response, &tx));
+        assert!(rx.try_recv().is_err());
+        assert!(children.route(
+            "parent",
+            &message(
+                "turn/failed",
+                json!({"threadId":"worker","error":{"message":"Worker interrupted"}})
+            ),
+            &tx
+        ));
+        let AgentEvent::SubagentRun(run) = rx.try_recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(run.status.as_deref(), Some("failed"));
+        assert_eq!(run.summary.as_deref(), Some("Worker interrupted"));
     }
 
     #[test]
