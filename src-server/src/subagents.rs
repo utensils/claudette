@@ -7,13 +7,14 @@ use tokio::sync::broadcast::{Receiver, error::RecvError};
 pub(crate) fn observe_process(
     state: Arc<ServerState>,
     session: String,
+    generation: i64,
     mut rx: Receiver<AgentEvent>,
 ) {
     tokio::spawn(async move {
         let mut tracker = SubagentTracker::default();
         let persist =
             |update: &claudette::agent::SubagentRunUpdate| match Database::open(&state.db_path)
-                .and_then(|db| db.observe_subagent(&session, update))
+                .and_then(|db| db.observe_subagent(&session, generation, update))
             {
                 Ok(Some(row)) => {
                     state.emit(serde_json::json!({"event":"subagent-run-updated","payload":row}))

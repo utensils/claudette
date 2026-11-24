@@ -105,7 +105,11 @@ pub(crate) async fn start_chat_bridge(
     chat_session_id: &str,
     harness: AgentBackendRuntimeHarness,
 ) -> Result<Arc<McpBridgeSession>, String> {
+    let generation = Database::open(db_path)
+        .and_then(|db| db.subagent_generation(chat_session_id))
+        .map_err(|e| e.to_string())?;
     let sink = Arc::new(ChatBridgeSink {
+        generation,
         app: app.clone(),
         db_path: db_path.to_path_buf(),
         workspace_id: workspace_id.to_string(),

@@ -931,6 +931,8 @@ async fn handle_send_chat_message(
             crate::subagents::observe_process(
                 state.clone(),
                 chat_session_id.clone(),
+                db.subagent_generation(&chat_session_id)
+                    .map_err(|e| e.to_string())?,
                 ps.subscribe(),
             );
             let arc = Arc::new(ps);

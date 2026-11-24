@@ -614,6 +614,9 @@ async fn ensure_persistent_session_for_remote_control(
     .await
     .map_err(|err| crate::missing_cli::handle_err(app, &err).unwrap_or(err))?;
     let ps = Arc::new(AgentSession::from_claude_code(ps));
+    let generation = Database::open(db_path)
+        .and_then(|db| db.subagent_generation(&chat_session_id))
+        .map_err(|e| e.to_string())?;
     let child_events = ps.subscribe();
     let pid = ps.pid();
 
@@ -684,7 +687,14 @@ async fn ensure_persistent_session_for_remote_control(
         let _ = db.reopen_agent_session(&claude_session_id);
         let _ = db.update_agent_session_turn(&claude_session_id, chat_session.turn_count);
     }
-    super::subagents::observe_process(app, &workspace_id, &chat_session_id, pid, child_events);
+    super::subagents::observe_process(
+        app,
+        &workspace_id,
+        &chat_session_id,
+        pid,
+        generation,
+        child_events,
+    );
     Ok((ps, pid))
 }
 

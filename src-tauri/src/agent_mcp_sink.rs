@@ -42,6 +42,7 @@ use crate::state::{AppState, AttentionKind, PendingPermission};
 /// workspace granularity, but the chat-surface routing path no longer reads
 /// it. Both are kept on the struct because they are NOT the same id.
 pub struct ChatBridgeSink {
+    pub generation: i64,
     pub app: AppHandle,
     pub db_path: PathBuf,
     pub workspace_id: String,
@@ -65,6 +66,7 @@ impl Sink for ChatBridgeSink {
                 workspace_id,
                 chat_session_id,
                 self.harness,
+                self.generation,
                 payload,
             )
             .await
@@ -113,6 +115,7 @@ async fn handle_payload(
     workspace_id: String,
     chat_session_id: String,
     harness: AgentBackendRuntimeHarness,
+    generation: i64,
     payload: BridgePayload,
 ) -> BridgeResponse {
     match payload {
@@ -165,6 +168,7 @@ async fn handle_payload(
                     &app,
                     &db_path,
                     &chat_session_id,
+                    generation,
                     &update,
                 );
             }
@@ -235,6 +239,7 @@ async fn handle_payload(
                 &chat_session_id,
                 harness,
                 report.run_id.trim(),
+                generation,
                 report.kind.as_str(),
                 report.summary.trim(),
             ) {

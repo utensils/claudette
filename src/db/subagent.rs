@@ -76,6 +76,25 @@ impl Database {
         Ok(Some((child, changed)))
     }
 
+    pub fn subagent_generation(&self, session: &str) -> rusqlite::Result<i64> {
+        self.conn.query_row(
+            "SELECT subagent_generation FROM chat_sessions WHERE id=?1",
+            [session],
+            |r| r.get(0),
+        )
+    }
+
+    /// Called inside the same transaction as history truncation. Retire
+    /// callbacks from the old process even when the user keeps the chat tab.
+    pub(super) fn retire_subagent_generation(&self, session: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE chat_sessions SET subagent_generation=subagent_generation+1 WHERE id=?1",
+            [session],
+        )?;
+        self.conn.execute("UPDATE subagent_runs SET status='disconnected',revision=revision+1 WHERE session_id=?1 AND status IN ('running','delegated','needs_approval')",[session])?;
+        Ok(())
+    }
+
     pub fn list_subagent_runs(&self, session: &str) -> rusqlite::Result<Vec<SubagentRun>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {COLUMNS}, observer_id FROM subagent_runs WHERE session_id=?1 ORDER BY rowid"
@@ -95,9 +114,13 @@ impl Database {
     pub fn observe_subagent(
         &self,
         session: &str,
+        generation: i64,
         update: &SubagentRunUpdate,
     ) -> rusqlite::Result<Option<SubagentRun>> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        if self.subagent_generation(session)? != generation {
+            return Ok(None);
+        }
         let sql = format!(
             "SELECT {COLUMNS}, observer_id FROM subagent_runs
             WHERE session_id=?1 AND harness=?2 AND run_id=?3"
@@ -179,11 +202,20 @@ impl Database {
         session: &str,
         harness: &str,
         run: &str,
+        generation: i64,
         kind: &str,
         summary: &str,
     ) -> Result<Option<SubagentRun>, String> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
+        if self
+            .subagent_generation(session)
+            .optional()
+            .map_err(|e| e.to_string())?
+            != Some(generation)
+        {
+            return Err("This reporting session is no longer active".into());
+        }
         let key = params![session, harness, run];
         let current = tx.query_row(&format!("SELECT {COLUMNS} FROM subagent_runs WHERE session_id=?1 AND harness=?2 AND run_id=?3"),key,read)
             .optional().map_err(|e|e.to_string())?.ok_or("Unknown run in this chat and harness")?;
@@ -225,7 +257,7 @@ mod tests {
             ..Default::default()
         };
 
-        let first = db.observe_subagent(&parent, &run).unwrap().unwrap();
+        let first = db.observe_subagent(&parent, 0, &run).unwrap().unwrap();
         assert!(first.linked_session_id.is_none());
         let (tab, changed) = db
             .create_team_agent_tab(&parent, "launch")
@@ -249,7 +281,7 @@ mod tests {
             .unwrap();
         assert!(empty.is_empty());
         assert_ne!(other_tab.id, tab.id);
-        let late = db.observe_subagent(&another.id, &run).unwrap().unwrap();
+        let late = db.observe_subagent(&another.id, 0, &run).unwrap().unwrap();
         assert_eq!(
             late.linked_session_id.as_deref(),
             Some(other_tab.id.as_str())
@@ -258,7 +290,7 @@ mod tests {
 
         run.harness = "codex".into();
         assert!(
-            db.observe_subagent(&parent, &run)
+            db.observe_subagent(&parent, 0, &run)
                 .unwrap()
                 .unwrap()
                 .linked_session_id
@@ -295,7 +327,7 @@ mod tests {
                 status: Some("running".into()),
                 ..Default::default()
             };
-            db.observe_subagent(&session, &update).unwrap();
+            db.observe_subagent(&session, 0, &update).unwrap();
         }
         let update = SubagentRunUpdate {
             run_id: "first".into(),
@@ -303,7 +335,7 @@ mod tests {
             status: Some("completed".into()),
             ..Default::default()
         };
-        db.observe_subagent(&session, &update).unwrap();
+        db.observe_subagent(&session, 0, &update).unwrap();
         db.conn
             .execute(
                 "UPDATE subagent_runs SET observer_id='previous-process'",
@@ -316,6 +348,11 @@ mod tests {
         db.delete_session_messages_after(&session, "first").unwrap();
         let rows = db.list_subagent_runs(&session).unwrap();
         assert_eq!(rows.len(), 1);
+        let stale = SubagentRunUpdate {
+            run_id: "second".into(),
+            ..update.clone()
+        };
+        assert!(db.observe_subagent(&session, 0, &stale).unwrap().is_none());
         assert_eq!(rows[0].native, update);
         db.delete_chat_messages_for_session(&session).unwrap();
         assert!(db.list_subagent_runs(&session).unwrap().is_empty());
@@ -331,31 +368,31 @@ mod tests {
             status: Some("running".into()),
             ..Default::default()
         };
-        assert!(db.observe_subagent(&session, &u).unwrap().is_some());
-        assert!(db.observe_subagent(&session, &u).unwrap().is_none());
+        assert!(db.observe_subagent(&session, 0, &u).unwrap().is_some());
+        assert!(db.observe_subagent(&session, 0, &u).unwrap().is_none());
         assert!(
-            db.report_subagent_progress("other", "codex", "worker", "result", "ready")
+            db.report_subagent_progress("other", "codex", "worker", 0, "result", "ready")
                 .is_err()
         );
         let report = db
-            .report_subagent_progress(&session, "codex", "worker", "result", "ready")
+            .report_subagent_progress(&session, "codex", "worker", 0, "result", "ready")
             .unwrap()
             .unwrap();
         assert_eq!(report.native.status.as_deref(), Some("running"));
         assert!(
-            db.report_subagent_progress(&session, "codex", "worker", "result", "ready")
+            db.report_subagent_progress(&session, "codex", "worker", 0, "result", "ready")
                 .unwrap()
                 .is_none()
         );
         u.status = Some("completed".into());
-        let done = db.observe_subagent(&session, &u).unwrap().unwrap();
+        let done = db.observe_subagent(&session, 0, &u).unwrap().unwrap();
         assert_eq!(done.report_summary.as_deref(), Some("ready"));
         u.status = Some("running".into());
-        assert!(db.observe_subagent(&session, &u).unwrap().is_none());
+        assert!(db.observe_subagent(&session, 0, &u).unwrap().is_none());
         assert_eq!(db.list_subagent_runs(&session).unwrap(), vec![done]);
         u.status = None;
         u.summary = Some("Late final answer".into());
-        let late = db.observe_subagent(&session, &u).unwrap().unwrap();
+        let late = db.observe_subagent(&session, 0, &u).unwrap().unwrap();
         assert_eq!(late.native.status.as_deref(), Some("completed"));
         assert_eq!(late.native.summary, u.summary);
     }

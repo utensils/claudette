@@ -1,3 +1,5 @@
+ALTER TABLE chat_sessions ADD COLUMN subagent_generation INTEGER NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS subagent_runs (
     session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
     launch_message_id TEXT REFERENCES chat_messages(id) ON DELETE CASCADE,

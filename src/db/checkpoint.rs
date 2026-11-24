@@ -1510,12 +1510,15 @@ impl Database {
         chat_session_id: &str,
         after_message_id: &str,
     ) -> Result<usize, rusqlite::Error> {
-        let deleted = self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        self.retire_subagent_generation(chat_session_id)?;
+        let deleted = tx.execute(
             "DELETE FROM chat_messages
              WHERE chat_session_id = ?1
                AND rowid > (SELECT rowid FROM chat_messages WHERE id = ?2)",
             params![chat_session_id, after_message_id],
         )?;
+        tx.commit()?;
         self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(deleted)
     }

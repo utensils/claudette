@@ -46,8 +46,14 @@ pub async fn get_pending_subagent_controls(
     Ok(controls)
 }
 
-pub(crate) fn persist(app: &AppHandle, path: &Path, session: &str, update: &SubagentRunUpdate) {
-    match Database::open(path).and_then(|db| db.observe_subagent(session, update)) {
+pub(crate) fn persist(
+    app: &AppHandle,
+    path: &Path,
+    session: &str,
+    generation: i64,
+    update: &SubagentRunUpdate,
+) {
+    match Database::open(path).and_then(|db| db.observe_subagent(session, generation, update)) {
         Ok(Some(row)) => {
             let _ = app.emit("subagent-run-updated", row);
         }
@@ -63,6 +69,7 @@ pub(super) fn observe_process(
     workspace: &str,
     session: &str,
     pid: u32,
+    generation: i64,
     mut rx: Receiver<AgentEvent>,
 ) {
     let app = app.clone();
@@ -118,7 +125,7 @@ pub(super) fn observe_process(
                             // this connection until it exits after replacement.
                             continue;
                         }
-                        persist(&app, &path, &session, &update);
+                        persist(&app, &path, &session, generation, &update);
                     }
                 }
             }
@@ -133,7 +140,7 @@ pub(super) fn observe_process(
             return;
         }
         for update in tracker.disconnected() {
-            persist(&app, &path, &session, &update);
+            persist(&app, &path, &session, generation, &update);
         }
     });
 }

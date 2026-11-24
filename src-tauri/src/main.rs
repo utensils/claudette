@@ -535,9 +535,6 @@ fn main() {
     // resumed CLI transcripts, per the warning above.
     if peer_instances.is_empty() {
         if let Ok(db) = Database::open(&db_path) {
-            if let Err(error) = db.disconnect_orphaned_subagents() {
-                tracing::warn!(%error,"failed to reconcile subagent runs");
-            }
             match db.resolve_orphaned_workflow_activities() {
                 Ok(0) => {}
                 Ok(count) => tracing::info!(
@@ -1232,6 +1229,7 @@ fn main() {
             commands::chat::session::list_chat_sessions,
             commands::chat::session::get_chat_session,
             commands::chat::subagents::get_subagent_runs,
+            commands::chat::subagents::get_pending_subagent_controls,
             commands::chat::session::create_chat_session,
             commands::chat::session::rename_chat_session,
             commands::chat::session::set_session_cli_invocation,

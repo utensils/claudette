@@ -2077,6 +2077,9 @@ pub async fn send_chat_message(
         }
     };
 
+    let generation = db
+        .subagent_generation(&chat_session_id)
+        .map_err(|e| e.to_string())?;
     let mut child_events = None;
     let turn_handle = if let Some(ref ps) = existing_persistent {
         // Reuse existing persistent process — send turn via stdin. Mark the
@@ -2478,7 +2481,14 @@ pub async fn send_chat_message(
     drop(agents);
 
     if let Some(rx) = child_events {
-        super::subagents::observe_process(&app, &workspace_id, &chat_session_id, spawned_pid, rx);
+        super::subagents::observe_process(
+            &app,
+            &workspace_id,
+            &chat_session_id,
+            spawned_pid,
+            generation,
+            rx,
+        );
     }
 
     // Capture rename context before the bridge spawn.
