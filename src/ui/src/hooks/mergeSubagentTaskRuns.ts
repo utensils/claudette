@@ -20,8 +20,10 @@ export function isLiveSubagentStatus(status?: string | null): boolean {
  * activity's checklist, even when the native terminal update arrives after
  * the launch turn was checkpointed. A wait targeting several Codex workers
  * can share a tool call ID, so only Claude activities are joined by tool ID. */
-export function mergeSubagentTaskRuns(state: TaskTrackerWithHistory, rows: SubagentRun[]): TaskTrackerWithHistory {
-  if (!rows.length) return state;
+export function mergeSubagentTaskRuns(
+  state: TaskTrackerWithHistory, rows: SubagentRun[], prunedIds?: ReadonlySet<string>,
+): TaskTrackerWithHistory {
+  if (!rows.length && !prunedIds?.size) return state;
   const legacy = new Map<string, TaskRun | SubagentTaskRun>();
   for (const run of state.subagents) legacy.set(run.id, run);
   for (const run of state.history) {
@@ -33,6 +35,10 @@ export function mergeSubagentTaskRuns(state: TaskTrackerWithHistory, rows: Subag
   const byNativeId = new Map<string, SubagentRun>();
   for (const row of rows) byNativeId.set(JSON.stringify([row.harness, row.run_id]), row);
   const consumed = new Set<TaskRun | SubagentTaskRun>();
+  for (const id of prunedIds ?? []) {
+    const stale = legacy.get(id);
+    if (stale) consumed.add(stale);
+  }
   const current: SubagentTaskRun[] = [];
   const finished: TaskRun[] = [];
   let sequence = state.history.reduce((max, run) => Math.max(max, run.sequence), 0);

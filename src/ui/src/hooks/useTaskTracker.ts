@@ -881,7 +881,7 @@ function deriveTaskStateFromEntries(
   const agentToolUseOrder: string[] = [];
   for (const entry of entries) {
     for (const act of entry.activities) {
-      if (act.toolName !== "Agent") continue;
+      if (act.toolName !== "Agent" && act.toolName !== "Task") continue;
       if (!latestAgentByToolUseId.has(act.toolUseId)) {
         agentToolUseOrder.push(act.toolUseId);
       }
@@ -1044,6 +1044,7 @@ export function deriveTaskState(
   completedTurns: TaskActivityTurn[],
   toolActivities: ToolActivity[],
   runs: SubagentRun[] = EMPTY_RUNS,
+  prunedIds?: ReadonlySet<string>,
 ): TaskTrackerWithHistory {
   const state = completedTurns.length || toolActivities.length
     ? deriveTaskStateFromEntries([
@@ -1051,7 +1052,7 @@ export function deriveTaskState(
         { activities: toolActivities },
       ])
     : EMPTY_WITH_HISTORY;
-  return mergeSubagentTaskRuns(state, runs);
+  return mergeSubagentTaskRuns(state, runs, prunedIds);
 }
 
 const TASK_TOOL_NAMES = new Set([
@@ -1091,18 +1092,20 @@ export function useTaskTrackerWithHistory(
     (s) => (sessionId ? s.toolActivities[sessionId] : null) ?? EMPTY_ACTIVITIES,
   );
 
-  const runs = useAppStore((s) => {
-    const connection = s.workspaces.find((ws) => ws.id === s.selectedWorkspaceId)?.remote_connection_id;
-    return sessionId && connection !== undefined
-      ? s.subagentRuns[subagentSessionKey(connection, sessionId)] ?? EMPTY_RUNS
-      : EMPTY_RUNS;
+  const scopeKey = useAppStore((s) => {
+    const workspace = s.workspaces.find((ws) => ws.id === s.selectedWorkspaceId);
+    return sessionId && workspace?.remote_connection_id !== undefined
+      ? subagentSessionKey(workspace.remote_connection_id, sessionId)
+      : null;
   });
+  const runs = useAppStore((s) => scopeKey ? s.subagentRuns[scopeKey] ?? EMPTY_RUNS : EMPTY_RUNS);
+  const pruned = useAppStore((s) => scopeKey ? s.prunedSubagentIds[scopeKey] : undefined);
 
   return useMemo(
     () =>
       sessionId
-        ? deriveTaskState(completedTurns, toolActivities, runs)
+        ? deriveTaskState(completedTurns, toolActivities, runs, pruned)
         : EMPTY_WITH_HISTORY,
-    [sessionId, completedTurns, toolActivities, runs],
+    [sessionId, completedTurns, toolActivities, runs, pruned],
   );
 }

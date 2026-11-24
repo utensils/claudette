@@ -15,7 +15,7 @@ function row(overrides: Partial<SubagentRun>): SubagentRun {
 }
 
 describe("subagent snapshots", () => {
-  beforeEach(() => useAppStore.setState({ subagentRuns: {} }));
+  beforeEach(() => useAppStore.setState({ subagentRuns: {}, prunedSubagentIds: {} }));
 
   it("keeps late completions when an older reconnect snapshot lands, scoped by host and session", () => {
     const merge = useAppStore.getState().mergeSubagentRuns;
@@ -56,6 +56,35 @@ describe("subagent snapshots", () => {
     obsolete.resolve([old, recent]);
     await first;
     expect(useAppStore.getState().subagentRuns[subagentSessionKey(null, "parent")]).toEqual([newer]);
+  });
+
+  it("accepts the restarted host's last-seen projection at the original revision", async () => {
+    const store = useAppStore.getState();
+    const active = row({ revision: 9 });
+    store.mergeSubagentRuns("paired", [active]);
+    vi.mocked(getSubagentRuns).mockResolvedValueOnce([{ ...active, status: "disconnected" }]);
+    await store.reloadSubagentRuns("paired", "parent");
+    expect(useAppStore.getState().subagentRuns[subagentSessionKey("paired", "parent")][0].status)
+      .toBe("disconnected");
+  });
+
+  it("does not reconstruct a deleted worker from a paired client's older Task-tool checkpoint", async () => {
+    const store = useAppStore.getState();
+    const scope = subagentSessionKey("paired", "parent");
+    const child = row({ harness: "claude", tool_use_id: "old-launch" });
+    store.mergeSubagentRuns("paired", [child]);
+    const oldActivity = {
+      toolName: "Task", toolUseId: "old-launch", summary: "", collapsed: true, inputJson: "{}", resultText: "",
+      agentStatus: "completed", agentResultText: "Old branch result",
+    };
+    const turns = [{ id: "old-checkpoint", activities: [oldActivity] }];
+    expect(deriveTaskState(turns, []).history).toHaveLength(1);
+    vi.mocked(getSubagentRuns).mockResolvedValueOnce([]);
+    await store.reloadSubagentRuns("paired", "parent", true);
+    const s = useAppStore.getState();
+    const after = deriveTaskState(turns, [], s.subagentRuns[scope], s.prunedSubagentIds[scope]);
+    expect(after.history).toEqual([]);
+    expect(after.subagents).toEqual([]);
   });
 
   it("keeps worker outcomes independent of tool completion and the parent turn", () => {

@@ -179,6 +179,7 @@ export function useWorkspaceTaskHistory(
   );
   const activeState = useTaskTrackerWithHistory(activeSessionId);
   const durableRuns = useAppStore((s) => s.subagentRuns);
+  const prunedIds = useAppStore((s) => s.prunedSubagentIds);
   const [fetchedSessions, setFetchedSessions] = useState<ChatSession[]>([]);
   const [turnsBySession, setTurnsBySession] = useState<
     Record<string, TaskActivityTurn[]>
@@ -303,10 +304,8 @@ export function useWorkspaceTaskHistory(
       continue;
     }
 
-    const derived = deriveTaskState(
-      turnsBySession[session.id] ?? [], [],
-      durableRuns[subagentSessionKey(remoteConnectionId, session.id)],
-    );
+    const scope = subagentSessionKey(remoteConnectionId, session.id);
+    const derived = deriveTaskState(turnsBySession[session.id] ?? [], [], durableRuns[scope], prunedIds[scope]);
     if (session.agent_status === "Running" || derived.subagents.some((run) => run.agent?.updatedAt)) {
       if (derived.current.tasks.length > 0 || derived.subagents.length > 0) {
         siblings.push({
