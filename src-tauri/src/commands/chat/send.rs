@@ -2077,9 +2077,6 @@ pub async fn send_chat_message(
         }
     };
 
-    let generation = db
-        .subagent_generation(&chat_session_id)
-        .map_err(|e| e.to_string())?;
     let mut child_events = None;
     let turn_handle = if let Some(ref ps) = existing_persistent {
         // Reuse existing persistent process — send turn via stdin. Mark the
@@ -2122,13 +2119,13 @@ pub async fn send_chat_message(
                 drop(agents);
 
                 let mut respawn_settings = agent_settings.clone();
-                let bridge = match respawn_settings.backend_runtime.harness {
+                let (bridge, generation) = match respawn_settings.backend_runtime.harness {
                     // Injected unconditionally for the same reason as the
                     // spawn path above — scheduling tools ride this server.
                     AgentBackendRuntimeHarness::ClaudeCode
                     | AgentBackendRuntimeHarness::CodexAppServer
                     | AgentBackendRuntimeHarness::AntigravityAcp => {
-                        let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                        let (b, mcp_with_claudette, generation) = start_bridge_and_inject_mcp(
                             &app,
                             &state.db_path,
                             &workspace_id,
@@ -2139,7 +2136,7 @@ pub async fn send_chat_message(
                         )
                         .await?;
                         respawn_settings.mcp_config = mcp_with_claudette;
-                        Some(b)
+                        (Some(b), generation)
                     }
                 };
                 if let Some(bridge) = bridge.as_ref()
@@ -2246,7 +2243,7 @@ pub async fn send_chat_message(
                     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                     session.remember_local_user_message_uuid(local_user_message_uuid.clone());
                 }
-                child_events = Some(ps.subscribe());
+                child_events = Some((ps.subscribe(), generation));
                 let handle = if is_native_compact {
                     ps.start_compact().await?
                 } else {
@@ -2304,7 +2301,7 @@ pub async fn send_chat_message(
         // bridge is stored on the session below so it lives exactly as
         // long as the persistent CLI process.
         let mut spawn_settings = agent_settings.clone();
-        let bridge = match spawn_settings.backend_runtime.harness {
+        let (bridge, generation) = match spawn_settings.backend_runtime.harness {
             // The Claudette MCP server carries always-on scheduling tools
             // (ScheduleWakeup / Cron*) alongside the toggleable send_to_user
             // tool, so it is injected unconditionally — the send_to_user
@@ -2313,7 +2310,7 @@ pub async fn send_chat_message(
             AgentBackendRuntimeHarness::ClaudeCode
             | AgentBackendRuntimeHarness::CodexAppServer
             | AgentBackendRuntimeHarness::AntigravityAcp => {
-                let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                let (b, mcp_with_claudette, generation) = start_bridge_and_inject_mcp(
                     &app,
                     &state.db_path,
                     &workspace_id,
@@ -2324,7 +2321,7 @@ pub async fn send_chat_message(
                 )
                 .await?;
                 spawn_settings.mcp_config = mcp_with_claudette;
-                Some(b)
+                (Some(b), generation)
             }
         };
         if let Some(bridge) = bridge.as_ref()
@@ -2405,7 +2402,7 @@ pub async fn send_chat_message(
             let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
             session.remember_local_user_message_uuid(local_user_message_uuid.clone());
         }
-        child_events = Some(ps.subscribe());
+        child_events = Some((ps.subscribe(), generation));
         let handle = if is_native_compact {
             ps.start_compact().await?
         } else {
@@ -2480,7 +2477,7 @@ pub async fn send_chat_message(
     }
     drop(agents);
 
-    if let Some(rx) = child_events {
+    if let Some((rx, generation)) = child_events {
         super::subagents::observe_process(
             &app,
             &workspace_id,

@@ -577,8 +577,8 @@ async fn ensure_persistent_session_for_remote_control(
     // (above) and the call itself (in `agent_mcp_sink::handle_payload`),
     // not the whole server. Same wiring as the spawn / respawn blocks in
     // `chat::send::send_chat_message`.
-    let bridge = {
-        let (bridge, mcp_with_claudette) = start_bridge_and_inject_mcp(
+    let (bridge, generation) = {
+        let (bridge, mcp_with_claudette, generation) = start_bridge_and_inject_mcp(
             app,
             &state.db_path,
             &workspace_id,
@@ -589,7 +589,7 @@ async fn ensure_persistent_session_for_remote_control(
         )
         .await?;
         agent_settings.mcp_config = mcp_with_claudette;
-        bridge
+        (bridge, generation)
     };
     agent_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
 
@@ -614,9 +614,6 @@ async fn ensure_persistent_session_for_remote_control(
     .await
     .map_err(|err| crate::missing_cli::handle_err(app, &err).unwrap_or(err))?;
     let ps = Arc::new(AgentSession::from_claude_code(ps));
-    let generation = Database::open(db_path)
-        .and_then(|db| db.subagent_generation(&chat_session_id))
-        .map_err(|e| e.to_string())?;
     let child_events = ps.subscribe();
     let pid = ps.pid();
 

@@ -12,7 +12,7 @@ pub(crate) mod subagents;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use claudette::db::Database;
 use claudette::env::WorkspaceEnv;
@@ -92,10 +92,11 @@ pub(crate) async fn start_bridge_and_inject_mcp(
     harness: AgentBackendRuntimeHarness,
     base_mcp_config: Option<String>,
     interaction_enabled: bool,
-) -> Result<(Arc<McpBridgeSession>, Option<String>), String> {
-    let bridge = start_chat_bridge(app, db_path, workspace_id, chat_session_id, harness).await?;
+) -> Result<(Arc<McpBridgeSession>, Option<String>, i64), String> {
+    let (bridge, generation) =
+        start_chat_bridge(app, db_path, workspace_id, chat_session_id, harness).await?;
     let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle(), interaction_enabled)?;
-    Ok((bridge, merged))
+    Ok((bridge, merged, generation))
 }
 
 pub(crate) async fn start_chat_bridge(
@@ -104,10 +105,14 @@ pub(crate) async fn start_chat_bridge(
     workspace_id: &str,
     chat_session_id: &str,
     harness: AgentBackendRuntimeHarness,
-) -> Result<Arc<McpBridgeSession>, String> {
+) -> Result<(Arc<McpBridgeSession>, i64), String> {
     let generation = Database::open(db_path)
-        .and_then(|db| db.subagent_generation(chat_session_id))
+        .and_then(|db| db.begin_subagent_generation(chat_session_id))
         .map_err(|e| e.to_string())?;
+    let _ = app.emit(
+        "subagent-runs-invalidated",
+        serde_json::json!({"session_id":chat_session_id}),
+    );
     let sink = Arc::new(ChatBridgeSink {
         generation,
         app: app.clone(),
@@ -116,7 +121,7 @@ pub(crate) async fn start_chat_bridge(
         chat_session_id: chat_session_id.to_string(),
         harness,
     });
-    Ok(Arc::new(McpBridgeSession::start(sink).await?))
+    Ok((Arc::new(McpBridgeSession::start(sink).await?), generation))
 }
 
 pub(crate) fn build_agent_hook_bridge(

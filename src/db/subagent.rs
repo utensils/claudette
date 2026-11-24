@@ -95,6 +95,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn begin_subagent_generation(&self, session: &str) -> rusqlite::Result<i64> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.retire_subagent_generation(session)?;
+        let generation = self.subagent_generation(session)?;
+        tx.commit()?;
+        Ok(generation)
+    }
+
     /// The observer that owned this chat process is gone. Include workers
     /// first seen through the Claude hook socket as well as streamed workers.
     pub fn disconnect_subagent_process(
@@ -324,6 +332,43 @@ mod tests {
             db.create_team_agent_tab(&parent, "launch")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn replacement_disconnects_old_runs_even_if_the_old_exit_arrives_late() {
+        let db = crate::db::test_support::setup_db_with_workspace();
+        let session = db.default_session_id_for_workspace("w1").unwrap().unwrap();
+        let old = db.begin_subagent_generation(&session).unwrap();
+        let mut u = SubagentRunUpdate {
+            harness: "claude".into(),
+            run_id: "a".into(),
+            status: Some("running".into()),
+            ..Default::default()
+        };
+        db.observe_subagent(&session, old, &u).unwrap();
+        let new = db.begin_subagent_generation(&session).unwrap();
+        assert_eq!(
+            db.list_subagent_runs(&session).unwrap()[0]
+                .native
+                .status
+                .as_deref(),
+            Some("disconnected")
+        );
+        assert!(db.observe_subagent(&session, old, &u).unwrap().is_none());
+        u.run_id = "b".into();
+        db.observe_subagent(&session, new, &u).unwrap();
+        assert!(
+            db.disconnect_subagent_process(&session, old)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            db.list_subagent_runs(&session).unwrap()[1]
+                .native
+                .status
+                .as_deref(),
+            Some("running")
         );
     }
 

@@ -932,10 +932,11 @@ async fn handle_send_chat_message(
                 state.clone(),
                 chat_session_id.clone(),
                 ps.pid(),
-                db.subagent_generation(&chat_session_id)
+                db.begin_subagent_generation(&chat_session_id)
                     .map_err(|e| e.to_string())?,
                 ps.subscribe(),
             );
+            state.emit(json!({"event":"subagent-runs-invalidated","payload":{"session_id":chat_session_id}}));
             let arc = Arc::new(ps);
             session.persistent_session = Some(Arc::clone(&arc));
             session.spawn_signature = spawn_signature;
