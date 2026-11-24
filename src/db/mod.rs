@@ -110,6 +110,7 @@ pub(crate) use checkpoint::sha256_hex;
 pub use checkpoint::{AgentActivityUpdate, WorkflowActivityResolution};
 
 mod chat;
+mod subagent;
 
 mod workspace;
 pub use workspace::WORKSPACE_ORDER_MODE_PREFIX;
