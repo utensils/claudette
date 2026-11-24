@@ -309,4 +309,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20261124135223_subagent_runs.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20261124135722_team_agent_tabs",
+        sql: include_str!("20261124135722_team_agent_tabs.sql"),
+        legacy_version: None,
+    },
 ];

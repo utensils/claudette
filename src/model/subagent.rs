@@ -18,6 +18,7 @@ pub struct SubagentRun {
     pub session_id: String,
     #[serde(flatten)]
     pub native: SubagentRunUpdate,
+    pub linked_session_id: Option<String>,
     pub report_kind: Option<String>,
     pub report_summary: Option<String>,
     pub updated_at: String,
