@@ -47,20 +47,22 @@ describe("shouldShowBackendTestButton", () => {
     expect(shouldShowBackendTestButton(backend({ kind: "openai_api" }))).toBe(true);
     expect(shouldShowBackendTestButton(backend({ kind: "custom_openai" }))).toBe(true);
     expect(shouldShowBackendTestButton(backend({ kind: "ollama" }))).toBe(true);
+    expect(shouldShowBackendTestButton(backend({ kind: "antigravity" }))).toBe(true);
   });
 });
 
 describe("autoDetectableBackendIds", () => {
-  it("selects Codex Native and Ollama providers for startup detection regardless of enabled state", () => {
+  it("selects Codex Native, Ollama, and Antigravity providers for startup detection regardless of enabled state", () => {
     expect(
       autoDetectableBackendIds([
         backend({ id: "codex", kind: "codex_native", enabled: true }),
         backend({ id: "ollama", kind: "ollama", enabled: false }),
+        backend({ id: "antigravity", kind: "antigravity", enabled: false }),
         backend({ id: "codex-off", kind: "codex_native", enabled: false }),
         backend({ id: "legacy", kind: "codex_subscription", enabled: true }),
         backend({ id: "openai", kind: "openai_api", enabled: true }),
       ]).sort(),
-    ).toEqual(["codex", "codex-off", "ollama"]);
+    ).toEqual(["antigravity", "codex", "codex-off", "ollama"]);
   });
 });
 

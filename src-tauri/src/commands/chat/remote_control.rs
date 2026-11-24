@@ -300,6 +300,7 @@ fn remote_control_requires_claude_cli_message(harness: AgentBackendRuntimeHarnes
     let harness_label = match harness {
         AgentBackendRuntimeHarness::ClaudeCode => "Claude CLI",
         AgentBackendRuntimeHarness::CodexAppServer => "Codex app-server",
+        AgentBackendRuntimeHarness::AntigravityAcp => "Antigravity ACP",
     };
     format!(
         "Claude Remote Control requires the Claude CLI runtime, but this backend is configured to run through the {harness_label} runtime. \

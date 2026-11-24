@@ -121,6 +121,11 @@ pub async fn launch_codex_login(_workspace_id: Option<String>) -> Result<(), Str
     Err(disabled_error())
 }
 
+#[tauri::command]
+pub async fn launch_antigravity_login(_workspace_id: Option<String>) -> Result<(), String> {
+    Err(disabled_error())
+}
+
 pub async fn resolve_backend_runtime(
     _state: &AppState,
     _backend_id: Option<&str>,

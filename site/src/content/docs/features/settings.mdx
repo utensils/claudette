@@ -34,18 +34,18 @@ Default values applied to all new agent sessions. Per-workspace overrides are av
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Default model | Model for new chats (Opus 5.5, Sonnet 5, Haiku 4.5, Fable 5.2; older models such as Opus 5, Fable 5.1, Fable 5 / Fable 5 1M, Opus 4.8 / 4.7 / 4.6 / 4.5 and Sonnet 4.6 / 4.6 1M remain selectable behind the picker's "More" disclosure) | — |
-| Default effort / Codex intelligence | Claude models use effort levels (`auto`, `low`, `medium`, `high`, `xhigh`, `max` where supported). Codex uses intelligence levels (`low`, `medium`, `high`, `xhigh`). | Auto / High |
-| Default thinking | Enable extended thinking for Claude models. Codex does not expose a reasoning on/off toggle; use Codex intelligence instead. | Off |
-| Show thinking / reasoning blocks | Display Claude thinking blocks or Codex reasoning summaries in the chat UI. | Off |
-| Default plan mode | Start new sessions in plan mode. Claude-compatible sessions use Claude Code plan approval; Codex Native sessions use Codex plan collaboration mode. | Off |
+| Default effort / Codex intelligence | Claude models use effort levels (`auto`, `low`, `medium`, `high`, `xhigh`, `max` where supported). Codex and Antigravity use four levels (`low`, `medium`, `high`, `xhigh`). | Auto / High |
+| Default thinking | Enable extended thinking for Claude models. Codex and Antigravity do not expose a reasoning on/off toggle; use the effort / intelligence selector instead. | Off |
+| Show thinking / reasoning blocks | Display Claude thinking blocks, Codex reasoning summaries, or Antigravity thought chunks in the chat UI. | Off |
+| Default plan mode | Start new sessions in plan mode. Claude-compatible sessions use Claude Code plan approval; Codex Native sessions use Codex plan collaboration mode; Antigravity sessions use ACP `plan` mode. | Off |
 | Default fast mode | Start new sessions in fast mode | Off |
 | Team agents as session tabs | Open Claude Code team agents (`TeamCreate` + `Agent` with a team name) as separate Claudette chat session tabs. | On |
 | Use Claude Code with Chrome | Allow Claude Code to control your Chrome browser. Requires the Claude Code Chrome extension to be installed first. | Off |
-| Agent providers | Show Ollama, OpenAI API, and custom providers in Settings > Models and the chat model picker. Codex and Ollama are auto-enabled when detected unless manually disabled. | On |
+| Agent providers | Show Antigravity, Ollama, OpenAI API, and custom providers in Settings > Models and the chat model picker. Codex, Antigravity, and Ollama are auto-enabled when detected unless manually disabled. | On |
 | Codex | Show `codex app-server --listen stdio://` support and seed Codex models into the picker. Independent from Agent providers. | On |
 | Default backend | Provider used for new chats. | `anthropic` |
 | Claude Code | Checks local Claude Code sign-in state with the official CLI. The refresh button performs an authenticated CLI validation request; sign-in runs `claude auth login`, streams progress back into Claudette, and accepts the pasted browser code when Claude Code asks for one. Used by chat and Usage-panel auth failures. | — |
-| Agent backend cards | Enable, test, authenticate, and refresh model lists for built-in providers such as Claude Code, Codex, Ollama, and OpenAI API. | Provider-specific |
+| Agent backend cards | Enable, test, authenticate, and refresh model lists for built-in providers such as Claude Code, Codex, Antigravity, Ollama, and OpenAI API. | Provider-specific |
 
 See [Agent Configuration](/claudette/features/agent-configuration/) for detailed descriptions of each option.
 
@@ -53,7 +53,7 @@ See [Agent Configuration](/claudette/features/agent-configuration/) for detailed
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Claude Code Usage | Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the composer's usage meter. The meter itself is always visible for Codex / OpenAI / OpenRouter / Ollama sessions (driven by local-aggregate token totals); this toggle only controls whether Claude-family sessions surface real subscription buckets versus a greyed-out click-to-enable affordance. Confirmation dialog warns about Anthropic ToS on enable. | Off |
+| Claude Code Usage | Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the composer's usage meter. The meter itself is always visible for Codex / Antigravity / OpenAI / OpenRouter / Ollama sessions (driven by live quotas where available or local-aggregate token totals); this toggle only controls whether Claude-family sessions surface real subscription buckets versus a greyed-out click-to-enable affordance. Confirmation dialog warns about Anthropic ToS on enable. | Off |
 
 **Claude Code Plugins** and **Community** are their own settings sections (visible by default in the Settings sidebar) rather than flat toggle lists — see [Community Registry & Trust](/claudette/features/community-registry-trust/) for the Community section. Claude Remote Control is reached from the chat composer's overflow menu, not Settings. Legacy Experimental off values for these graduated features are ignored after upgrading and no longer hide their surfaces.
 

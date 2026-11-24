@@ -174,6 +174,7 @@
   "models_backend_refresh": "Atualizar modelos",
   "models_backend_test": "Testar",
   "models_backend_login": "Executar codex login",
+  "models_backend_antigravity_login": "Executar agy login",
   "models_backend_filter_placeholder": "Filtrar {{count}} modelos…",
   "models_backend_filter_status": "Mostrando {{shown}} de {{total}}",
   "models_backend_filter_no_match": "Nenhum modelo corresponde a este filtro",

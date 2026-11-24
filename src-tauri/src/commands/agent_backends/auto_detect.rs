@@ -6,12 +6,15 @@
 
 use std::time::Duration;
 
-use claudette::agent::resolve_codex_path;
+use claudette::agent::{resolve_agy_path, resolve_codex_path};
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind, AgentBackendModel};
 use claudette::db::Database;
 
 use super::config::{apply_discovered_models, backend_models_signature, canonical_backend_id};
-use super::discovery::{codex_cli_command, discover_codex_models, discover_models};
+use super::discovery::{
+    agy_cli_command, codex_cli_command, discover_antigravity_models, discover_codex_models,
+    discover_models,
+};
 
 pub(super) const AUTO_DETECT_DISABLED_PREFIX: &str = "agent_backend_auto_detect_disabled:";
 pub(super) const AUTO_DETECT_TIMEOUT: Duration = Duration::from_millis(900);
@@ -34,7 +37,7 @@ pub(super) fn auto_detect_disabled_key(backend_id: &str) -> String {
 pub(super) fn backend_supports_auto_detect(backend: &AgentBackendConfig) -> bool {
     matches!(
         backend.kind,
-        AgentBackendKind::Ollama | AgentBackendKind::CodexNative
+        AgentBackendKind::Ollama | AgentBackendKind::CodexNative | AgentBackendKind::Antigravity
     )
 }
 
@@ -160,6 +163,63 @@ pub(super) fn codex_startup_models(backend: &AgentBackendConfig) -> Vec<AgentBac
     }
     let mut models = if backend.manual_models.is_empty() {
         AgentBackendConfig::builtin_codex_native().manual_models
+    } else {
+        backend.manual_models.clone()
+    };
+    for model in &mut models {
+        if model.label.trim().is_empty() {
+            model.label = model.id.clone();
+        }
+        if model.context_window_tokens == 0 {
+            model.context_window_tokens = backend.context_window_default;
+        }
+        model.discovered = true;
+    }
+    models
+}
+
+pub(super) async fn probe_antigravity_backend(
+    backend: Option<AgentBackendConfig>,
+) -> BackendAutoDetection {
+    let backend = backend.unwrap_or_else(AgentBackendConfig::builtin_antigravity);
+    let backend_id = backend.id.clone();
+    let detected = match tokio::time::timeout(AUTO_DETECT_TIMEOUT, async {
+        let agy_path = resolve_agy_path().await;
+        let mut command = agy_cli_command(agy_path);
+        command.arg("--version").output().await
+    })
+    .await
+    {
+        Ok(Ok(output)) => output.status.success(),
+        Ok(Err(_)) | Err(_) => false,
+    };
+    let discovered_models = if detected {
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            discover_antigravity_models(&backend),
+        )
+        .await
+        {
+            Ok(Ok(models)) if !models.is_empty() => models,
+            _ => antigravity_startup_models(&backend),
+        }
+    } else {
+        Vec::new()
+    };
+    BackendAutoDetection {
+        backend_id,
+        detected,
+        discovered_models,
+        warning: None,
+    }
+}
+
+pub(super) fn antigravity_startup_models(backend: &AgentBackendConfig) -> Vec<AgentBackendModel> {
+    if !backend.discovered_models.is_empty() {
+        return Vec::new();
+    }
+    let mut models = if backend.manual_models.is_empty() {
+        AgentBackendConfig::builtin_antigravity().manual_models
     } else {
         backend.manual_models.clone()
     };

@@ -268,6 +268,15 @@ pub fn guidance_for(tool: &str) -> MissingCli {
             platform,
             install_options: gh_options(),
         },
+        "agy" => MissingCli {
+            tool: tool.to_string(),
+            display_name: "Antigravity CLI".to_string(),
+            purpose: "Claudette runs Antigravity agents through the `agy` CLI's \
+                ACP server — it needs to be installed and on PATH."
+                .to_string(),
+            platform,
+            install_options: agy_options(),
+        },
         other => MissingCli {
             tool: other.to_string(),
             display_name: other.to_string(),
@@ -357,6 +366,13 @@ fn gh_options() -> Vec<InstallOption> {
             InstallOption::link("Install guide", "https://github.com/cli/cli#installation"),
         ]
     }
+}
+
+fn agy_options() -> Vec<InstallOption> {
+    vec![InstallOption::link(
+        "Install Antigravity CLI",
+        "https://antigravity.google/docs/getting-started",
+    )]
 }
 
 #[cfg(test)]
@@ -530,6 +546,18 @@ mod tests {
         let g = guidance_for("gh");
         assert_eq!(g.tool, "gh");
         assert!(!g.install_options.is_empty());
+    }
+
+    #[test]
+    fn guidance_for_agy_has_install_link() {
+        let g = guidance_for("agy");
+        assert_eq!(g.tool, "agy");
+        assert_eq!(g.display_name, "Antigravity CLI");
+        assert!(g.install_options.iter().any(|o| {
+            o.url
+                .as_deref()
+                .is_some_and(|url| url.contains("antigravity.google"))
+        }));
     }
 
     #[test]

@@ -225,7 +225,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         </button>
       )}
 
-      {!isCodex && (
+      {reasoningVariant === "claude" && (
         <button
           className={`${styles.chip} ${thinkingEnabled ? styles.chipActive : ""}`}
           onClick={toggleThinking}

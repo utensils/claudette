@@ -28,6 +28,10 @@
     "codex_native": {
       "default": "codex_app_server",
       "available": ["codex_app_server"]
+    },
+    "antigravity": {
+      "default": "antigravity_acp",
+      "available": ["antigravity_acp"]
     }
   }
 }

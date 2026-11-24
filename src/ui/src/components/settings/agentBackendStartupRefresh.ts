@@ -8,8 +8,11 @@ export function autoDetectableBackendIds(backends: AgentBackendConfig[]) {
   // Backends the Tauri `auto_detect_agent_backends` command probes at
   // startup via the shared model-discovery probe.
   return backends
-    .filter((backend) =>
-      backend.kind === "codex_native" || backend.kind === "ollama"
+    .filter(
+      (backend) =>
+        backend.kind === "codex_native" ||
+        backend.kind === "ollama" ||
+        backend.kind === "antigravity",
     )
     .map((backend) => backend.id);
 }

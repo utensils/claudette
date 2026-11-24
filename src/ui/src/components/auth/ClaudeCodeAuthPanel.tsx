@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   type AuthErrorProvider,
   type ClaudeAuthLoginController,
+  cleanAntigravityAuthError,
   cleanClaudeAuthError,
   cleanCodexAuthError,
   useClaudeAuthLogin,
@@ -57,16 +58,36 @@ export function ClaudeCodeAuthPanelView({
   const { authState, startAuthLogin, cancelAuthLogin, submitAuthCode } =
     controller;
   const cleanError =
-    provider === "codex" ? cleanCodexAuthError : cleanClaudeAuthError;
+    provider === "codex"
+      ? cleanCodexAuthError
+      : provider === "antigravity"
+        ? cleanAntigravityAuthError
+        : cleanClaudeAuthError;
   const displayError = error ? cleanError(error) : null;
   const titleKey =
-    provider === "codex" ? "auth_panel_title_codex" : "auth_panel_title";
+    provider === "codex"
+      ? "auth_panel_title_codex"
+      : provider === "antigravity"
+        ? "auth_panel_title_antigravity"
+        : "auth_panel_title";
   const descKey =
-    provider === "codex" ? "auth_panel_desc_codex" : "auth_panel_desc";
+    provider === "codex"
+      ? "auth_panel_desc_codex"
+      : provider === "antigravity"
+        ? "auth_panel_desc_antigravity"
+        : "auth_panel_desc";
   const signingInKey =
-    provider === "codex" ? "auth_signing_in_codex" : "auth_signing_in";
+    provider === "codex"
+      ? "auth_signing_in_codex"
+      : provider === "antigravity"
+        ? "auth_signing_in_antigravity"
+        : "auth_signing_in";
   const signingInHintKey =
-    provider === "codex" ? "auth_signing_in_hint_codex" : "auth_signing_in_hint";
+    provider === "codex"
+      ? "auth_signing_in_hint_codex"
+      : provider === "antigravity"
+        ? "auth_signing_in_hint_antigravity"
+        : "auth_signing_in_hint";
 
   return (
     <div className={styles.authPanel}>

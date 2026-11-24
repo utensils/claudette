@@ -33,6 +33,7 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
   const currentModel = useSelectedModelEntry(sessionId);
   const reasoningVariant = reasoningVariantForModel(currentModel);
   const isCodex = reasoningVariant === "codex";
+  const usesModelProvidedReasoning = reasoningVariant !== "claude";
   const showEffort = currentModel?.supportsEffort ?? isEffortSupported(selectedModel);
   const normalizedEffort = normalizeReasoningLevel(
     effortLevel,
@@ -44,10 +45,10 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
     selectedModel,
     reasoningVariant,
   );
-  const canToggleReasoning = !isCodex;
-  // Codex reasoning is model-provided; its active styling tracks whether
-  // the UI is currently showing the streamed reasoning summaries.
-  const isActive = isCodex ? showThinkingBlocks : thinkingEnabled;
+  const canToggleReasoning = !usesModelProvidedReasoning;
+  // Codex and Antigravity reasoning are model-provided; their active styling
+  // tracks whether the UI is currently showing the streamed reasoning blocks.
+  const isActive = usesModelProvidedReasoning ? showThinkingBlocks : thinkingEnabled;
 
   const openDropdown = useCallback(() => {
     if (!disabled) setDropdownOpen(true);

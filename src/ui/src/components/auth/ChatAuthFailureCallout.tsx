@@ -4,6 +4,7 @@ import { ClaudeCodeAuthPanelView } from "./ClaudeCodeAuthPanel";
 import {
   type AuthErrorProvider,
   classifyAuthError,
+  useAntigravityAuthLogin,
   useClaudeAuthLogin,
   useClaudeAuthRecovery,
   useCodexAuthLogin,
@@ -45,8 +46,15 @@ export function ChatAuthFailureCallout({
   const codexController = useCodexAuthLogin({
     onSuccess: markAuthRecovered,
   });
+  const antigravityController = useAntigravityAuthLogin({
+    onSuccess: markAuthRecovered,
+  });
   const controller =
-    provider === "codex" ? codexController : claudeController;
+    provider === "codex"
+      ? codexController
+      : provider === "antigravity"
+        ? antigravityController
+        : claudeController;
   const {
     authState,
     startAuthLogin: startControllerAuthLogin,

@@ -48,6 +48,7 @@ export interface NativeCommandContext {
   addLocalMessage: (text: string) => void;
   startClaudeAuthLogin: () => Promise<void>;
   startCodexLogin: () => Promise<void>;
+  startAntigravityLogin?: () => Promise<void>;
   openUsageSettingsExternal: () => void;
   openReleaseNotes: () => void;
 
@@ -377,12 +378,20 @@ function formatCommandError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function loginTargetForProvider(providerId: string): "claude" | "codex" {
-  return providerId === "codex" ||
+function loginTargetForProvider(
+  providerId: string,
+): "claude" | "codex" | "antigravity" {
+  if (
+    providerId === "codex" ||
     providerId === "experimental-codex" ||
     providerId === "codex-subscription"
-    ? "codex"
-    : "claude";
+  ) {
+    return "codex";
+  }
+  if (providerId === "antigravity") {
+    return "antigravity";
+  }
+  return "claude";
 }
 
 const loginHandler: NativeHandler = {
@@ -401,6 +410,11 @@ const loginHandler: NativeHandler = {
         await ctx.startCodexLogin();
         ctx.addLocalMessage(
           "Codex sign-in opened. Complete the browser flow, then retry the turn.",
+        );
+      } else if (target === "antigravity" && ctx.startAntigravityLogin) {
+        await ctx.startAntigravityLogin();
+        ctx.addLocalMessage(
+          "Antigravity sign-in opened. Complete the browser flow, then retry the turn.",
         );
       } else {
         await ctx.startClaudeAuthLogin();

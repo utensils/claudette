@@ -74,6 +74,7 @@ describe("resolveIndicatorMode", () => {
     const alwaysActive: AgentBackendKind[] = [
       "codex_native",
       "codex_subscription",
+      "antigravity",
       "openai_api",
       "custom_openai",
       "ollama",

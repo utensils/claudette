@@ -140,6 +140,7 @@ pub(super) fn apply_discovered_models(
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
             | AgentBackendKind::CodexNative
+            | AgentBackendKind::Antigravity
     );
     if clears_manual && !discovered.is_empty() {
         backend.manual_models.clear();
@@ -608,6 +609,7 @@ pub(super) fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackend
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
             | AgentBackendKind::CodexNative
+            | AgentBackendKind::Antigravity
     );
     if model_discovery_kinds {
         backend.model_discovery = true;
@@ -689,6 +691,7 @@ pub(super) fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
         AgentBackendKind::OpenAiApi => "openai_api",
         AgentBackendKind::CodexSubscription => "codex_subscription",
         AgentBackendKind::CodexNative => "codex_native",
+        AgentBackendKind::Antigravity => "antigravity",
         AgentBackendKind::CustomAnthropic => "custom_anthropic",
         AgentBackendKind::CustomOpenAi => "custom_openai",
     }
@@ -698,5 +701,6 @@ fn harness_hash_key(harness: AgentBackendRuntimeHarness) -> &'static str {
     match harness {
         AgentBackendRuntimeHarness::ClaudeCode => "claude_code",
         AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
+        AgentBackendRuntimeHarness::AntigravityAcp => "antigravity_acp",
     }
 }

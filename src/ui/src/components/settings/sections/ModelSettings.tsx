@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   deleteAppSetting,
   getAppSetting,
+  launchAntigravityLogin,
   launchCodexLogin,
   listAgentBackends,
   listAppSettingsWithPrefix,
@@ -425,7 +426,7 @@ export function ModelSettings() {
                 ariaLabel={t("models_default_model")}
               />
             </div>
-            {!isCodex && (
+            {reasoningVariant === "claude" && (
               <select
                 className={`${styles.select} ${styles.selectWide}`}
                 value={defaultThinking ? "true" : "false"}
@@ -713,8 +714,10 @@ function BackendCard({
   const manualModelText = manualModels.map((m) => m.id).join(", ");
   const discoveryBackend = isDiscoveryBackend(draft);
   const usesCodexCliAuth = draft.kind === "codex_subscription" || draft.kind === "codex_native";
-  const showBaseUrl = !usesCodexCliAuth;
-  const showSecret = !usesCodexCliAuth;
+  const usesAntigravityCliAuth = draft.kind === "antigravity";
+  const usesCliAuth = usesCodexCliAuth || usesAntigravityCliAuth;
+  const showBaseUrl = !usesCliAuth;
+  const showSecret = !usesCliAuth;
   const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
   const showTestButton = shouldShowBackendTestButton(draft);
   const actualModelCount = countBackendModels(draft);
@@ -992,6 +995,15 @@ function BackendCard({
               {t("models_backend_login")}
             </button>
           )}
+          {usesAntigravityCliAuth && (
+            <button
+              className={styles.iconBtn}
+              onClick={() => void launchAntigravityLogin()}
+              disabled={busy}
+            >
+              {t("models_backend_antigravity_login")}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1021,6 +1033,7 @@ function isDiscoveryBackend(backend: AgentBackendConfig) {
     backend.model_discovery ||
     backend.kind === "ollama" ||
     backend.kind === "openai_api" ||
-    backend.kind === "codex_native"
+    backend.kind === "codex_native" ||
+    backend.kind === "antigravity"
   );
 }
