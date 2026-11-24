@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent_backend::AgentBackendRuntime;
 
+pub use crate::model::SubagentRunUpdate;
 pub use antigravity_acp::{
     AntigravityAcpOptions, AntigravityAcpSession, AntigravityPermissionLevel,
     apply_antigravity_acp_env, build_antigravity_approval_response_payload,
@@ -42,7 +43,6 @@ pub use harness::{
 pub use naming::{
     generate_branch_name, generate_session_name, persist_claude_custom_title, sanitize_branch_name,
 };
-pub use crate::model::SubagentRunUpdate;
 pub use process::{AgentEvent, TurnHandle, run_turn, stop_agent, stop_agent_graceful};
 pub use session::PersistentSession;
 pub use types::{
