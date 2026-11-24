@@ -21,9 +21,13 @@ Like every other scroll surface in Claudette, the Tasks list does not elastic-bo
 
 ## Subagent Tasks
 
-When the main agent spawns subagents (via Claude Code's `TaskCreate` / agent-teams flow), each subagent's own task list renders in its own section above **History**, labeled with the subagent's name. The main agent's checklist stays in **Current**; subagent buckets are kept separate so the two never collide. Once a subagent finishes (status leaves `running`), its bucket is archived into **History** under the owning session.
+A delegated agent appears in **Tasks** even when its assignment needs no checklist. Open the agent summary in chat to see the workers, their latest status, and any results or milestones they reported. A child can continue running after the parent answers. The stored status is the last observation Claudette received.
 
-Subagent labels are derived from the agent's `description` field and capped at one line / 80 characters so long spawn prompts don't blow up the layout. Hover the label to see the full single-line collapse of the original description.
+- **Claude Code** supplies agent lifecycle events and can show nested tool activity and checklists.
+- **Codex** identifies each worker by its thread. Spawning or waiting on several workers can update each one independently.
+- **Antigravity** can expose a delegation without a child conversation ID. In that case Claudette shows **Delegated**. The launch call returning only confirms the handoff.
+
+An agent can report a milestone, a blocker, or a result through Claudette. A reported result and the provider's completion state appear separately. Reopening the chat or reconnecting to a shared desktop reloads the saved run details.
 
 ## Sibling Sessions
 
