@@ -10,7 +10,6 @@ import { getPendingSubagentControls, type SubagentControl } from "../../services
 import { submitAgentAnswer } from "../../services/tauri";
 import { subagentSessionKey } from "../../types/subagent";
 
-vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("../../services/tauri", async (original) => ({ ...await original<typeof import("../../services/tauri")>(), submitAgentAnswer: vi.fn(), submitAgentApproval: vi.fn() }));
 vi.mock("../../services/tauri/subagentRuns", () => ({ getPendingSubagentControls: vi.fn() }));
 
