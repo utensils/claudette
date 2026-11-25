@@ -326,10 +326,12 @@ function FieldLabel({ field, htmlFor }: FieldLabelProps) {
     <label className={styles.labelGroup} htmlFor={htmlFor}>
       <span className={styles.labelText}>
         {field.label} <span className={styles.envKey}>({field.key})</span>
-        {optional && <span className={styles.optional}>
+        {optional && (
+          <span className={styles.optional}>
             {" "}
             {t("required_inputs_optional")}
-          </span>}
+          </span>
+        )}
       </span>
       {field.description && (
         <span className={styles.description}>{field.description}</span>

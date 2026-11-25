@@ -93,5 +93,9 @@
   "remote_needs_repair": "{{name}} n'accepte plus cet appareil — appairez-le à nouveau avec son jeton",
   "remote_cancel_reconnect": "Arrêter la reconnexion",
   "remote_revoke_failed": "{{name}} retiré, mais son accès n'a pas pu y être révoqué ({{error}}). Utilisez {{reset}} sur cette machine pour le révoquer.",
-  "scheduler_status": "{{looping}} en boucle · {{scheduled}} planifiées · {{attention}} à traiter"
+  "scheduler_status": "{{looping}} en boucle · {{scheduled}} planifiées · {{attention}} à traiter",
+  "sort_workspaces_auto": "Trier automatiquement les espaces de travail",
+  "create_workspace_failed": "Échec de la création de l'espace de travail : {{error}}",
+  "start_server_failed": "Échec du démarrage du serveur : {{error}}",
+  "remote_invalid_workspace": "Le serveur distant a renvoyé un espace de travail invalide"
 }

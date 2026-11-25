@@ -25,7 +25,7 @@ import styles from "./Sidebar.module.css";
 
 /** "Nearby" (unpaired mDNS servers) and saved remote connections. */
 export function RemoteSections() {
-  const { t } = useTranslation(["sidebar", "common"]);
+  const { t } = useTranslation("sidebar");
   const { t: tModals } = useTranslation("modals");
   const discoveredServers = useAppStore((s) => s.discoveredServers);
   const remoteConnections = useAppStore((s) => s.remoteConnections);
@@ -190,7 +190,7 @@ function RemoteConnectionGroup({
   onCancelReconnect: () => void;
   onRemove: () => void;
 }) {
-  const { t } = useTranslation(["sidebar", "common"]);
+  const { t } = useTranslation("sidebar");
   const repositories = useAppStore((s) => s.repositories);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
@@ -229,7 +229,7 @@ function RemoteConnectionGroup({
       // the bare row older servers return.
       const wsPayload = extractRemoteWorkspace(result);
       if (!wsPayload) {
-        throw new Error(t("common:sidebar_remote_invalid_workspace"));
+        throw new Error(t("remote_invalid_workspace"));
       }
       const ws: Workspace = {
         ...wsPayload,

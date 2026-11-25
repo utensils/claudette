@@ -93,5 +93,9 @@
   "remote_needs_repair": "{{name}} no longer accepts this device — pair again with its token",
   "remote_cancel_reconnect": "Stop reconnecting",
   "remote_revoke_failed": "Removed {{name}}, but couldn't revoke its access there ({{error}}). Use {{reset}} on that machine to revoke it.",
-  "scheduler_status": "{{looping}} looping · {{scheduled}} scheduled · {{attention}} need attention"
+  "scheduler_status": "{{looping}} looping · {{scheduled}} scheduled · {{attention}} need attention",
+  "sort_workspaces_auto": "Sort Workspaces Automatically",
+  "create_workspace_failed": "Failed to create workspace: {{error}}",
+  "start_server_failed": "Failed to start server: {{error}}",
+  "remote_invalid_workspace": "Remote server returned an invalid workspace"
 }
