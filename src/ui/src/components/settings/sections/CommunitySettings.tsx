@@ -16,6 +16,7 @@ import {
 import { refreshGrammars } from "../../../utils/grammarRegistry";
 import { openUrl } from "../../../services/tauri";
 import styles from "../Settings.module.css";
+import { Trans, useTranslation } from "react-i18next";
 import own from "./CommunitySettings.module.css";
 
 /// Tauri's webview blocks raw <a href> navigation to external origins.
@@ -33,15 +34,24 @@ function handleExternalLink(href: string) {
 
 type Tab = "browse" | "installed";
 
-const KIND_FILTERS: { id: "all" | ContributionKindWire; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "theme", label: "Themes" },
-  { id: "plugin:scm", label: "SCM" },
-  { id: "plugin:env-provider", label: "Env providers" },
-  { id: "plugin:language-grammar", label: "Languages" },
+const KIND_FILTERS: {
+  id: "all" | ContributionKindWire;
+  labelKey:
+    | "community_filter_all"
+    | "community_filter_themes"
+    | "community_filter_scm"
+    | "community_filter_env_providers"
+    | "community_filter_languages";
+}[] = [
+  { id: "all", labelKey: "community_filter_all" },
+  { id: "theme", labelKey: "community_filter_themes" },
+  { id: "plugin:scm", labelKey: "community_filter_scm" },
+  { id: "plugin:env-provider", labelKey: "community_filter_env_providers" },
+  { id: "plugin:language-grammar", labelKey: "community_filter_languages" },
 ];
 
 export function CommunitySettings() {
+  const { t } = useTranslation("settings");
   const [tab, setTab] = useState<Tab>("browse");
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [installed, setInstalled] = useState<InstalledContribution[] | null>(null);
@@ -147,23 +157,25 @@ export function CommunitySettings() {
 
   return (
     <div className={own.section}>
-      <h2 className={styles.sectionTitle}>Community</h2>
+      <h2 className={styles.sectionTitle}>{t("nav_community")}</h2>
       <div className={styles.settingDescription}>
-        Browse and install community-contributed themes, plugins, and language
-        grammars from{" "}
-        <a
-          href="https://github.com/utensils/claudette-community"
-          target="_blank"
-          rel="noreferrer"
-          className={own.link}
-          onClick={handleExternalLink(
-            "https://github.com/utensils/claudette-community",
-          )}
-        >
-          utensils/claudette-community
-        </a>
-        . Each install is verified against the published content hash before
-        anything lands on disk.
+        <Trans
+          i18nKey="community_description"
+          ns="settings"
+          components={{
+            repo: (
+              <a
+                href="https://github.com/utensils/claudette-community"
+                target="_blank"
+                rel="noreferrer"
+                className={own.link}
+                onClick={handleExternalLink(
+                  "https://github.com/utensils/claudette-community",
+                )}
+              />
+            ),
+          }}
+        />
       </div>
 
       {pendingReconsent.length > 0 && (
@@ -174,17 +186,15 @@ export function CommunitySettings() {
               <li key={p.ident} className={own.row}>
                 <div className={own.rowHeader}>
                   <strong>{p.display_name}</strong>
-                  <span className={own.meta}>needs re-consent</span>
+                  <span className={own.meta}>{t("community_needs_reconsent")}</span>
                 </div>
                 <p className={own.description}>
-                  This plugin's update requested new CLI capabilities. The
-                  plugin is blocked from running until you review and
-                  approve.
+                  {t("community_reconsent_description")}
                 </p>
                 <p className={own.meta}>
-                  Already approved:{" "}
+                  {t("community_already_approved")}{" "}
                   {p.granted.length === 0 ? (
-                    <em>none</em>
+                    <em>{t("community_none")}</em>
                   ) : (
                     p.granted.map((c) => (
                       <code key={c} className={own.cli}>
@@ -194,7 +204,7 @@ export function CommunitySettings() {
                   )}
                 </p>
                 <p className={own.meta}>
-                  New capabilities requested:{" "}
+                  {t("community_new_capabilities")}{" "}
                   {p.missing.map((c) => (
                     <code key={c} className={own.cli}>
                       {c}
@@ -208,7 +218,7 @@ export function CommunitySettings() {
                     disabled={isBusy}
                     onClick={() => handleApproveReconsent(p.ident)}
                   >
-                    {isBusy ? "Approving…" : "Approve new capabilities"}
+                    {isBusy ? t("community_approving") : t("community_approve")}
                   </button>
                   <button
                     type="button"
@@ -216,7 +226,7 @@ export function CommunitySettings() {
                     disabled={isBusy}
                     onClick={() => handleUninstall(p.kind, p.ident)}
                   >
-                    Uninstall
+                    {t("community_uninstall")}
                   </button>
                 </div>
               </li>
@@ -231,14 +241,14 @@ export function CommunitySettings() {
           className={tab === "browse" ? own.tabActive : own.tab}
           onClick={() => setTab("browse")}
         >
-          Browse
+          {t("community_tab_browse")}
         </button>
         <button
           type="button"
           className={tab === "installed" ? own.tabActive : own.tab}
           onClick={() => setTab("installed")}
         >
-          Installed
+          {t("community_installed")}
           {installed && installed.length > 0 ? (
             <span className={own.badge}>{installed.length}</span>
           ) : null}
@@ -250,7 +260,7 @@ export function CommunitySettings() {
           onClick={() => void refresh()}
           disabled={loading}
         >
-          {loading ? "Refreshing…" : "Refresh"}
+          {loading ? t("community_refreshing") : t("community_refresh")}
         </button>
       </div>
 
@@ -303,6 +313,7 @@ function BrowseTab({
   onUninstall,
   registrySha,
 }: BrowseTabProps) {
+  const { t } = useTranslation("settings");
   return (
     <>
       <div className={own.filterRow}>
@@ -313,20 +324,20 @@ function BrowseTab({
             className={filterKind === f.id ? own.filterActive : own.filter}
             onClick={() => onFilterChange(f.id)}
           >
-            {f.label}
+            {t(f.labelKey)}
           </button>
         ))}
         {registrySha ? (
           <span className={own.regSha}>
-            Registry @ <code>{registrySha.slice(0, 7)}</code>
+            {t("community_registry_at")} <code>{registrySha.slice(0, 7)}</code>
           </span>
         ) : null}
       </div>
 
       {loading && entries.length === 0 ? (
-        <p className={own.subtle}>Loading registry…</p>
+        <p className={own.subtle}>{t("community_loading_registry")}</p>
       ) : entries.length === 0 ? (
-        <p className={own.subtle}>No contributions match this filter.</p>
+        <p className={own.subtle}>{t("community_no_match")}</p>
       ) : (
         <ul className={own.list}>
           {entries.map((e) => {
@@ -345,13 +356,13 @@ function BrowseTab({
                   ) : null}
                   <strong>{e.display_name}</strong>
                   <span className={own.meta}>v{e.version}</span>
-                  <span className={own.meta}>· by {e.author}</span>
+                  <span className={own.meta}>· {t("community_by_author", { author: e.author })}</span>
                   <span className={own.meta}>· {e.license}</span>
                 </div>
                 <p className={own.description}>{e.description}</p>
                 {e.required_clis && e.required_clis.length > 0 ? (
                   <p className={own.meta}>
-                    Requires CLI:{" "}
+                    {t("community_requires_cli")}{" "}
                     {e.required_clis.map((c) => (
                       <code key={c} className={own.cli}>
                         {c}
@@ -362,14 +373,14 @@ function BrowseTab({
                 <div className={own.actions}>
                   {isInstalled ? (
                     <>
-                      <span className={own.installedBadge}>Installed</span>
+                      <span className={own.installedBadge}>{t("community_installed_badge")}</span>
                       <button
                         type="button"
                         className={own.dangerButton}
                         disabled={isBusy}
                         onClick={() => onUninstall(e.kind, e.ident)}
                       >
-                        {isBusy ? "Removing…" : "Uninstall"}
+                        {isBusy ? t("community_removing") : t("community_uninstall")}
                       </button>
                     </>
                   ) : (
@@ -379,7 +390,7 @@ function BrowseTab({
                       disabled={isBusy}
                       onClick={() => onInstall(e.kind, e.ident)}
                     >
-                      {isBusy ? "Installing…" : "Install"}
+                      {isBusy ? t("community_installing") : t("community_install")}
                     </button>
                   )}
                 </div>
@@ -405,11 +416,11 @@ function InstalledTab({
   busyIdent,
   onUninstall,
 }: InstalledTabProps) {
+  const { t } = useTranslation("settings");
   if (installed.length === 0 && !loading) {
     return (
       <p className={own.subtle}>
-        Nothing installed yet. Switch to the Browse tab to install themes,
-        plugins, or language grammars.
+        {t("community_nothing_installed")}
       </p>
     );
   }
@@ -423,13 +434,17 @@ function InstalledTab({
             <div className={own.rowHeader}>
               <strong>{i.display_name}</strong>
               <span className={own.meta}>v{i.version}</span>
-              {i.author ? <span className={own.meta}>· by {i.author}</span> : null}
+              {i.author ? <span className={own.meta}>· {t("community_by_author", { author: i.author })}</span> : null}
               {i.license ? <span className={own.meta}>· {i.license}</span> : null}
               <span className={own.meta}>· {i.kind}</span>
             </div>
             <p className={own.meta}>
-              Installed {formatDate(i.installed_at)} · sha256{" "}
-              <code className={own.cli}>{i.sha256.slice(0, 12)}…</code>
+              <Trans
+                i18nKey="community_installed_meta"
+                ns="settings"
+                values={{ date: formatDate(i.installed_at), hash: i.sha256.slice(0, 12) }}
+                components={{ code: <code className={own.cli} /> }}
+              />
             </p>
             <div className={own.actions}>
               <button
@@ -438,7 +453,7 @@ function InstalledTab({
                 disabled={isBusy}
                 onClick={() => onUninstall(i.kind as ContributionKindWire, i.ident)}
               >
-                {isBusy ? "Removing…" : "Uninstall"}
+                {isBusy ? t("community_removing") : t("community_uninstall")}
               </button>
             </div>
           </li>

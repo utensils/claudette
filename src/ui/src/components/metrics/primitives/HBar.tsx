@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 
 interface HBarProps {
@@ -13,6 +14,7 @@ export function HBar({
   width = 100,
   height = 8,
 }: HBarProps) {
+  const { t } = useTranslation();
   const total = additions + deletions;
   if (total === 0) {
     return (
@@ -21,7 +23,7 @@ export function HBar({
         viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="none"
         role="img"
-        aria-label="churn"
+        aria-label={t("metrics_churn_aria")}
       >
         <rect
           className={styles.barTrack}

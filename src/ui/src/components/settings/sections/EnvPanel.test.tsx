@@ -51,6 +51,7 @@ vi.mock("../../../hooks/useCopyToClipboard", () => ({
   useCopyToClipboard: () => [false, vi.fn()],
 }));
 
+import "../../../i18n";
 import { EnvPanel } from "./EnvPanel";
 import { useAppStore } from "../../../stores/useAppStore";
 

@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import styles from "./MermaidBlock.module.css";
 
 // Mermaid is heavy (~700 KB minified). Defer loading until a diagram is
@@ -72,6 +73,7 @@ interface Props {
  * syntax in a markdown file.
  */
 export const MermaidBlock = memo(function MermaidBlock({ source }: Props) {
+  const { t } = useTranslation("chat");
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -116,7 +118,7 @@ export const MermaidBlock = memo(function MermaidBlock({ source }: Props) {
   if (error) {
     return (
       <div className={styles.error}>
-        <div className={styles.errorLabel}>Mermaid diagram failed to render</div>
+        <div className={styles.errorLabel}>{t("mermaid_failed")}</div>
         <pre className={styles.errorSource}>{source}</pre>
         <div className={styles.errorMessage}>{error}</div>
       </div>
@@ -124,7 +126,7 @@ export const MermaidBlock = memo(function MermaidBlock({ source }: Props) {
   }
 
   if (svg === null) {
-    return <div className={styles.loading}>Rendering diagram…</div>;
+    return <div className={styles.loading}>{t("mermaid_rendering")}</div>;
   }
 
   return (

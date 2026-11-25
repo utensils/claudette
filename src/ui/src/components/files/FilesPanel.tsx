@@ -6,6 +6,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import type { FileEntry } from "../../services/tauri";
 import { isPendingPlaceholderWorkspace } from "../../utils/workspaceEnvironment";
@@ -29,6 +30,7 @@ import { useFilePathActions } from "./useFilePathActions";
 import styles from "./FilesPanel.module.css";
 
 export function FilesPanel() {
+  const { t } = useTranslation("modals");
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
   // Optimistic-fork / optimistic-create placeholders have no backing
@@ -303,19 +305,19 @@ export function FilesPanel() {
   );
 
   if (!selectedWorkspaceId) {
-    return <div className={styles.empty}>No workspace selected</div>;
+    return <div className={styles.empty}>{t("files_no_workspace")}</div>;
   }
 
   return (
     <div className={styles.panel} onKeyDownCapture={handlePanelKeyDownCapture}>
       {loading ? (
-        <div className={styles.empty}>Loading…</div>
+        <div className={styles.empty}>{t("files_loading")}</div>
       ) : error && entries.length === 0 ? (
-        <div className={styles.empty}>Failed to load: {error}</div>
+        <div className={styles.empty}>{t("files_load_failed", { error })}</div>
       ) : (
         <>
           {error && (
-            <div className={styles.refreshError}>Refresh failed: {error}</div>
+            <div className={styles.refreshError}>{t("files_refresh_failed", { error })}</div>
           )}
           <FileTree
             workspaceId={selectedWorkspaceId}
@@ -334,7 +336,9 @@ export function FilesPanel() {
                 return true;
               } catch (err) {
                 console.error("Failed to create file:", err);
-                useAppStore.getState().addToast(`Create file failed: ${String(err)}`);
+                useAppStore.getState().addToast(
+                  t("files_create_failed", { error: String(err) }),
+                );
                 return false;
               }
             }}
@@ -351,7 +355,9 @@ export function FilesPanel() {
                 return true;
               } catch (err) {
                 console.error("Failed to rename file:", err);
-                useAppStore.getState().addToast(`Rename failed: ${String(err)}`);
+                useAppStore.getState().addToast(
+                  t("files_rename_failed", { error: String(err) }),
+                );
                 return false;
               }
             }}

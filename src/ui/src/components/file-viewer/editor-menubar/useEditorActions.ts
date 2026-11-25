@@ -1,6 +1,7 @@
 import { useMemo, type MutableRefObject } from "react";
 import type { editor as MonacoNs } from "monaco-editor";
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
+import i18n from "../../../i18n";
 import { useAppStore } from "../../../stores/useAppStore";
 import { fileBufferKey } from "../../../stores/slices/fileTreeSlice";
 import { setAppSetting } from "../../../services/tauri";
@@ -217,10 +218,12 @@ export function buildEditorActions(deps: EditorActionsDeps): EditorActions {
     const value = model.getValue();
     try {
       await deps.writeToClipboard(value);
-      deps.addToast("Copied file contents");
+      deps.addToast(i18n.t("modals:editor_toast_copied_contents"));
     } catch (err) {
       console.error("Copy contents failed:", err);
-      deps.addToast(`Copy failed: ${String(err)}`);
+      deps.addToast(
+        i18n.t("modals:editor_toast_copy_failed", { error: String(err) }),
+      );
     }
   };
 
@@ -230,20 +233,24 @@ export function buildEditorActions(deps: EditorActionsDeps): EditorActions {
       : deps.path;
     try {
       await deps.writeToClipboard(target);
-      deps.addToast("Copied path");
+      deps.addToast(i18n.t("modals:files_toast_copied_path"));
     } catch (err) {
       console.error("Copy path failed:", err);
-      deps.addToast(`Copy failed: ${String(err)}`);
+      deps.addToast(
+        i18n.t("modals:editor_toast_copy_failed", { error: String(err) }),
+      );
     }
   };
 
   const onCopyRelativePath = async () => {
     try {
       await deps.writeToClipboard(deps.path);
-      deps.addToast("Copied relative path");
+      deps.addToast(i18n.t("modals:files_toast_copied_relative_path"));
     } catch (err) {
       console.error("Copy relative path failed:", err);
-      deps.addToast(`Copy failed: ${String(err)}`);
+      deps.addToast(
+        i18n.t("modals:editor_toast_copy_failed", { error: String(err) }),
+      );
     }
   };
 

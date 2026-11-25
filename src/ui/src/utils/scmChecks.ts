@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import type { CiCheck, PullRequest, ScmSummary } from "../types/plugin";
 
 export type CiCheckTone =
@@ -34,15 +35,15 @@ const STATUS_PRIORITY: Record<CiCheckTone, number> = {
 export function ciCheckStatusLabel(status: CiCheckTone): string {
   switch (status) {
     case "success":
-      return "Passed";
+      return i18n.t("modals:scm_check_passed");
     case "failure":
-      return "Failing";
+      return i18n.t("modals:scm_check_failing");
     case "pending":
-      return "Running";
+      return i18n.t("modals:scm_check_running");
     case "cancelled":
-      return "Cancelled";
+      return i18n.t("modals:scm_check_cancelled");
     case "skipped":
-      return "Skipped";
+      return i18n.t("modals:scm_check_skipped");
   }
 }
 
@@ -53,19 +54,19 @@ export function summarizeCiChecks(checks: readonly CiCheck[]): CiCheckSummary {
   const skipped = checks.filter((check) => check.status === "skipped").length;
   const passed = checks.filter((check) => check.status === "success").length;
 
-  let title = "Checks";
+  let title = i18n.t("modals:scm_checks_title");
   if (failed > 0) {
-    title = failed === 1 ? "1 check failing" : `${failed} checks failing`;
+    title = i18n.t("modals:scm_checks_failing", { count: failed });
   } else if (pending > 0) {
-    title = pending === 1 ? "1 check running" : `${pending} checks running`;
+    title = i18n.t("modals:scm_checks_running", { count: pending });
   } else if (cancelled > 0) {
-    title = cancelled === 1 ? "1 check cancelled" : `${cancelled} checks cancelled`;
+    title = i18n.t("modals:scm_checks_cancelled", { count: cancelled });
   } else if (checks.length > 0) {
     // All-skipped: rare in practice (CI has at least one always-on job)
     // but valid in test PRs and small repos. Surface it as "passed" for
     // the title since nothing is failing or running, then disambiguate
     // in the per-check rows below.
-    title = checks.length === 1 ? "1 check passed" : "Checks passed";
+    title = i18n.t("modals:scm_checks_passed", { count: checks.length });
   }
 
   return {

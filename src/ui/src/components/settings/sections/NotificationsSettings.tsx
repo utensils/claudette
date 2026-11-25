@@ -240,7 +240,7 @@ export function NotificationsSettings() {
         "claudette/test-workspace",
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Command failed");
+      setError(e instanceof Error ? e.message : t("notifications_command_failed"));
     }
   };
 
@@ -461,7 +461,11 @@ export function NotificationsSettings() {
                 >
                   {availableSounds.map((s) => (
                     <option key={s} value={s}>
-                      {s}
+                      {s === "Default"
+                        ? t("notifications_sound_default")
+                        : s === "None"
+                          ? t("notifications_sound_none")
+                          : s}
                     </option>
                   ))}
                 </select>

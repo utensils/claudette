@@ -5,6 +5,7 @@ import {
   GitPullRequestDraft,
   type LucideIcon,
 } from "lucide-react";
+import i18n from "../../i18n";
 import type { ScmSummary } from "../../types/plugin";
 
 /**
@@ -58,7 +59,12 @@ export function resolveScmPrIcon(
   return {
     Icon,
     color,
-    title: `PR: ${prState}${ciState ? `, CI: ${ciState}` : ""}`,
+    title: ciState
+      ? i18n.t("pr_status_title_ci", {
+          state: i18n.t(`pr_state_${prState}`),
+          ci: i18n.t(`ci_state_${ciState}`),
+        })
+      : i18n.t("pr_status_title", { state: i18n.t(`pr_state_${prState}`) }),
     prState,
     ciState,
   };

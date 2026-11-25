@@ -1,4 +1,5 @@
 import type { Dispatch, MouseEvent, SetStateAction } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   copyAttachmentToClipboard,
@@ -44,6 +45,7 @@ export function ChatPanelAttachmentOverlays({
   setLightbox,
   shareSupported,
 }: ChatPanelAttachmentOverlaysProps) {
+  const { t } = useTranslation("chat");
   return (
     <>
       {attachmentMenu && (() => {
@@ -96,7 +98,7 @@ export function ChatPanelAttachmentOverlays({
                   ]
                 : [
                     {
-                      label: "Open with default app",
+                      label: t("attachment_menu_open_default_app"),
                       onSelect: () => {
                         withBytes()
                           .then(openAttachmentWithDefaultApp)
@@ -109,7 +111,7 @@ export function ChatPanelAttachmentOverlays({
               ...(shareSupported
                 ? [
                     {
-                      label: "Share…",
+                      label: t("share"),
                       onSelect: () => {
                         withBytes()
                           .then(shareAttachment)

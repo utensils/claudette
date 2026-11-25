@@ -9,6 +9,7 @@ import {
 } from "./claudeAuth";
 import { ClaudeAuthCodeForm } from "./ClaudeAuthCodeForm";
 import { getClaudeAuthStatus, type ClaudeAuthStatus } from "../../services/tauri";
+import i18n from "../../i18n";
 import { useAppStore } from "../../stores/useAppStore";
 import styles from "../settings/Settings.module.css";
 
@@ -56,7 +57,7 @@ export function ClaudeCodeAuthSetting() {
         const value = await refreshStatus(true);
         if (value?.state !== "signed_in" || !value.verified) {
           throw new Error(
-            value?.message ?? "Claude Code sign-in could not be verified.",
+            value?.message ?? i18n.t("modals:auth_verify_failed"),
           );
         }
       },

@@ -1,4 +1,5 @@
 import { CircleDot } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ResolvedWorkspaceLink } from "./workspaceScmLink";
 import styles from "./RepoListsSection.module.css";
@@ -12,13 +13,14 @@ export interface WorkspaceLinkBadgeProps {
 /// that workspace. `stopPropagation` keeps the click off the row's
 /// open-in-browser handler.
 export function WorkspaceLinkBadge({ link }: WorkspaceLinkBadgeProps) {
+  const { t } = useTranslation();
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   return (
     <button
       type="button"
       className={styles.workspaceBadge}
-      title={`In progress in workspace “${link.workspaceName}” — click to open`}
-      aria-label={`Go to workspace ${link.workspaceName}`}
+      title={t("repo_link_badge_title", { name: link.workspaceName })}
+      aria-label={t("repo_link_badge_aria", { name: link.workspaceName })}
       onClick={(e) => {
         e.stopPropagation();
         selectWorkspace(link.workspaceId);

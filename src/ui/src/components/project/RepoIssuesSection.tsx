@@ -6,6 +6,7 @@ import {
   MessageSquare,
   RefreshCw,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { openUrl } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { useRepoOpenIssues } from "../../hooks/useRepoOpenIssues";
@@ -34,15 +35,15 @@ const MAX_LABELS_VISIBLE = 2;
 const DEFAULT_VISIBLE = 10;
 const ALL_VISIBLE_LIMIT = 50;
 
-const SCOPES: { value: IssueScope; label: string; title: string }[] = [
-  { value: "open", label: "Open", title: "All open issues" },
-  { value: "mine", label: "Mine", title: "Issues you opened" },
+const SCOPES = [
+  { value: "open", labelKey: "repo_scope_open", titleKey: "repo_issues_scope_open_title" },
+  { value: "mine", labelKey: "repo_scope_mine", titleKey: "repo_issues_scope_mine_title" },
   {
     value: "assigned",
-    label: "Assigned",
-    title: "Issues assigned to you",
+    labelKey: "repo_scope_assigned",
+    titleKey: "repo_issues_scope_assigned_title",
   },
-];
+] as const satisfies readonly { value: IssueScope; labelKey: string; titleKey: string }[];
 
 export interface RepoIssuesSectionProps {
   repoId: string;
@@ -51,6 +52,7 @@ export interface RepoIssuesSectionProps {
 export const RepoIssuesSection = memo(function RepoIssuesSection({
   repoId,
 }: RepoIssuesSectionProps) {
+  const { t } = useTranslation();
   // Sections render collapsed by default. The header still surfaces the
   // open-count badge so the project view tells you what's outstanding
   // upstream without forcing two long lists into the layout above the
@@ -89,9 +91,9 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
   const handleCopyUrl = async (url: string) => {
     try {
       await navigator.clipboard.writeText(url);
-      addToast("URL copied");
+      addToast(t("repo_url_copied"));
     } catch {
-      addToast("Failed to copy URL");
+      addToast(t("repo_url_copy_failed"));
     }
   };
 
@@ -106,7 +108,7 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
         >
           {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <CircleDot size={12} className={dashStyles.archivedIcon} aria-hidden />
-          <span className={dashStyles.workspacesTitle}>Issues</span>
+          <span className={dashStyles.workspacesTitle}>{t("repo_issues_title")}</span>
           {issues.length > 0 && (
             // Bare count — tracks the active scope (e.g. "Mine" shows
             // mine-count, not total-open-count). The toggle next to it
@@ -122,14 +124,14 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
                 type="button"
                 role="tab"
                 aria-selected={scope === s.value}
-                title={s.title}
+                title={t(s.titleKey)}
                 className={`${styles.scopeTab} ${scope === s.value ? styles.scopeTabActive : ""}`}
                 onClick={() => {
                   setScope(s.value);
                   setShowAll(false);
                 }}
               >
-                {s.label}
+                {t(s.labelKey)}
               </button>
             ))}
           </div>
@@ -138,8 +140,8 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
             className={styles.refreshButton}
             onClick={() => void refresh()}
             disabled={loading}
-            title="Refresh"
-            aria-label="Refresh issues"
+            title={t("repo_refresh")}
+            aria-label={t("repo_issues_refresh")}
           >
             <RefreshCw
               size={12}
@@ -209,6 +211,7 @@ function RepoIssuesBody({
   onOpen,
   onCopyUrl,
 }: RepoIssuesBodyProps) {
+  const { t } = useTranslation();
   // Render the skeleton whenever we don't yet have a payload for this
   // (repo, scope) pair — not just when `loading` flips true. When the
   // user clicks a different scope tab, the next render selects the new
@@ -222,7 +225,7 @@ function RepoIssuesBody({
   if (payload?.unsupported) {
     return (
       <div className={styles.muted}>
-        Issues are not supported by this provider.
+        {t("repo_issues_unsupported")}
       </div>
     );
   }
@@ -235,13 +238,13 @@ function RepoIssuesBody({
   if (payload?.error && !hasCachedRows) {
     return (
       <div className={styles.error}>
-        <span>Could not load issues.</span>
+        <span>{t("repo_issues_load_failed")}</span>
         <button
           type="button"
           className={styles.retryButton}
           onClick={onRetry}
         >
-          Retry
+          {t("repo_retry")}
         </button>
       </div>
     );
@@ -250,10 +253,10 @@ function RepoIssuesBody({
     return (
       <div className={styles.muted}>
         {scope === "mine"
-          ? "No issues opened by you."
+          ? t("repo_issues_none_mine")
           : scope === "assigned"
-            ? "No issues assigned to you."
-            : "No open issues."}
+            ? t("repo_issues_none_assigned")
+            : t("repo_issues_none_open")}
       </div>
     );
   }
@@ -270,7 +273,7 @@ function RepoIssuesBody({
   const showAllRow = !showAll && restTotal > visibleRest.length && (
     <li>
       <button type="button" className={styles.retryButton} onClick={onShowAll}>
-        Show all ({restTotal})
+        {t("repo_show_all", { count: restTotal })}
       </button>
     </li>
   );
@@ -284,13 +287,13 @@ function RepoIssuesBody({
     <div className={staleClass} aria-busy={isStale || undefined}>
       {payload?.error && (
         <div className={styles.errorBanner}>
-          <span>Could not refresh issues — showing cached results.</span>
+          <span>{t("repo_issues_refresh_failed")}</span>
           <button
             type="button"
             className={styles.retryButton}
             onClick={onRetry}
           >
-            Retry
+            {t("repo_retry")}
           </button>
         </div>
       )}
@@ -299,10 +302,10 @@ function RepoIssuesBody({
         // nothing is dispatched the list renders flat (the `else`
         // branch), so the common case is visually unchanged.
         <>
-          <RepoListGroup label="In progress" count={inProgress.length} accent>
+          <RepoListGroup label={t("repo_group_in_progress")} count={inProgress.length} accent>
             <ul className={styles.list}>{inProgress.map(renderRow)}</ul>
           </RepoListGroup>
-          <RepoListGroup label="Open" count={restTotal}>
+          <RepoListGroup label={t("repo_group_open")} count={restTotal}>
             <ul className={styles.list}>
               {visibleRest.map(renderRow)}
               {showAllRow}
@@ -327,6 +330,7 @@ interface IssueRowProps {
 }
 
 function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
+  const { t } = useTranslation();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const registry = useModelRegistry();
   const addToast = useAppStore((s) => s.addToast);
@@ -336,8 +340,8 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
   const overflow = Math.max(0, issue.labels.length - visibleLabels.length);
 
   const items: ContextMenuItem[] = [
-    { label: "Open in browser", onSelect: () => onOpen(issue.url) },
-    { label: "Copy URL", onSelect: () => onCopyUrl(issue.url) },
+    { label: t("repo_open_in_browser"), onSelect: () => onOpen(issue.url) },
+    { label: t("repo_copy_url"), onSelect: () => onCopyUrl(issue.url) },
     { type: "separator" },
     // When a workspace is already on this issue, offer a jump to it
     // *above* — not instead of — "Send to new workspace": a second
@@ -345,14 +349,14 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
     ...(linked
       ? ([
           {
-            label: `Go to workspace “${linked.workspaceName}”`,
+            label: t("repo_go_to_workspace", { name: linked.workspaceName }),
             onSelect: () => selectWorkspace(linked.workspaceId),
           },
         ] satisfies ContextMenuItem[])
       : []),
     {
       type: "submenu",
-      label: "Send to new workspace",
+      label: t("repo_send_to_new_workspace"),
       children: buildModelSubmenuItems(registry, async (model) => {
         try {
           await sendToNewWorkspace({
@@ -366,9 +370,9 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
           });
         } catch (e) {
           addToast(
-            `Failed to send to new workspace: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
+            t("repo_send_failed", {
+              error: e instanceof Error ? e.message : String(e),
+            }),
           );
         }
       }),

@@ -1,3 +1,4 @@
+import i18n from "../../i18n";
 import {
   isMaxEffortAllowed,
   isXhighEffortAllowed,
@@ -15,20 +16,48 @@ export type ReasoningModelLike = {
   providerKind?: string;
 };
 
+// `label` is a getter so the translation resolves at read time (after the
+// language is set), not at module load.
+function levelLabel(id: string): string {
+  switch (id) {
+    case "auto":
+      return i18n.t("chat:effort_level_auto");
+    case "low":
+      return i18n.t("chat:effort_level_low");
+    case "medium":
+      return i18n.t("chat:effort_level_medium");
+    case "high":
+      return i18n.t("chat:effort_level_high");
+    case "xhigh":
+      return i18n.t("chat:effort_level_xhigh");
+    default:
+      return i18n.t("chat:effort_level_max");
+  }
+}
+
+function level(id: string): ReasoningLevel {
+  return {
+    id,
+    get label() {
+      return levelLabel(id);
+    },
+  };
+}
+
 export const CLAUDE_EFFORT_LEVELS: readonly ReasoningLevel[] = [
-  { id: "auto", label: "Auto" },
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
-  { id: "xhigh", label: "Extra High" },
-  { id: "max", label: "Max" },
+  level("auto"),
+  level("low"),
+  level("medium"),
+  level("high"),
+  level("xhigh"),
+  level("max"),
 ] as const;
 
 export const CODEX_REASONING_LEVELS: readonly ReasoningLevel[] = [
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
-  { id: "xhigh", label: "Extra High" },
+  level("low"),
+  level("medium"),
+  level("high"),
+  level("xhigh"),
 ] as const;
 
 export const ANTIGRAVITY_REASONING_LEVELS: readonly ReasoningLevel[] = [

@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import type { ChatMessage } from "../types/chat";
 import { makeChatMessage } from "./chatMessage";
 import type { SetupResult } from "../types/repository";
@@ -92,8 +93,13 @@ export interface SetupScriptRecorderDeps {
 }
 
 function failureToast(deps: SetupScriptRecorderDeps): void {
-  const where = deps.workspaceName ? `“${deps.workspaceName}”` : "this workspace";
-  deps.addToast(`Setup script for ${where} failed — see the transcript`);
+  deps.addToast(
+    deps.workspaceName
+      ? i18n.t("modals:setup_script_failed_toast_named", {
+          name: deps.workspaceName,
+        })
+      : i18n.t("modals:setup_script_failed_toast"),
+  );
 }
 
 /**

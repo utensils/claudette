@@ -14,6 +14,7 @@ import {
 } from "../../services/tauri";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
 import { WorkspaceEmptyTabs } from "./WorkspaceEmptyTabs";
+import "../../i18n";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;

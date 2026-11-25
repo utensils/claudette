@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 
 interface RingProps {
@@ -9,6 +10,7 @@ interface RingProps {
 }
 
 export function Ring({ value, label, size = 56, stroke = 5 }: RingProps) {
+  const { t } = useTranslation();
   const clamped = Math.max(0, Math.min(1, value));
   const r = (size - stroke) / 2;
   const cx = size / 2;
@@ -24,7 +26,7 @@ export function Ring({ value, label, size = 56, stroke = 5 }: RingProps) {
       width={size}
       height={size}
       role="img"
-      aria-label={`${displayLabel} success`}
+      aria-label={t("metrics_ring_aria", { label: displayLabel })}
     >
       <circle
         className={styles.ringTrack}

@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { icons } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import styles from "./IconPicker.module.css";
 
 const CURATED_ICONS = [
@@ -107,6 +108,7 @@ interface IconPickerProps {
 }
 
 export function IconPicker({ value, onChange }: IconPickerProps) {
+  const { t } = useTranslation("modals");
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
@@ -134,7 +136,7 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
           ) : null}
         </div>
         <span className={styles.previewLabel}>
-          {value || "No icon selected"}
+          {value || t("icon_picker_none")}
         </span>
         {value && (
           <button
@@ -142,7 +144,7 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
             onClick={() => onChange("")}
             type="button"
           >
-            Clear
+            {t("icon_picker_clear")}
           </button>
         )}
       </div>
@@ -150,11 +152,11 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
         className={styles.search}
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search icons..."
+        placeholder={t("icon_picker_search_placeholder")}
       />
       <div className={styles.grid}>
         {filtered.length === 0 && (
-          <div className={styles.emptyMsg}>No icons found</div>
+          <div className={styles.emptyMsg}>{t("icon_picker_empty")}</div>
         )}
         {filtered.map((name) => {
           const pascal = toPascalCase(name);

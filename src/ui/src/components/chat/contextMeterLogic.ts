@@ -76,6 +76,8 @@ export function computeMeterState(
   };
 }
 
+import i18n from "../../i18n";
+
 const LOCALE = "en-US";
 
 /**
@@ -87,11 +89,15 @@ const LOCALE = "en-US";
  */
 export function buildMeterTooltip(state: MeterState): string {
   return [
-    `Context: ${state.totalTokens.toLocaleString(LOCALE)} / ${state.capacity.toLocaleString(LOCALE)} tokens (${state.percentRounded}%)`,
+    i18n.t("chat:meter_tooltip_context", {
+      used: state.totalTokens.toLocaleString(LOCALE),
+      capacity: state.capacity.toLocaleString(LOCALE),
+      percent: state.percentRounded,
+    }),
     "",
-    `Input: ${state.input.toLocaleString(LOCALE)}`,
-    `Cache read: ${state.cacheRead.toLocaleString(LOCALE)}`,
-    `Cache creation: ${state.cacheCreation.toLocaleString(LOCALE)}`,
-    `Output: ${state.output.toLocaleString(LOCALE)}`,
+    i18n.t("chat:meter_tooltip_input", { value: state.input.toLocaleString(LOCALE) }),
+    i18n.t("chat:meter_tooltip_cache_read", { value: state.cacheRead.toLocaleString(LOCALE) }),
+    i18n.t("chat:meter_tooltip_cache_creation", { value: state.cacheCreation.toLocaleString(LOCALE) }),
+    i18n.t("chat:meter_tooltip_output", { value: state.output.toLocaleString(LOCALE) }),
   ].join("\n");
 }

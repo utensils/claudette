@@ -18,6 +18,7 @@
  * the settings panel).
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   coerceInputValue,
@@ -72,6 +73,8 @@ function defaultValuesFor(
 }
 
 export function RequiredInputsModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const modalData = useAppStore((s) => s.modalData);
   const closeModal = useAppStore((s) => s.closeModal);
 
@@ -186,14 +189,13 @@ export function RequiredInputsModal() {
   };
 
   const title = state.repoName
-    ? `Configure new workspace — ${state.repoName}`
-    : "Configure new workspace";
+    ? t("required_inputs_title_repo", { repo: state.repoName })
+    : t("required_inputs_title");
 
   return (
     <Modal title={title} onClose={cancel} wide>
       <div className={shared.warning}>
-        This repo declares inputs that every new workspace needs. They&apos;ll
-        become environment variables for the agent, terminal, and scripts.
+        {t("required_inputs_warning")}
       </div>
       <div className={styles.fields}>
         {state.schema.map((field) => (
@@ -214,7 +216,7 @@ export function RequiredInputsModal() {
           type="button"
           disabled={creating}
         >
-          Cancel
+          {tCommon("cancel")}
         </button>
         <button
           className={shared.btnPrimary}
@@ -222,7 +224,9 @@ export function RequiredInputsModal() {
           type="button"
           disabled={creating || (submitted && firstError !== undefined)}
         >
-          {creating ? "Creating…" : "Create workspace"}
+          {creating
+            ? t("required_inputs_creating")
+            : t("required_inputs_confirm")}
         </button>
       </div>
     </Modal>
@@ -316,12 +320,16 @@ interface FieldLabelProps {
  *  muted "(optional)" suffix when the field is non-required so the user
  *  knows blank is OK before they hit submit and the validator passes them. */
 function FieldLabel({ field, htmlFor }: FieldLabelProps) {
+  const { t } = useTranslation("modals");
   const optional = !isFieldRequired(field);
   return (
     <label className={styles.labelGroup} htmlFor={htmlFor}>
       <span className={styles.labelText}>
         {field.label} <span className={styles.envKey}>({field.key})</span>
-        {optional && <span className={styles.optional}> · optional</span>}
+        {optional && <span className={styles.optional}>
+            {" "}
+            {t("required_inputs_optional")}
+          </span>}
       </span>
       {field.description && (
         <span className={styles.description}>{field.description}</span>

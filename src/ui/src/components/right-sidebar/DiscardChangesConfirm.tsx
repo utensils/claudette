@@ -1,4 +1,5 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Modal } from "../modals/Modal";
 import shared from "../modals/shared.module.css";
 import type { DiffLayer } from "../../types/diff";
@@ -21,6 +22,7 @@ export function DiscardChangesConfirm({
   onConfirm,
   onClose,
 }: DiscardChangesConfirmProps) {
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,44 +49,30 @@ export function DiscardChangesConfirm({
   const isBulk = bulkCount != null && bulkCount > 0;
   const title = isBulk
     ? isUntracked
-      ? "Delete all untracked files?"
-      : "Discard all unstaged changes?"
+      ? t("discard_title_bulk_untracked")
+      : t("discard_title_bulk_unstaged")
     : isUntracked
-      ? "Delete untracked file?"
-      : "Discard changes?";
-  const action = isUntracked ? "Delete" : "Discard";
-  const target: ReactNode = isBulk ? (
+      ? t("discard_title_untracked")
+      : t("discard_title_unstaged");
+  const action = isUntracked ? t("discard_action_delete") : t("discard_action_discard");
+  const target = (
     <strong>
-      {bulkCount} file{bulkCount === 1 ? "" : "s"}
+      {isBulk ? t("discard_files", { count: bulkCount }) : filePath}
     </strong>
-  ) : (
-    <strong>{filePath}</strong>
   );
-  const description = isUntracked ? (
-    isBulk ? (
-      <>
-        Delete {target} that {bulkCount === 1 ? "is" : "are"} not tracked by
-        git. They will be removed from disk.{" "}
-        <strong>This cannot be undone.</strong>
-      </>
-    ) : (
-      <>
-        The file {target} is not tracked by git. Deleting it will remove it
-        from disk. <strong>This cannot be undone.</strong>
-      </>
-    )
-  ) : isBulk ? (
-    <>
-      Discard unstaged changes across {target}. Files will be restored from
-      the index. Any staged changes are kept.{" "}
-      <strong>This cannot be undone.</strong>
-    </>
-  ) : (
-    <>
-      Discard unstaged changes to {target}. The file will be restored from the
-      index. Any staged changes are kept.{" "}
-      <strong>This cannot be undone.</strong>
-    </>
+  const descriptionKey = isUntracked
+    ? isBulk
+      ? "discard_desc_bulk_untracked"
+      : "discard_desc_untracked"
+    : isBulk
+      ? "discard_desc_bulk_unstaged"
+      : "discard_desc_unstaged";
+  const description = (
+    <Trans
+      i18nKey={descriptionKey}
+      count={isBulk ? bulkCount : undefined}
+      components={{ target, strong: <strong /> }}
+    />
   );
 
   return (
@@ -98,7 +86,7 @@ export function DiscardChangesConfirm({
           disabled={loading}
           type="button"
         >
-          Cancel
+          {t("cancel")}
         </button>
         <button
           className={shared.btnDanger}
@@ -112,7 +100,11 @@ export function DiscardChangesConfirm({
           // confirm if the button was already focused.
           autoFocus
         >
-          {loading ? `${action}ing…` : action}
+          {loading
+            ? isUntracked
+              ? t("discard_action_deleting")
+              : t("discard_action_discarding")
+            : action}
         </button>
       </div>
     </Modal>

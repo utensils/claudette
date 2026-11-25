@@ -1,3 +1,4 @@
+import i18n from "../../../i18n";
 import type {
   AvailablePlugin,
   EditablePluginScope,
@@ -157,9 +158,11 @@ export function isInstalledAtScope(
 export function formatInstallCount(count: number | null): string | null {
   if (count === null) return null;
   if (count >= 1000) {
-    return `${(count / 1000).toFixed(count >= 10000 ? 0 : 1)}k installs`;
+    return i18n.t("settings:ccp_install_count", {
+      value: `${(count / 1000).toFixed(count >= 10000 ? 0 : 1)}k`,
+    });
   }
-  return `${count} installs`;
+  return i18n.t("settings:ccp_install_count", { value: count });
 }
 
 export function availablePluginLinks(
@@ -172,7 +175,7 @@ export function availablePluginLinks(
   if (homepage) {
     links.push({
       detail: homepage.detail,
-      label: "Homepage",
+      label: i18n.t("settings:ccp_link_homepage"),
       meta: null,
       url: homepage.url,
     });
@@ -183,7 +186,7 @@ export function availablePluginLinks(
   if (source && !seen.has(source.canonical_url)) {
     links.push({
       detail: source.detail,
-      label: "Source",
+      label: i18n.t("settings:ccp_link_source"),
       meta: source.meta,
       url: source.url,
     });
@@ -202,7 +205,7 @@ export function marketplaceSourceLink(
 
   return {
     detail: source.detail,
-    label: "Source",
+    label: i18n.t("settings:ccp_link_source"),
     meta: source.meta,
     url: source.url,
   };

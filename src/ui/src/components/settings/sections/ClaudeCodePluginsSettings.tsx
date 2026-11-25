@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 import { ensureAndValidateMcps } from "../../../services/mcp";
 import {
@@ -44,6 +45,8 @@ import {
 } from "./pluginCatalog";
 import styles from "../Settings.module.css";
 import { openUrl } from "../../../services/tauri";
+
+type TFn = TFunction<"settings">;
 
 type DraftValues = Record<string, string | boolean>;
 
@@ -116,10 +119,10 @@ function installedPluginSelectionKey(plugin: Pick<InstalledPlugin, "plugin_id" |
   return `${plugin.plugin_id}::${plugin.scope}`;
 }
 
-function repoAvailabilityDetail(scope: PluginScope, hasRepoContext: boolean): string | null {
+function repoAvailabilityDetail(t: TFn, scope: PluginScope, hasRepoContext: boolean): string | null {
   if (!hasRepoContext) return null;
   if (scope === "user" || scope === "managed") {
-    return `available in this repo via ${scope} scope`;
+    return t("ccp_available_via_scope", { scope });
   }
   return null;
 }
@@ -131,10 +134,6 @@ function matchesPluginTarget(plugin: InstalledPlugin, target: string): boolean {
     normalizedTarget === plugin.plugin_id.toLowerCase()
     || normalizedTarget === plugin.name.toLowerCase()
   );
-}
-
-function pluralize(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function ConfigEditor({
@@ -152,17 +151,18 @@ function ConfigEditor({
   onSave: () => void;
   busy: boolean;
 }) {
+  const { t } = useTranslation("settings");
   return (
     <div className={styles.pluginConfigSection}>
       <div className={styles.pluginConfigHeader}>
         <div>
           <div className={styles.settingLabel}>{title}</div>
           <div className={styles.settingDescription}>
-            Sensitive fields are masked and blank values keep the existing secret.
+            {t("ccp_config_sensitive_hint")}
           </div>
         </div>
         <button className={styles.iconBtn} onClick={onSave} disabled={busy}>
-          Save
+          {t("ccp_save")}
         </button>
       </div>
 
@@ -184,7 +184,7 @@ function ConfigEditor({
                   className={styles.textarea}
                   value={String(draft[key] ?? "")}
                   onChange={(event) => onDraftChange(key, event.target.value)}
-                  placeholder={field.sensitive && savedSensitive ? "Saved" : ""}
+                  placeholder={field.sensitive && savedSensitive ? t("ccp_field_saved") : ""}
                 />
               ) : (
                 <input
@@ -194,13 +194,13 @@ function ConfigEditor({
                   max={field.max ?? undefined}
                   value={String(draft[key] ?? "")}
                   onChange={(event) => onDraftChange(key, event.target.value)}
-                  placeholder={field.sensitive && savedSensitive ? "Saved" : ""}
+                  placeholder={field.sensitive && savedSensitive ? t("ccp_field_saved") : ""}
                 />
               )}
               <span className={styles.pluginFieldMeta}>
-                {field.required ? "Required" : "Optional"}
-                {field.sensitive ? " · Sensitive" : ""}
-                {savedSensitive && field.sensitive ? " · Secret saved" : ""}
+                {field.required ? t("ccp_field_required") : t("ccp_field_optional")}
+                {field.sensitive ? ` · ${t("ccp_field_sensitive")}` : ""}
+                {savedSensitive && field.sensitive ? ` · ${t("ccp_field_secret_saved")}` : ""}
               </span>
             </label>
           );
@@ -504,27 +504,30 @@ export function ClaudeCodePluginsSettings() {
   async function handleInstall(targetOverride?: string) {
     const target = (targetOverride ?? installTarget).trim();
     if (!target) {
-      setError("Enter a plugin identifier to install.");
+      setError(t("ccp_error_enter_plugin_identifier"));
       return;
     }
     if (installScope !== "user") {
       const globalInstall = globallyInstalledPlugins.find((plugin) => matchesPluginTarget(plugin, target));
       if (globalInstall) {
         setError(
-          `${globalInstall.plugin_id} is already installed at ${globalInstall.scope} scope and is already available in this repository.`,
+          t("ccp_error_already_installed_global", {
+            id: globalInstall.plugin_id,
+            scope: globalInstall.scope,
+          }),
         );
         return;
       }
     }
     const repoId = requireRepoForScope(installScope);
     if (scopeNeedsRepo(installScope) && !repoId) {
-      setError("Select a local repository for project/local scope.");
+      setError(t("ccp_error_select_local_repo"));
       return;
     }
 
     await withBusy(targetOverride ? `install:${target}` : "install", async () => {
       await installPlugin(target, installScope, repoId ?? undefined);
-      await afterMutation(installScope, `Installed ${target} at ${installScope} scope.`);
+      await afterMutation(installScope, t("ccp_message_installed", { target, scope: installScope }));
       if (!targetOverride) {
         setInstallTarget("");
       }
@@ -552,7 +555,7 @@ export function ClaudeCodePluginsSettings() {
       } else {
         await updatePlugin(plugin.plugin_id, plugin.scope, repoId);
       }
-      await afterMutation(plugin.scope, `${action} completed for ${plugin.plugin_id}.`);
+      await afterMutation(plugin.scope, t(`ccp_message_action_${action}`, { id: plugin.plugin_id }));
       setPendingActionHint(null);
       setPendingTargetHint(null);
     });
@@ -574,17 +577,20 @@ export function ClaudeCodePluginsSettings() {
       }
 
       if (result.attempted === 0) {
-        setMessage("No plugins need update checks in this context.");
+        setMessage(t("ccp_message_no_updates_needed"));
       } else {
-        setMessage(`Checked ${pluralize(result.attempted, "plugin")}; ${pluralize(result.succeeded, "update")} completed.`);
+        setMessage(t("ccp_message_update_all_result", {
+          plugins: t("ccp_count_plugin", { count: result.attempted }),
+          updates: t("ccp_count_update", { count: result.succeeded }),
+        }));
       }
 
       if (result.failed.length > 0) {
         const visibleFailures = result.failed.slice(0, 3).join("\n");
         const extraFailures = result.failed.length > 3
-          ? `\n… ${result.failed.length - 3} more`
+          ? `\n${t("ccp_failures_more", { count: result.failed.length - 3 })}`
           : "";
-        setError(`Some plugin updates failed:\n${visibleFailures}${extraFailures}`);
+        setError(`${t("ccp_error_updates_failed")}\n${visibleFailures}${extraFailures}`);
       }
 
       setPendingActionHint(null);
@@ -602,18 +608,18 @@ export function ClaudeCodePluginsSettings() {
 
   async function handleMarketplaceAdd() {
     if (!marketplaceSource.trim()) {
-      setError("Enter a marketplace source.");
+      setError(t("ccp_error_enter_marketplace_source"));
       return;
     }
     const repoId = requireRepoForScope(marketplaceScope);
     if (scopeNeedsRepo(marketplaceScope) && !repoId) {
-      setError("Select a local repository for project/local scope.");
+      setError(t("ccp_error_select_local_repo"));
       return;
     }
     await withBusy("marketplace-add", async () => {
       await addPluginMarketplace(marketplaceSource.trim(), marketplaceScope, repoId ?? undefined);
       bumpPluginRefreshToken();
-      setMessage(`Added marketplace ${marketplaceSource.trim()}.`);
+      setMessage(t("ccp_message_marketplace_added", { source: marketplaceSource.trim() }));
       setPendingActionHint(null);
       setPendingTargetHint(null);
     });
@@ -628,7 +634,7 @@ export function ClaudeCodePluginsSettings() {
         buildPayload(topLevelSection, topLevelDraft),
         pluginSettingsRepoId ?? undefined,
       );
-      await afterMutation("user", `Saved configuration for ${selectedInstalledPlugin.plugin_id}.`);
+      await afterMutation("user", t("ccp_message_config_saved", { id: selectedInstalledPlugin.plugin_id }));
       const refreshed = await loadPluginConfiguration(
         selectedInstalledPlugin.plugin_id,
         pluginSettingsRepoId ?? undefined,
@@ -649,7 +655,7 @@ export function ClaudeCodePluginsSettings() {
         buildPayload(channel.section, channelDrafts[serverName] ?? {}),
         pluginSettingsRepoId ?? undefined,
       );
-      await afterMutation("user", `Saved ${serverName} configuration.`);
+      await afterMutation("user", t("ccp_message_channel_config_saved", { server: serverName }));
       const refreshed = await loadPluginConfiguration(
         selectedInstalledPlugin.plugin_id,
         pluginSettingsRepoId ?? undefined,
@@ -667,19 +673,19 @@ export function ClaudeCodePluginsSettings() {
     <div>
       <h1 className={styles.sectionTitle}>{t("nav_claude_code_plugins")}</h1>
       <div className={styles.settingDescription}>
-        Browse marketplace plugins, manage installed ones, and refresh marketplace metadata using the real Claude CLI.
+        {t("ccp_intro")}
       </div>
 
       <div className={styles.pluginToolbar}>
         <div className={styles.inlineControl}>
-          <label className={styles.settingLabel} htmlFor="plugin-repo-select">Repository</label>
+          <label className={styles.settingLabel} htmlFor="plugin-repo-select">{t("ccp_repository_label")}</label>
           <select
             id="plugin-repo-select"
             className={styles.select}
             value={pluginSettingsRepoId ?? ""}
             onChange={(event) => setPluginSettingsRepoId(event.target.value || null)}
           >
-            <option value="">Global only</option>
+            <option value="">{t("ccp_global_only")}</option>
             {localRepositories.map((repo) => (
               <option key={repo.id} value={repo.id}>{repo.name}</option>
             ))}
@@ -691,26 +697,31 @@ export function ClaudeCodePluginsSettings() {
             className={pluginSettingsTab === "available" ? styles.pluginTabActive : styles.pluginTab}
             onClick={() => setPluginSettingsTab("available")}
           >
-            Available
+            {t("ccp_tab_available")}
           </button>
           <button
             className={pluginSettingsTab === "installed" ? styles.pluginTabActive : styles.pluginTab}
             onClick={() => setPluginSettingsTab("installed")}
           >
-            Installed
+            {t("ccp_tab_installed")}
           </button>
           <button
             className={pluginSettingsTab === "marketplaces" ? styles.pluginTabActive : styles.pluginTab}
             onClick={() => setPluginSettingsTab("marketplaces")}
           >
-            Marketplaces
+            {t("ccp_tab_marketplaces")}
           </button>
         </div>
       </div>
 
       {pendingActionHint && pendingTargetHint && (
         <div className={styles.pluginNotice}>
-          Pending action: <strong>{pendingActionHint}</strong> for <code>{pendingTargetHint}</code>.
+          <Trans
+            i18nKey="ccp_pending_action"
+            ns="settings"
+            values={{ action: pendingActionHint, target: pendingTargetHint }}
+            components={{ strong: <strong />, code: <code /> }}
+          />
         </div>
       )}
       {message && <div className={styles.pluginSuccess}>{message}</div>}
@@ -720,37 +731,37 @@ export function ClaudeCodePluginsSettings() {
         <div className={styles.pluginPanel}>
           <div className={styles.pluginSummaryGrid}>
             <PluginStatCard
-              label="Marketplace catalog"
+              label={t("ccp_stat_marketplace_catalog")}
               value={String(availableSummary.total)}
-              detail={pluralize(marketplaces.length, "marketplace")}
+              detail={t("ccp_count_marketplace", { count: marketplaces.length })}
             />
             <PluginStatCard
-              label="Ready to install"
+              label={t("ccp_stat_ready_to_install")}
               value={String(availableSummary.discoverable)}
-              detail="Not installed in this context"
+              detail={t("ccp_stat_not_installed_here")}
             />
             <PluginStatCard
-              label="Installed here"
+              label={t("ccp_stat_installed_here")}
               value={String(availableSummary.installed)}
-              detail={pluralize(installedSummary.pluginCount, "distinct plugin")}
+              detail={t("ccp_count_distinct_plugin", { count: installedSummary.pluginCount })}
             />
             <PluginStatCard
-              label="Known updates"
+              label={t("ccp_stat_known_updates")}
               value={String(installedSummary.updatesAvailable)}
               detail={installedSummary.unknownVersionCount > 0
-                ? `${pluralize(installedSummary.unknownVersionCount, "plugin")} without version metadata`
-                : "All installed plugins publish version metadata"}
+                ? t("ccp_stat_unknown_version_detail", { count: installedSummary.unknownVersionCount })
+                : t("ccp_stat_all_versioned")}
             />
           </div>
 
           <div className={styles.pluginInlineNote}>
-            Claude Code treats user and managed installs as global, so this browser does not offer redundant project or local installs for plugins that are already available everywhere. Refresh marketplaces to recalculate update badges.
+            {t("ccp_available_note")}
           </div>
 
           <div className={styles.pluginFormRow}>
             <input
               className={styles.input}
-              placeholder="Search marketplace plugins"
+              placeholder={t("ccp_search_placeholder")}
               value={availableFilter}
               onChange={(event) => setAvailableFilter(event.target.value)}
             />
@@ -759,35 +770,35 @@ export function ClaudeCodePluginsSettings() {
               value={installScope}
               onChange={(event) => setInstallScope(event.target.value as EditablePluginScope)}
             >
-              <option value="user">Install to user</option>
-              <option value="project">Install to project</option>
-              <option value="local">Install to local</option>
+              <option value="user">{t("ccp_install_to_user")}</option>
+              <option value="project">{t("ccp_install_to_project")}</option>
+              <option value="local">{t("ccp_install_to_local")}</option>
             </select>
             <button
               className={styles.iconBtn}
-              onClick={() => void handleRefreshMarketplaceMetadata("Refreshed marketplace metadata.")}
+              onClick={() => void handleRefreshMarketplaceMetadata(t("ccp_message_marketplaces_refreshed"))}
               disabled={busyKey === "marketplace-refresh"}
             >
-              Refresh Marketplaces
+              {t("ccp_refresh_marketplaces")}
             </button>
           </div>
 
           <div className={styles.pluginFormRow}>
             <input
               className={styles.input}
-              placeholder="Install custom plugin target or plugin@marketplace"
+              placeholder={t("ccp_install_target_placeholder")}
               value={installTarget}
               onChange={(event) => setInstallTarget(event.target.value)}
             />
             <button className={styles.iconBtn} onClick={() => void handleInstall()} disabled={busyKey === "install"}>
-              Install
+              {t("ccp_install")}
             </button>
           </div>
 
           {loading ? (
-            <div className={styles.settingDescription}>Loading plugin catalog…</div>
+            <div className={styles.settingDescription}>{t("ccp_loading_catalog")}</div>
           ) : filteredAvailable.length === 0 ? (
-            <div className={styles.settingDescription}>No marketplace plugins match this view.</div>
+            <div className={styles.settingDescription}>{t("ccp_no_available_match")}</div>
           ) : (
             <div className={styles.pluginList}>
               {filteredAvailable.map((plugin) => {
@@ -803,9 +814,9 @@ export function ClaudeCodePluginsSettings() {
                           <span className={styles.pluginBadge}>{plugin.marketplace}</span>
                           {plugin.category && <span className={styles.pluginBadge}>{plugin.category}</span>}
                           {plugin.version && <span className={styles.pluginBadge}>v{plugin.version}</span>}
-                          {plugin.installed && <span className={styles.pluginBadge}>installed</span>}
-                          {plugin.enabled && <span className={styles.pluginBadge}>enabled</span>}
-                          {plugin.update_available && <span className={styles.pluginBadge}>update available</span>}
+                          {plugin.installed && <span className={styles.pluginBadge}>{t("ccp_badge_installed")}</span>}
+                          {plugin.enabled && <span className={styles.pluginBadge}>{t("ccp_badge_enabled")}</span>}
+                          {plugin.update_available && <span className={styles.pluginBadge}>{t("ccp_badge_update_available")}</span>}
                           {plugin.installed_scopes.map((scope) => (
                             <span key={`${plugin.plugin_id}:${scope}`} className={styles.pluginBadge}>
                               {scope}
@@ -813,7 +824,7 @@ export function ClaudeCodePluginsSettings() {
                           ))}
                         </div>
                         <div className={styles.settingDescription}>
-                          {plugin.description ?? "No description provided."}
+                          {plugin.description ?? t("ccp_no_description")}
                         </div>
                         {installCount && (
                           <div className={styles.pluginMeta}>{installCount}</div>
@@ -839,7 +850,7 @@ export function ClaudeCodePluginsSettings() {
                             className={styles.iconBtn}
                             onClick={() => openInstalledPlugin(plugin.plugin_id)}
                           >
-                            Manage
+                            {t("ccp_manage")}
                           </button>
                         )}
                         {installableAtScope && (
@@ -851,7 +862,7 @@ export function ClaudeCodePluginsSettings() {
                               || busyKey === `install:${plugin.plugin_id}`
                             }
                           >
-                            Install to {installScope}
+                            {t("ccp_install_to_scope", { scope: installScope })}
                           </button>
                         )}
                       </div>
@@ -868,35 +879,35 @@ export function ClaudeCodePluginsSettings() {
         <div className={styles.pluginPanel}>
           <div className={styles.pluginSummaryGrid}>
             <PluginStatCard
-              label="Installations"
+              label={t("ccp_stat_installations")}
               value={String(installedSummary.installationCount)}
-              detail={pluralize(installedSummary.pluginCount, "distinct plugin")}
+              detail={t("ccp_count_distinct_plugin", { count: installedSummary.pluginCount })}
             />
             <PluginStatCard
-              label="Known updates"
+              label={t("ccp_stat_known_updates")}
               value={String(installedSummary.updatesAvailable)}
-              detail="Based on refreshed marketplace versions"
+              detail={t("ccp_stat_based_on_versions")}
             />
             <PluginStatCard
-              label="Unknown version status"
+              label={t("ccp_stat_unknown_version_status")}
               value={String(installedSummary.unknownVersionCount)}
-              detail="These still work with Update All"
+              detail={t("ccp_stat_still_work_update_all")}
             />
             <PluginStatCard
-              label="Configured marketplaces"
+              label={t("ccp_stat_configured_marketplaces")}
               value={String(marketplaces.length)}
-              detail="Refresh them to check for new versions"
+              detail={t("ccp_stat_refresh_to_check")}
             />
           </div>
 
           <div className={styles.pluginInlineNote}>
-            Claude Code’s interactive plugin tools do not expose a native one-shot update-all command. Claudette now runs the per-plugin update flow across this installed set and surfaces concrete update badges when metadata is available.
+            {t("ccp_installed_note")}
           </div>
 
           <div className={styles.pluginFormRow}>
             <input
               className={styles.input}
-              placeholder="Filter installed plugins"
+              placeholder={t("ccp_filter_installed_placeholder")}
               value={pluginFilter}
               onChange={(event) => setPluginFilter(event.target.value)}
             />
@@ -905,21 +916,21 @@ export function ClaudeCodePluginsSettings() {
               onClick={() => void handleUpdateAllInstalled()}
               disabled={busyKey === "update-all"}
             >
-              Update All
+              {t("ccp_update_all")}
             </button>
             <button
               className={styles.iconBtn}
-              onClick={() => void handleRefreshMarketplaceMetadata("Refreshed marketplace metadata for update checks.")}
+              onClick={() => void handleRefreshMarketplaceMetadata(t("ccp_message_marketplaces_refreshed_for_updates"))}
               disabled={busyKey === "marketplace-refresh"}
             >
-              Refresh Marketplaces
+              {t("ccp_refresh_marketplaces")}
             </button>
           </div>
 
           {loading ? (
-            <div className={styles.settingDescription}>Loading installed plugins…</div>
+            <div className={styles.settingDescription}>{t("ccp_loading_installed")}</div>
           ) : filteredInstalled.length === 0 ? (
-            <div className={styles.settingDescription}>No installed plugins match this view.</div>
+            <div className={styles.settingDescription}>{t("ccp_no_installed_match")}</div>
           ) : (
             <div className={styles.pluginList}>
               {filteredInstalled.map((plugin) => {
@@ -935,24 +946,24 @@ export function ClaudeCodePluginsSettings() {
                         <div className={styles.pluginCardTitle}>
                           <span>{plugin.plugin_id}</span>
                           <span className={styles.pluginBadge}>{plugin.scope}</span>
-                          <span className={styles.pluginBadge}>{plugin.enabled ? "enabled" : "disabled"}</span>
+                          <span className={styles.pluginBadge}>{plugin.enabled ? t("ccp_badge_enabled") : t("ccp_badge_disabled")}</span>
                           {plugin.update_available && plugin.latest_known_version && (
-                            <span className={styles.pluginBadge}>update → v{plugin.latest_known_version}</span>
+                            <span className={styles.pluginBadge}>{t("ccp_badge_update_to", { version: plugin.latest_known_version })}</span>
                           )}
-                          {plugin.command_count > 0 && <span className={styles.pluginBadge}>{plugin.command_count} cmds</span>}
-                          {plugin.skill_count > 0 && <span className={styles.pluginBadge}>{plugin.skill_count} skills</span>}
-                          {plugin.mcp_servers.length > 0 && <span className={styles.pluginBadge}>{plugin.mcp_servers.length} mcp</span>}
+                          {plugin.command_count > 0 && <span className={styles.pluginBadge}>{t("ccp_badge_commands", { count: plugin.command_count })}</span>}
+                          {plugin.skill_count > 0 && <span className={styles.pluginBadge}>{t("ccp_badge_skills", { count: plugin.skill_count })}</span>}
+                          {plugin.mcp_servers.length > 0 && <span className={styles.pluginBadge}>{t("ccp_badge_mcp", { count: plugin.mcp_servers.length })}</span>}
                         </div>
                         <div className={styles.settingDescription}>
-                          {plugin.description ?? "No description provided."}
+                          {plugin.description ?? t("ccp_no_description")}
                         </div>
                         <div className={styles.pluginMeta}>
                           {[
                             `v${plugin.version}`,
                             plugin.latest_known_version && !plugin.update_available
-                              ? `latest v${plugin.latest_known_version}`
+                              ? t("ccp_meta_latest", { version: plugin.latest_known_version })
                               : null,
-                            repoAvailabilityDetail(plugin.scope, pluginSettingsRepoId !== null),
+                            repoAvailabilityDetail(t, plugin.scope, pluginSettingsRepoId !== null),
                             plugin.install_path,
                           ].filter((value): value is string => Boolean(value)).join(" · ")}
                         </div>
@@ -979,7 +990,7 @@ export function ClaudeCodePluginsSettings() {
                               onClick={() => void handlePluginAction(plugin, "disable")}
                               disabled={busyKey === `disable:${plugin.plugin_id}:${plugin.scope}`}
                             >
-                              Disable
+                              {t("ccp_disable")}
                             </button>
                           ) : (
                             <button
@@ -987,7 +998,7 @@ export function ClaudeCodePluginsSettings() {
                               onClick={() => void handlePluginAction(plugin, "enable")}
                               disabled={busyKey === `enable:${plugin.plugin_id}:${plugin.scope}`}
                             >
-                              Enable
+                              {t("ccp_enable")}
                             </button>
                           )
                         )}
@@ -996,7 +1007,7 @@ export function ClaudeCodePluginsSettings() {
                           onClick={() => void handlePluginAction(plugin, "update")}
                           disabled={busyKey === `update:${plugin.plugin_id}:${plugin.scope}`}
                         >
-                          Update
+                          {t("ccp_update")}
                         </button>
                         {plugin.scope !== "managed" && (
                           <button
@@ -1004,7 +1015,7 @@ export function ClaudeCodePluginsSettings() {
                             onClick={() => void handlePluginAction(plugin, "uninstall")}
                             disabled={busyKey === `uninstall:${plugin.plugin_id}:${plugin.scope}`}
                           >
-                            Uninstall
+                            {t("ccp_uninstall")}
                           </button>
                         )}
                         {hasConfig(plugin) && (
@@ -1016,7 +1027,7 @@ export function ClaudeCodePluginsSettings() {
                                 : installedPluginSelectionKey(plugin)
                             )}
                           >
-                            Configure
+                            {t("ccp_configure")}
                           </button>
                         )}
                       </div>
@@ -1025,14 +1036,14 @@ export function ClaudeCodePluginsSettings() {
                     {selectedPluginKey === installedPluginSelectionKey(plugin) && (
                       <div className={styles.pluginConfigPanel}>
                         {configLoading ? (
-                          <div className={styles.settingDescription}>Loading configuration…</div>
+                          <div className={styles.settingDescription}>{t("ccp_loading_configuration")}</div>
                         ) : configError ? (
                           <div className={styles.pluginError}>{configError}</div>
                         ) : config ? (
                           <>
                             {config.top_level && (
                               <ConfigEditor
-                                title="Plugin options"
+                                title={t("ccp_plugin_options")}
                                 section={config.top_level}
                                 draft={topLevelDraft}
                                 onDraftChange={(key, value) => setTopLevelDraft((draft) => ({ ...draft, [key]: value }))}
@@ -1058,7 +1069,7 @@ export function ClaudeCodePluginsSettings() {
                               />
                             ))}
                             {!config.top_level && config.channels.length === 0 && (
-                              <div className={styles.settingDescription}>This plugin does not expose configurable fields.</div>
+                              <div className={styles.settingDescription}>{t("ccp_no_configurable_fields")}</div>
                             )}
                           </>
                         ) : null}
@@ -1076,35 +1087,35 @@ export function ClaudeCodePluginsSettings() {
         <div className={styles.pluginPanel}>
           <div className={styles.pluginSummaryGrid}>
             <PluginStatCard
-              label="Configured marketplaces"
+              label={t("ccp_stat_configured_marketplaces")}
               value={String(marketplaces.length)}
-              detail="Visible in this repo context"
+              detail={t("ccp_stat_visible_in_repo")}
             />
             <PluginStatCard
-              label="Catalog entries"
+              label={t("ccp_stat_catalog_entries")}
               value={String(availableSummary.total)}
-              detail="Powered by local marketplace clones"
+              detail={t("ccp_stat_local_clones")}
             />
             <PluginStatCard
-              label="Known plugin updates"
+              label={t("ccp_stat_known_plugin_updates")}
               value={String(installedSummary.updatesAvailable)}
-              detail="Recomputed after marketplace refresh"
+              detail={t("ccp_stat_recomputed")}
             />
             <PluginStatCard
-              label="Direct installs"
+              label={t("ccp_stat_direct_installs")}
               value={String(availableSummary.discoverable)}
-              detail="Plugins not yet installed here"
+              detail={t("ccp_stat_not_yet_installed")}
             />
           </div>
 
           <div className={styles.pluginInlineNote}>
-            Refreshing marketplaces updates the available-plugin catalog and the version metadata used for per-plugin update badges.
+            {t("ccp_marketplaces_note")}
           </div>
 
           <div className={styles.pluginFormRow}>
             <input
               className={styles.input}
-              placeholder="github:owner/repo, URL, or local path"
+              placeholder={t("ccp_marketplace_source_placeholder")}
               value={marketplaceSource}
               onChange={(event) => setMarketplaceSource(event.target.value)}
             />
@@ -1113,35 +1124,35 @@ export function ClaudeCodePluginsSettings() {
               value={marketplaceScope}
               onChange={(event) => setMarketplaceScope(event.target.value as EditablePluginScope)}
             >
-              <option value="user">User</option>
-              <option value="project">Project</option>
-              <option value="local">Local</option>
+              <option value="user">{t("ccp_scope_user")}</option>
+              <option value="project">{t("ccp_scope_project")}</option>
+              <option value="local">{t("ccp_scope_local")}</option>
             </select>
             <button className={styles.iconBtn} onClick={() => void handleMarketplaceAdd()} disabled={busyKey === "marketplace-add"}>
-              Add
+              {t("ccp_add")}
             </button>
             <button
               className={styles.iconBtn}
-              onClick={() => void handleRefreshMarketplaceMetadata("Updated all marketplaces.")}
+              onClick={() => void handleRefreshMarketplaceMetadata(t("ccp_message_all_marketplaces_updated"))}
               disabled={busyKey === "marketplace-refresh"}
             >
-              Update All
+              {t("ccp_update_all")}
             </button>
           </div>
 
           <div className={styles.pluginFormRow}>
             <input
               className={styles.input}
-              placeholder="Filter marketplaces"
+              placeholder={t("ccp_filter_marketplaces_placeholder")}
               value={marketplaceFilter}
               onChange={(event) => setMarketplaceFilter(event.target.value)}
             />
           </div>
 
           {loading ? (
-            <div className={styles.settingDescription}>Loading marketplaces…</div>
+            <div className={styles.settingDescription}>{t("ccp_loading_marketplaces")}</div>
           ) : filteredMarketplaces.length === 0 ? (
-            <div className={styles.settingDescription}>No marketplaces match this view.</div>
+            <div className={styles.settingDescription}>{t("ccp_no_marketplaces_match")}</div>
           ) : (
             <div className={styles.pluginList}>
               {filteredMarketplaces.map((marketplace) => {
@@ -1156,7 +1167,7 @@ export function ClaudeCodePluginsSettings() {
                           <span className={styles.pluginBadge}>{marketplace.source_kind}</span>
                         </div>
                         <div className={styles.settingDescription}>
-                          {sourceLink ? `${marketplace.source_kind} marketplace source` : marketplace.source_label}
+                          {sourceLink ? t("ccp_marketplace_source_kind", { kind: marketplace.source_kind }) : marketplace.source_label}
                         </div>
                         {sourceLink && (
                           <div className={styles.pluginLinkRow}>
@@ -1178,24 +1189,24 @@ export function ClaudeCodePluginsSettings() {
                           onClick={() => void withBusy(`marketplace-update:${marketplace.name}`, async () => {
                             await updatePluginMarketplace(marketplace.name, pluginSettingsRepoId ?? undefined);
                             bumpPluginRefreshToken();
-                            setMessage(`Updated ${marketplace.name}.`);
+                            setMessage(t("ccp_message_marketplace_updated", { name: marketplace.name }));
                           })}
                           disabled={busyKey === `marketplace-update:${marketplace.name}`}
                         >
-                          Update
+                          {t("ccp_update")}
                         </button>
                         <button
                           className={styles.iconBtn}
                           onClick={() => void withBusy(`marketplace-remove:${marketplace.name}`, async () => {
                             await removePluginMarketplace(marketplace.name, pluginSettingsRepoId ?? undefined);
                             bumpPluginRefreshToken();
-                            setMessage(`Removed ${marketplace.name}.`);
+                            setMessage(t("ccp_message_marketplace_removed", { name: marketplace.name }));
                             setPendingActionHint(null);
                             setPendingTargetHint(null);
                           })}
                           disabled={busyKey === `marketplace-remove:${marketplace.name}`}
                         >
-                          Remove
+                          {t("ccp_remove")}
                         </button>
                       </div>
                     </div>

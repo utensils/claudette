@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import {
   FileCode,
   FileSpreadsheet,
@@ -51,6 +52,7 @@ export function AttachmentCardShell({
   onContextMenu?: (e: React.MouseEvent) => void;
   children: ReactNode;
 }) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(false);
   const Icon = ICONS[mediaType] ?? FileText;
 
@@ -73,8 +75,8 @@ export function AttachmentCardShell({
           <button
             type="button"
             className={styles.menuButton}
-            aria-label="File actions"
-            title="File actions"
+            aria-label={t("attachment_file_actions")}
+            title={t("attachment_file_actions")}
             data-testid="attachment-menu-trigger"
             onClick={(e) => {
               // Anchor the popover to the kebab itself rather than the
@@ -111,7 +113,7 @@ export function AttachmentCardShell({
           className={styles.expandToggle}
           onClick={() => setExpanded((v) => !v)}
         >
-          {expanded ? "Collapse" : "Expand"}
+          {expanded ? t("attachment_collapse") : t("attachment_expand")}
         </button>
       )}
     </div>

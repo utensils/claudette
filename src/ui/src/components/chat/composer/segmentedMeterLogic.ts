@@ -1,3 +1,5 @@
+import i18n from "../../../i18n";
+
 export type SegmentedBand = "normal" | "warn" | "critical";
 
 export function segmentedBand(ratio: number): SegmentedBand {
@@ -7,9 +9,9 @@ export function segmentedBand(ratio: number): SegmentedBand {
 }
 
 export function stateLabel(ratio: number): string {
-  if (ratio < 0.6) return "healthy";
-  if (ratio < 0.85) return "filling up";
-  return "nearing limit";
+  if (ratio < 0.6) return i18n.t("chat:context_state_healthy");
+  if (ratio < 0.85) return i18n.t("chat:context_state_filling");
+  return i18n.t("chat:context_state_nearing");
 }
 
 export function segmentedColor(band: SegmentedBand): string {

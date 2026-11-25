@@ -253,12 +253,12 @@ describe("MessagesWithTurns edit summaries", () => {
       />,
     );
 
-    expect(container.textContent).toContain("auth_panel_title");
+    expect(container.textContent).toContain("Claude Code sign-in");
     expect(container.textContent).toContain(
       "Invalid authentication credentials (401)",
     );
     const button = Array.from(container.querySelectorAll("button")).find(
-      (item) => item.textContent?.includes("auth_sign_in"),
+      (item) => item.textContent?.includes("Sign in"),
     );
     await act(async () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -658,7 +658,7 @@ describe("MessagesWithTurns edit summaries", () => {
       />,
     );
 
-    expect(container.textContent).toContain("auth_panel_title");
+    expect(container.textContent).toContain("Claude Code sign-in");
     expect(container.textContent).toContain("Not logged in");
     expect(container.textContent).not.toContain("Please run /login");
   });
@@ -691,11 +691,11 @@ describe("MessagesWithTurns edit summaries", () => {
     );
 
     const authButtons = Array.from(container.querySelectorAll("button")).filter(
-      (button) => button.textContent?.includes("auth_sign_in"),
+      (button) => button.textContent?.includes("Sign in"),
     );
     expect(authButtons).toHaveLength(1);
     expect(
-      container.textContent?.match(/auth_panel_title/g) ?? [],
+      container.textContent?.match(/Claude Code sign-in/g) ?? [],
     ).toHaveLength(1);
     expect(container.textContent).toContain(
       "Invalid authentication credentials (401)",
@@ -726,12 +726,12 @@ describe("MessagesWithTurns edit summaries", () => {
       />,
     );
 
-    expect(container.textContent).toContain("auth_resolved_label");
-    expect(container.textContent).toContain("auth_resolved_message");
+    expect(container.textContent).toContain("Resolved");
+    expect(container.textContent).toContain("Claude Code sign-in was restored for this chat.");
     expect(container.textContent).not.toContain(
       "Invalid authentication credentials (401)",
     );
-    expect(container.textContent).not.toContain("auth_panel_title");
+    expect(container.textContent).not.toContain("Sign in");
   });
 
   it("still shows files parsed from this turn's own edit activity", async () => {

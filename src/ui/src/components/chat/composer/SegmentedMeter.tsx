@@ -1,4 +1,5 @@
 import { type CSSProperties, forwardRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { computeMeterState } from "../contextMeterLogic";
 import { formatTokens } from "../formatTokens";
@@ -16,6 +17,7 @@ interface SegmentedMeterProps {
 
 export const SegmentedMeter = forwardRef<HTMLButtonElement, SegmentedMeterProps>(
 function SegmentedMeter({ sessionId, onClick, suspended = false }, ref) {
+  const { t } = useTranslation("chat");
   const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
 
   const model = useSelectedModelEntry(sessionId);
@@ -46,7 +48,7 @@ function SegmentedMeter({ sessionId, onClick, suspended = false }, ref) {
         event.preventDefault();
         onClick();
       }}
-      aria-label={`Context ${state.percentRounded}% used`}
+      aria-label={t("context_meter_aria", { percent: state.percentRounded })}
     >
       <div className={styles.cells}>
         {Array.from({ length: CELL_COUNT }, (_, i) => {

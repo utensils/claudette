@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 import { RepoLeaderboard } from "./RepoLeaderboard";
 import { SessionHeatmap } from "./SessionHeatmap";
@@ -7,6 +8,7 @@ import { TurnHistogram } from "./TurnHistogram";
 import { SlashCommandTop } from "./SlashCommandTop";
 
 export function AnalyticsSection() {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(true);
 
   return (
@@ -18,7 +20,7 @@ export function AnalyticsSection() {
         aria-expanded={open}
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <span className={styles.analyticsTitle}>Analytics</span>
+        <span className={styles.analyticsTitle}>{t("metrics_analytics")}</span>
       </button>
       {open ? (
         <div className={styles.analyticsGrid}>

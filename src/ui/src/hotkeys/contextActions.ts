@@ -24,6 +24,7 @@ import {
   archiveChatSession as archiveChatSessionService,
   createChatSession as createChatSessionService,
 } from "../services/tauri";
+import i18n from "../i18n";
 import { useAppStore } from "../stores/useAppStore";
 import type { ChatSession } from "../types/chat";
 // Static import (was previously a `await import(...)` inside
@@ -59,10 +60,10 @@ const DEFAULT_DEPS: ContextActionDeps = {
   archiveChatSession: archiveChatSessionService,
   confirm: (message) =>
     ask(message, {
-      title: "Close session",
+      title: i18n.t("hotkey_close_session_title"),
       kind: "warning",
-      okLabel: "Close",
-      cancelLabel: "Cancel",
+      okLabel: i18n.t("hotkey_close_session_confirm"),
+      cancelLabel: i18n.t("cancel"),
     }),
 };
 
@@ -85,11 +86,11 @@ function formatChatCloseFallbackPrompt(
 ): string {
   switch (kind) {
     case "running":
-      return `This session is still running. Stop and close "${name}"?`;
+      return i18n.t("hotkey_close_running", { name });
     case "active":
-      return `Close active session "${name}"?`;
+      return i18n.t("hotkey_close_active", { name });
     case "last":
-      return `Close the only remaining session "${name}"?`;
+      return i18n.t("hotkey_close_last", { name });
   }
 }
 

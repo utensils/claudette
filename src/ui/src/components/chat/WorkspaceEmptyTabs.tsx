@@ -1,4 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   Plus,
   Command,
@@ -32,14 +34,14 @@ export interface WorkspaceEmptyTabsProps {
  *  ago", "Apr 12"). Mirrors the Recent Sessions cadence in the reference
  *  design — short enough to fit in a meta column, precise enough to
  *  distinguish today's work from last week's. */
-function formatRelative(iso: string): string {
+function formatRelative(iso: string, t: TFunction<"chat">): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "";
   const diffSec = Math.max(0, (Date.now() - then) / 1000);
-  if (diffSec < 60) return "just now";
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)}d ago`;
+  if (diffSec < 60) return t("empty_tabs_just_now");
+  if (diffSec < 3600) return t("empty_tabs_minutes_ago", { count: Math.floor(diffSec / 60) });
+  if (diffSec < 86400) return t("empty_tabs_hours_ago", { count: Math.floor(diffSec / 3600) });
+  if (diffSec < 86400 * 7) return t("empty_tabs_days_ago", { count: Math.floor(diffSec / 86400) });
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
@@ -52,6 +54,7 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
   workspace,
   repository,
 }: WorkspaceEmptyTabsProps) {
+  const { t } = useTranslation("chat");
   const keybindings = useAppStore((s) => s.keybindings);
   const isMac = isMacHotkeyPlatform();
   const newTabLabel = getHotkeyLabel("global.new-tab", keybindings, isMac) ?? "⌘T";
@@ -114,8 +117,8 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
 
   // Workspace age — gives the chip a meaningful "still running" stat.
   const workspaceAge = useMemo(
-    () => formatRelative(workspace.created_at),
-    [workspace.created_at],
+    () => formatRelative(workspace.created_at, t),
+    [workspace.created_at, t],
   );
   const totalSessions = useMemo(
     () =>
@@ -128,10 +131,9 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
     <div className={styles.welcome}>
       <div className={styles.card}>
         <div className={styles.header}>
-          <h1 className={styles.title}>Pick up {workspace.name}.</h1>
+          <h1 className={styles.title}>{t("empty_tabs_title", { name: workspace.name })}</h1>
           <p className={styles.subtitle}>
-            The workspace is still running — start a fresh chat session, or
-            resume one of your past sessions below.
+            {t("empty_tabs_subtitle")}
           </p>
         </div>
 
@@ -160,14 +162,13 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
               {workspaceAge && (
                 <span>
                   <Clock size={11} aria-hidden="true" />
-                  created {workspaceAge}
+                  {t("empty_tabs_created", { age: workspaceAge })}
                 </span>
               )}
               {totalSessions > 0 && (
                 <span>
                   <MessageSquare size={11} aria-hidden="true" />
-                  {totalSessions} past{" "}
-                  {totalSessions === 1 ? "session" : "sessions"}
+                  {t("empty_tabs_past_sessions", { count: totalSessions })}
                 </span>
               )}
             </span>
@@ -181,13 +182,13 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
             onClick={() => executeNewTab()}
           >
             <Plus size={14} />
-            New Session
+            {t("empty_tabs_new_session")}
           </button>
         </div>
 
         {archivedSessions.length > 0 && (
           <section className={styles.section}>
-            <h2 className={styles.sectionLabel}>Recent Sessions</h2>
+            <h2 className={styles.sectionLabel}>{t("empty_tabs_recent_sessions")}</h2>
             <ul className={styles.projectList}>
               {archivedSessions.map((session) => (
                 <li key={session.id}>
@@ -196,7 +197,7 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
                     className={styles.projectRow}
                     onClick={() => handleResume(session)}
                     disabled={restoringId !== null}
-                    title={`Resume ${session.name}`}
+                    title={t("empty_tabs_resume", { name: session.name })}
                   >
                     <Clock
                       size={14}
@@ -208,16 +209,17 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
                         {session.name}
                       </span>
                       <span className={styles.projectRowPath}>
-                        archived{" "}
-                        {formatRelative(
-                          session.archived_at ?? session.created_at,
-                        )}
+                        {t("empty_tabs_archived", {
+                          age: formatRelative(
+                            session.archived_at ?? session.created_at,
+                            t,
+                          ),
+                        })}
                       </span>
                     </span>
                     <span className={styles.projectRowMeta}>
                       <span>
-                        {session.turn_count}{" "}
-                        {session.turn_count === 1 ? "turn" : "turns"}
+                        {t("empty_tabs_turns", { count: session.turn_count })}
                       </span>
                     </span>
                   </button>
@@ -228,34 +230,49 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
         )}
 
         <section className={styles.section}>
-          <h2 className={styles.sectionLabel}>Tips</h2>
+          <h2 className={styles.sectionLabel}>{t("empty_tabs_tips")}</h2>
           <ul className={styles.tips}>
             <li>
               <Command size={12} className={styles.tipIcon} />
               <span>
-                <kbd className={styles.kbd}>{newTabLabel}</kbd> opens a new
-                chat session in this workspace.
+                <Trans
+                  i18nKey="empty_tabs_tip_new_tab"
+                  ns="chat"
+                  values={{ shortcut: newTabLabel }}
+                  components={{ kbd: <kbd className={styles.kbd} /> }}
+                />
               </span>
             </li>
             <li>
               <X size={12} className={styles.tipIcon} />
               <span>
-                <kbd className={styles.kbd}>{closeTabLabel}</kbd> closes the
-                active tab.
+                <Trans
+                  i18nKey="empty_tabs_tip_close_tab"
+                  ns="chat"
+                  values={{ shortcut: closeTabLabel }}
+                  components={{ kbd: <kbd className={styles.kbd} /> }}
+                />
               </span>
             </li>
             <li>
               <FolderGit2 size={12} className={styles.tipIcon} />
               <span>
-                Click the <strong>+</strong> in the tab strip above for a
-                context menu with resumable Claude sessions.
+                <Trans
+                  i18nKey="empty_tabs_tip_plus"
+                  ns="chat"
+                  components={{ strong: <strong /> }}
+                />
               </span>
             </li>
             <li>
               <Clock size={12} className={styles.tipIcon} />
               <span>
-                <kbd className={styles.kbd}>{fuzzyFinderLabel}</kbd> jumps to
-                another workspace via the fuzzy finder.
+                <Trans
+                  i18nKey="empty_tabs_tip_fuzzy_finder"
+                  ns="chat"
+                  values={{ shortcut: fuzzyFinderLabel }}
+                  components={{ kbd: <kbd className={styles.kbd} /> }}
+                />
               </span>
             </li>
           </ul>

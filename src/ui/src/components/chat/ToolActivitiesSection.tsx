@@ -1,4 +1,5 @@
 import { memo, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Plug2 } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity } from "../../stores/useAppStore";
@@ -158,6 +159,7 @@ function GroupedToolActivityRows({
   /** MCP group: render the Plug2 icon + bare-name rows. */
   mcp?: boolean;
 }) {
+  const { t } = useTranslation("chat");
   // The override lives in the shared slice (not local `useState`) so the
   // expand choice survives the running→completed transition: when the turn
   // ends this live group unmounts and `TurnSummary` renders the same
@@ -191,7 +193,11 @@ function GroupedToolActivityRows({
         className={styles.turnHeader}
         expanded={isExpanded}
         onToggle={toggle}
-        ariaLabel={`${isExpanded ? "Collapse" : "Expand"} ${label}`}
+        ariaLabel={
+          isExpanded
+            ? t("disclosure_collapse_aria", { label })
+            : t("disclosure_expand_aria", { label })
+        }
       >
         {mcp && (
           <Plug2 size={13} aria-hidden="true" className={styles.mcpGroupIcon} />

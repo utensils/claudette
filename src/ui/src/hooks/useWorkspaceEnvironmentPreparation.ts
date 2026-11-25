@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { useCallback, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { prepareWorkspaceEnvironment } from "../services/tauri";
@@ -103,7 +104,7 @@ export const ENV_PREPARATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_CLOSED_RESOLVE_IDS_PER_WORKSPACE = 32;
 
 export function envPreparationTimeoutMessage(): string {
-  return "Workspace environment preparation timed out. You can retry environment setup from the chat banner.";
+  return i18n.t("modals:env_preparation_timeout");
 }
 
 export function useWorkspaceEnvironmentPreparation() {
@@ -289,7 +290,7 @@ export function useWorkspaceEnvironmentPreparation() {
               .setWorkspaceEnvironment(
                 workspace_id,
                 "error",
-                "Environment provider reported errors during resolve. See Repo Settings → Environment for per-plugin details.",
+                i18n.t("modals:env_provider_errors"),
               );
           } else {
             useAppStore
@@ -533,7 +534,7 @@ export function useWorkspaceEnvironmentPreparation() {
         // row that will only fail the same way on every interaction.
         if (looksLikeMissingWorkspace(message)) {
           removeWorkspace(workspaceId);
-          addToast("Workspace no longer exists — removed from the sidebar.");
+          addToast(i18n.t("modals:workspace_missing_toast"));
           return;
         }
         setWorkspaceEnvironment(workspaceId, "error", message);
@@ -543,7 +544,7 @@ export function useWorkspaceEnvironmentPreparation() {
         // before this feature landed. Skip the toast in that case so
         // the user isn't double-prompted.
         if (!looksLikeTrustError(message)) {
-          addToast(`Workspace environment failed: ${message}`);
+          addToast(i18n.t("modals:env_failed_toast", { message }));
         }
       });
 

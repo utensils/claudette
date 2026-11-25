@@ -7,6 +7,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "../../i18n";
 import { isAgentBusy } from "../../utils/agentStatus";
 import {
   DIFF_AGENT_RUNNING_INTERVAL_MS,
@@ -88,6 +90,7 @@ function isDiscardableLayer(layer: DiffLayer | undefined): layer is DiscardableL
 }
 
 export const RightSidebar = memo(function RightSidebar() {
+  const { t } = useTranslation();
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
   const diffFiles = useAppStore((s) => s.diffFiles);
@@ -572,8 +575,8 @@ export const RightSidebar = memo(function RightSidebar() {
             type="button"
             className={styles.rowAction}
             onClick={handleOpenClick}
-            title="Open in editor"
-            aria-label="Open in editor"
+            title={t("rs_open_in_editor")}
+            aria-label={t("rs_open_in_editor")}
           >
             <FilePenLine size={12} />
           </button>
@@ -584,8 +587,8 @@ export const RightSidebar = memo(function RightSidebar() {
             className={styles.rowAction}
             onClick={handleStageClick}
             disabled={gitOpInFlight}
-            title="Stage"
-            aria-label="Stage"
+            title={t("rs_stage")}
+            aria-label={t("rs_stage")}
           >
             <Plus size={12} />
           </button>
@@ -596,8 +599,8 @@ export const RightSidebar = memo(function RightSidebar() {
             className={styles.rowAction}
             onClick={handleUnstageClick}
             disabled={gitOpInFlight}
-            title="Unstage"
-            aria-label="Unstage"
+            title={t("rs_unstage")}
+            aria-label={t("rs_unstage")}
           >
             <Minus size={12} />
           </button>
@@ -608,8 +611,8 @@ export const RightSidebar = memo(function RightSidebar() {
             className={`${styles.rowAction} ${styles.rowActionDanger}`}
             onClick={handleDiscardClick}
             disabled={gitOpInFlight}
-            title={layer === "untracked" ? "Delete" : "Discard changes"}
-            aria-label={layer === "untracked" ? "Delete" : "Discard changes"}
+            title={layer === "untracked" ? t("rs_delete") : t("rs_discard_changes")}
+            aria-label={layer === "untracked" ? t("rs_delete") : t("rs_discard_changes")}
           >
             {layer === "untracked" ? (
               <Trash2 size={12} />
@@ -757,13 +760,13 @@ export const RightSidebar = memo(function RightSidebar() {
           className={`${styles.tab} ${activeTab === "files" ? styles.tabActive : ""}`}
           onClick={() => setActiveTab("files")}
         >
-          Files
+          {t("rs_tab_files")}
         </button>
         <button
           className={`${styles.tab} ${activeTab === "changes" ? styles.tabActive : ""}`}
           onClick={() => setActiveTab("changes")}
         >
-          Changes
+          {t("rs_tab_changes")}
           {diffFiles.length > 0 && (
             <span className={styles.tabBadge}>{diffFiles.length}</span>
           )}
@@ -772,7 +775,7 @@ export const RightSidebar = memo(function RightSidebar() {
           className={`${styles.tab} ${activeTab === "tasks" ? styles.tabActive : ""}`}
           onClick={() => setActiveTab("tasks")}
         >
-          Tasks
+          {t("rs_tab_tasks")}
           {taskCount > 0 && (
             <span className={styles.tabBadge}>{taskCount}</span>
           )}
@@ -785,9 +788,9 @@ export const RightSidebar = memo(function RightSidebar() {
         <>
           <div className={styles.list}>
             {diffFiles.length === 0 && diffLoading ? (
-              <div className={styles.empty}>Loading...</div>
+              <div className={styles.empty}>{t("rs_loading")}</div>
             ) : diffFiles.length === 0 ? (
-              <div className={styles.empty}>No changes</div>
+              <div className={styles.empty}>{t("rs_no_changes")}</div>
             ) : hasGrouped ? (
               // Key the group block on the active workspace so per-group
               // collapse state (held in FileGroup's local useState) resets
@@ -795,7 +798,7 @@ export const RightSidebar = memo(function RightSidebar() {
               // "Committed" in workspace A would carry into workspace B.
               <Fragment key={selectedWorkspaceId ?? ""}>
                 <FileGroup
-                  label="Staged"
+                  label={t("rs_group_staged")}
                   files={diffStagedFiles!.staged}
                   layer="staged"
                   accentColor="var(--accent-dim)"
@@ -812,7 +815,7 @@ export const RightSidebar = memo(function RightSidebar() {
                   disabled={gitOpInFlight}
                 />
                 <FileGroup
-                  label="Unstaged"
+                  label={t("rs_group_unstaged")}
                   files={diffStagedFiles!.unstaged}
                   layer="unstaged"
                   accentColor="var(--tool-task)"
@@ -838,14 +841,14 @@ export const RightSidebar = memo(function RightSidebar() {
                   disabled={gitOpInFlight}
                 />
                 <FileGroup
-                  label="Untracked"
+                  label={t("rs_group_untracked")}
                   files={diffStagedFiles!.untracked}
                   layer="untracked"
                   accentColor="var(--text-dim)"
                   renderFileRow={renderFileRow}
                 />
                 <FileGroup
-                  label="Committed"
+                  label={t("rs_group_committed")}
                   files={diffStagedFiles!.committed}
                   layer="committed"
                   accentColor="var(--diff-added-text)"
@@ -878,7 +881,7 @@ export const RightSidebar = memo(function RightSidebar() {
       {activeTab === "tasks" && (
         selectedWorkspaceId
           ? <TaskList taskHistory={taskHistory} />
-          : <div className={styles.list}><div className={styles.empty}>No workspace selected</div></div>
+          : <div className={styles.list}><div className={styles.empty}>{t("rs_no_workspace")}</div></div>
       )}
 
       {contextMenu && (
@@ -922,7 +925,7 @@ function buildDiscardMenuItems(
   const isUntracked = layer === "untracked";
   return [
     {
-      label: isUntracked ? "Delete file…" : "Discard changes…",
+      label: isUntracked ? i18n.t("rs_delete_file_menu") : i18n.t("rs_discard_changes_menu"),
       icon: isUntracked ? <Trash2 size={14} /> : <Undo2 size={14} />,
       onSelect: onDiscard,
     },
@@ -950,6 +953,7 @@ function FileGroup({
   onDiscardAll?: () => void;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(layer === "committed");
 
   if (files.length === 0) return null;
@@ -982,8 +986,8 @@ function FileGroup({
                 className={styles.groupAction}
                 onClick={onStageAll}
                 disabled={disabled}
-                title="Stage all"
-                aria-label="Stage all"
+                title={t("rs_stage_all")}
+                aria-label={t("rs_stage_all")}
               >
                 <Plus size={12} />
               </button>
@@ -994,8 +998,8 @@ function FileGroup({
                 className={styles.groupAction}
                 onClick={onUnstageAll}
                 disabled={disabled}
-                title="Unstage all"
-                aria-label="Unstage all"
+                title={t("rs_unstage_all")}
+                aria-label={t("rs_unstage_all")}
               >
                 <Minus size={12} />
               </button>
@@ -1006,8 +1010,8 @@ function FileGroup({
                 className={`${styles.groupAction} ${styles.groupActionDanger}`}
                 onClick={onDiscardAll}
                 disabled={disabled}
-                title="Discard all"
-                aria-label="Discard all"
+                title={t("rs_discard_all")}
+                aria-label={t("rs_discard_all")}
               >
                 <Undo2 size={12} />
               </button>
@@ -1025,12 +1029,12 @@ function formatRelativeDate(isoDate: string): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  if (diffDays === 0) return "today";
-  if (diffDays === 1) return "yesterday";
-  if (diffDays < 7) return `${diffDays}d`;
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w`;
-  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo`;
-  return `${Math.floor(diffDays / 365)}y`;
+  if (diffDays === 0) return i18n.t("rs_today");
+  if (diffDays === 1) return i18n.t("rs_yesterday");
+  if (diffDays < 7) return i18n.t("time_ago_days", { n: diffDays });
+  if (diffDays < 30) return i18n.t("time_ago_weeks", { n: Math.floor(diffDays / 7) });
+  if (diffDays < 365) return i18n.t("time_ago_months", { n: Math.floor(diffDays / 30) });
+  return i18n.t("time_ago_years", { n: Math.floor(diffDays / 365) });
 }
 
 function CommitGroup({
@@ -1048,6 +1052,7 @@ function CommitGroup({
   openFileTab: (workspaceId: string, path: string) => void;
   onFileClick: (file: DiffFile, commitHash: string) => void;
 }) {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(true);
   const [expandedHashes, setExpandedHashes] = useState<Record<string, boolean>>({});
 
@@ -1068,7 +1073,7 @@ function CommitGroup({
           size={12}
           className={`${styles.groupChevron} ${!collapsed ? styles.groupChevronOpen : ""}`}
         />
-        <span className={styles.groupLabel}>Commits</span>
+        <span className={styles.groupLabel}>{t("rs_commits")}</span>
         <span className={styles.groupCount}>{commits.length}</span>
       </button>
       {!collapsed &&
@@ -1089,7 +1094,7 @@ function CommitGroup({
             {expandedHashes[commit.hash] && (
               <div className={styles.commitFiles}>
                 {commit.files.length === 0 ? (
-                  <div className={styles.commitNoFiles}>no file changes</div>
+                  <div className={styles.commitNoFiles}>{t("rs_no_file_changes")}</div>
                 ) : (
                   commit.files.map((file) => {
                     const isSelected =
@@ -1143,8 +1148,8 @@ function CommitGroup({
                                 e.stopPropagation();
                                 openFileTab(selectedWorkspaceId, file.path);
                               }}
-                              title="Open in editor"
-                              aria-label="Open in editor"
+                              title={t("rs_open_in_editor")}
+                              aria-label={t("rs_open_in_editor")}
                             >
                               <FilePenLine size={12} />
                             </button>

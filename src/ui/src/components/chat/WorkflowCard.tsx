@@ -1,5 +1,6 @@
 import { parseToolInput } from "../../utils/toolInput";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { isTerminalBackgroundTaskStatus } from "../../types/backgroundTaskStatus";
 import {
@@ -86,6 +87,7 @@ function AgentRow({
   now: number;
   live: boolean;
 }) {
+  const { t } = useTranslation("chat");
   const elapsedMs = agentElapsedMs(agent, now, live);
   // Both fields are optional, so the persistence boundary guard didn't
   // type-check them — read through `readOptionalString` before `.trim()`.
@@ -103,16 +105,16 @@ function AgentRow({
         }`}
         title={agent.promptPreview ?? agent.label}
       >
-        {agent.label || `agent ${agent.index}`}
+        {agent.label || t("workflow_agent_fallback", { index: agent.index })}
       </span>
       <span className={styles.agentMeta}>
-        {agent.cached && <span className={styles.cachedBadge}>cached</span>}
+        {agent.cached && <span className={styles.cachedBadge}>{t("workflow_cached")}</span>}
         {typeof agent.attempt === "number" && agent.attempt > 1 && (
           <span
             className={styles.attemptBadge}
             title={agent.lastAttemptReason ?? undefined}
           >
-            retry {agent.attempt}
+            {t("workflow_retry", { attempt: agent.attempt })}
           </span>
         )}
         {agent.isolation && <span>{agent.isolation}</span>}
@@ -121,7 +123,7 @@ function AgentRow({
         )}
         {typeof agent.toolCalls === "number" && agent.toolCalls > 0 && (
           <span>
-            {agent.toolCalls} tool{agent.toolCalls !== 1 ? "s" : ""}
+            {t("workflow_tools", { count: agent.toolCalls })}
           </span>
         )}
         {elapsedMs !== null && <span>{formatDurationMs(elapsedMs)}</span>}
@@ -163,6 +165,7 @@ function ScriptDisclosure({
   script: string;
   lineCount: number;
 }) {
+  const { t } = useTranslation("chat");
   const [open, setOpen] = useState(false);
 
   return (
@@ -171,7 +174,7 @@ function ScriptDisclosure({
       onToggle={(e) => setOpen(e.currentTarget.open)}
     >
       <summary className={styles.scriptToggle}>
-        Script ({lineCount} line{lineCount !== 1 ? "s" : ""})
+        {t("workflow_script", { count: lineCount })}
       </summary>
       {open && <pre className={styles.scriptBody}>{script}</pre>}
     </details>
@@ -205,6 +208,7 @@ export function WorkflowCard({
    *  replayed from a completed turn. Only a live card runs the clock. */
   live?: boolean;
 }) {
+  const { t } = useTranslation("chat");
   const name = useMemo(
     () => workflowDisplayName(activity.inputJson),
     [activity.inputJson],
@@ -289,7 +293,9 @@ export function WorkflowCard({
         role: "button" as const,
         tabIndex: 0,
         "aria-expanded": !isCollapsed,
-        "aria-label": `${isCollapsed ? "Expand" : "Collapse"} workflow ${name}`,
+        "aria-label": isCollapsed
+          ? t("workflow_expand_aria", { name })
+          : t("workflow_collapse_aria", { name }),
         onClick: onToggle,
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -319,15 +325,15 @@ export function WorkflowCard({
           {name}
         </span>
         <span className={styles.badge}>
-          {isResume && <span className={styles.resumeBadge}>resumed</span>}
+          {isResume && <span className={styles.resumeBadge}>{t("workflow_resumed")}</span>}
           {summary.errorCount > 0 && (
             <span className={styles.errorBadge}>
-              {summary.errorCount} failed
+              {t("agents_failed", { count: summary.errorCount })}
             </span>
           )}
           {summary.totalCount > 0 && (
             <span>
-              {summary.doneCount}/{summary.totalCount} agents
+              {t("workflow_agents_progress", { done: summary.doneCount, total: summary.totalCount })}
             </span>
           )}
           {summary.totalTokens > 0 && (
@@ -343,7 +349,7 @@ export function WorkflowCard({
           aria-valuenow={summary.doneCount}
           aria-valuemin={0}
           aria-valuemax={summary.totalCount}
-          aria-label={`Workflow ${name} progress`}
+          aria-label={t("workflow_progress_aria", { name })}
         >
           <div
             className={`${styles.railFill} ${
@@ -364,8 +370,8 @@ export function WorkflowCard({
           {summary.totalCount === 0 ? (
             <div className={styles.empty}>
               {finished
-                ? "No agent activity was reported for this run."
-                : "Starting workflow…"}
+                ? t("workflow_no_activity")
+                : t("workflow_starting")}
             </div>
           ) : (
             grouped.map(({ title, agents }, i) => (

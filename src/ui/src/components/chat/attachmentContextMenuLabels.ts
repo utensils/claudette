@@ -1,3 +1,5 @@
+import i18n from "../../i18n";
+
 /**
  * Pick a human-readable noun for an attachment's media type. Used to label
  * the context menu actions so a PDF doesn't show "Download Image". See
@@ -22,10 +24,10 @@ export function buildAttachmentMenuLabels(mediaType: string): {
 } {
   const noun = attachmentNounFor(mediaType);
   return {
-    download: `Download ${noun}`,
-    copy: `Copy ${noun}`,
+    download: i18n.t(`chat:attachment_menu_download_${noun}`),
+    copy: i18n.t(`chat:attachment_menu_copy_${noun}`),
     // "New Window" is media-agnostic — the OS opens whichever app handles
     // the type. Keeping a single label avoids drift across platforms.
-    open: "Open in New Window",
+    open: i18n.t("chat:attachment_menu_open_new_window"),
   };
 }

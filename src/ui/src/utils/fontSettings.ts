@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { useAppStore } from "../stores/useAppStore";
 import { setAppSetting } from "../services/tauri";
 import { applyUserFonts } from "./theme";
@@ -87,17 +88,20 @@ export function buildFontOptions(systemFonts: string[]): {
   }
 
   const sans: FontOption[] = [
-    { value: "", label: "Default (Inter)" },
+    { value: "", label: i18n.t("modals:font_default", { font: "Inter" }) },
     ...sansGroup,
     ...monoGroup,
-    { value: "__custom__", label: "Custom..." },
+    { value: "__custom__", label: i18n.t("modals:font_custom") },
   ];
 
   const mono: FontOption[] = [
-    { value: "", label: "Default (JetBrains Mono)" },
+    {
+      value: "",
+      label: i18n.t("modals:font_default", { font: "JetBrains Mono" }),
+    },
     ...monoGroup,
     ...sansGroup,
-    { value: "__custom__", label: "Custom..." },
+    { value: "__custom__", label: i18n.t("modals:font_custom") },
   ];
 
   return { sans, mono };

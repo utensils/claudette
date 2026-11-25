@@ -13,6 +13,7 @@ import {
   sendRemoteCommand,
   setAppSetting,
 } from "../../services/tauri";
+import i18n from "../../i18n";
 import { useAppStore } from "../../stores/useAppStore";
 import type { AppState, PermissionLevel } from "../../stores/useAppStore";
 import type { Repository } from "../../types/repository";
@@ -151,7 +152,7 @@ export async function dispatchNativeSlash(
       const agentStatusLabel =
         typeof ws.agent_status === "string"
           ? ws.agent_status
-          : `Error: ${ws.agent_status.Error}`;
+          : i18n.t("chat:slash_status_agent_error", { error: ws.agent_status.Error });
       const isRemoteWorkspace = !!ws.remote_connection_id;
 
       const addLocalMessage = (text: string) => {
@@ -330,9 +331,7 @@ export async function dispatchNativeSlash(
             defaultAgentBackendId: state.defaultAgentBackendId,
           });
           if (harness === null) {
-            addLocalMessage(
-              "/compact: backend not ready yet — try again in a moment.",
-            );
+            addLocalMessage(i18n.t("chat:slash_compact_backend_not_ready"));
             return HANDLED;
           }
           // Fall through with the literal `/compact`. The send pipeline

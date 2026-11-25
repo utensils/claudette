@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { useMemo } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../stores/useAppStore";
@@ -219,7 +220,9 @@ export function processActivities(
           // Orphaned update (TaskCreate result not yet available) — create a stub
           taskMap.set(id, {
             id,
-            description: extractTaskDescription(input) || `Task #${id}`,
+            description:
+              extractTaskDescription(input) ||
+              i18n.t("modals:task_default_description", { id }),
             status: normalizeStatus(rawStatus),
             priority: normalizePriority(input.priority as string | undefined),
             source: "task",
@@ -468,7 +471,9 @@ function deriveSubagentRunFromActivity(
         } else if (id) {
           taskMap.set(id, {
             id,
-            description: extractTaskDescription(input) || `Task #${id}`,
+            description:
+              extractTaskDescription(input) ||
+              i18n.t("modals:task_default_description", { id }),
             status: normalizeStatus(rawStatus),
             priority: normalizePriority(input.priority as string | undefined),
             source: "task",
@@ -561,7 +566,11 @@ export function formatSubagentLabel(activity: {
     };
   }
   return {
-    label: activity.toolName || `Subagent ${activity.toolUseId.slice(0, 8)}`,
+    label:
+      activity.toolName ||
+      i18n.t("modals:subagent_default_label", {
+        id: activity.toolUseId.slice(0, 8),
+      }),
   };
 }
 
@@ -1002,7 +1011,7 @@ export function finalizeTaskState(
       totalCount: state.current.totalCount,
       id: `final-current-${nextSeq}`,
       sequence: nextSeq++,
-      label: "Open tasks",
+      label: i18n.t("modals:tasks_open_label"),
     });
   }
   for (const sub of state.subagents) {

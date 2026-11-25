@@ -36,8 +36,14 @@ import chatDe from "./locales/de/chat.json";
 import modalsDe from "./locales/de/modals.json";
 import sidebarDe from "./locales/de/sidebar.json";
 import schedulerDe from "./locales/de/scheduler.json";
+import commonFr from "./locales/fr/common.json";
+import settingsFr from "./locales/fr/settings.json";
+import chatFr from "./locales/fr/chat.json";
+import modalsFr from "./locales/fr/modals.json";
+import sidebarFr from "./locales/fr/sidebar.json";
+import schedulerFr from "./locales/fr/scheduler.json";
 
-export const SUPPORTED_LANGUAGES = ["en", "es", "pt-BR", "ja", "zh-CN", "de"] as const;
+export const SUPPORTED_LANGUAGES = ["en", "es", "pt-BR", "ja", "zh-CN", "de", "fr"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
 export function isSupportedLanguage(lang: string): lang is SupportedLanguage {
@@ -98,6 +104,14 @@ void i18n.use(initReactI18next).init({
       modals: modalsDe,
       sidebar: sidebarDe,
       scheduler: schedulerDe,
+    },
+    fr: {
+      common: commonFr,
+      settings: settingsFr,
+      chat: chatFr,
+      modals: modalsFr,
+      sidebar: sidebarFr,
+      scheduler: schedulerFr,
     },
   },
   interpolation: {

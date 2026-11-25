@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   cespFetchRegistry,
@@ -11,6 +12,7 @@ import type {
   RegistryPack,
   InstalledSoundPack,
 } from "../../../types/soundpacks";
+import i18n from "../../../i18n";
 import styles from "../Settings.module.css";
 
 const REGISTRY_BASE = "https://openpeon.com/packs/";
@@ -25,27 +27,21 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-const LANGUAGE_LABELS: Record<string, string> = {
-  en: "English",
-  es: "Spanish",
-  fr: "French",
-  de: "German",
-  it: "Italian",
-  pt: "Portuguese",
-  ja: "Japanese",
-  ko: "Korean",
-  zh: "Chinese",
-  ru: "Russian",
-  ar: "Arabic",
-  nl: "Dutch",
-  pl: "Polish",
-  sv: "Swedish",
-  tr: "Turkish",
-  multi: "Multilingual",
-};
+const KNOWN_LANGUAGE_CODES = new Set([
+  "en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh",
+  "ru", "ar", "nl", "pl", "sv", "tr",
+]);
 
+// Names come from the platform's language display names so they follow the
+// UI language; evaluated at call time so language switches apply.
 function languageLabel(code: string): string {
-  return LANGUAGE_LABELS[code] ?? code.toUpperCase();
+  if (code === "multi") return i18n.t("settings:sound_pack_language_multi");
+  if (!KNOWN_LANGUAGE_CODES.has(code)) return code.toUpperCase();
+  try {
+    return new Intl.DisplayNames([i18n.language], { type: "language" }).of(code) ?? code.toUpperCase();
+  } catch {
+    return code.toUpperCase();
+  }
 }
 
 interface Props {
@@ -54,6 +50,8 @@ interface Props {
 }
 
 export function SoundPackBrowser({ installed, onChanged }: Props) {
+  const { t, i18n: i18nInstance } = useTranslation("settings");
+  const uiLanguage = i18nInstance.language;
   const [registry, setRegistry] = useState<RegistryPack[]>([]);
   const [search, setSearch] = useState("");
   const [language, setLanguage] = useState("all");
@@ -75,7 +73,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
       if (p.language) codes.add(p.language);
     }
     return [...codes].sort((a, b) => languageLabel(a).localeCompare(languageLabel(b)));
-  }, [registry]);
+  }, [registry, uiLanguage]);
 
   const installedByName = new Map(installed.map((p) => [p.name, p]));
   const installedNames = new Set(installed.map((p) => p.name));
@@ -144,7 +142,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
   };
 
   if (loading) {
-    return <div className={styles.placeholder}>Loading sound pack registry…</div>;
+    return <div className={styles.placeholder}>{t("sound_pack_loading")}</div>;
   }
 
   return (
@@ -153,7 +151,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
         <div className={styles.pluginFormRow}>
           <input
             className={styles.input}
-            placeholder="Search packs…"
+            placeholder={t("sound_pack_search_placeholder")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             autoCorrect="off"
@@ -165,7 +163,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
           >
-            <option value="all">All languages</option>
+            <option value="all">{t("sound_pack_all_languages")}</option>
             {languages.map((code) => (
               <option key={code} value={code}>
                 {languageLabel(code)}
@@ -174,7 +172,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
           </select>
         </div>
         <span className={styles.pluginMeta}>
-          {filtered.length} of {registry.length} packs
+          {t("sound_pack_count", { shown: filtered.length, total: registry.length })}
         </span>
       </div>
 
@@ -184,8 +182,8 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
         {filtered.length === 0 && (
           <div className={styles.placeholder}>
             {registry.length === 0
-              ? "No packs available in the registry."
-              : "No packs match your filters."}
+              ? t("sound_pack_none_in_registry")
+              : t("sound_pack_none_match")}
           </div>
         )}
 
@@ -214,10 +212,10 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
                       {pack.display_name}
                     </a>
                     {isInstalled && (
-                      <span className={styles.pluginBadge}>installed</span>
+                      <span className={styles.pluginBadge}>{t("sound_pack_badge_installed")}</span>
                     )}
                     {hasUpdate && (
-                      <span className={styles.pluginBadge}>update</span>
+                      <span className={styles.pluginBadge}>{t("sound_pack_badge_update")}</span>
                     )}
                     <span className={styles.pluginBadge}>
                       {pack.source_ref}
@@ -230,7 +228,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
                   )}
                   <div className={styles.pluginMeta}>
                     {[
-                      `${pack.sound_count} sounds`,
+                      t("sound_pack_sound_count", { count: pack.sound_count }),
                       formatBytes(pack.total_size_bytes),
                       pack.language ? languageLabel(pack.language) : null,
                       pack.categories.join(", "),
@@ -248,7 +246,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
                           disabled={isBusy}
                           onClick={() => handleUpdate(pack)}
                         >
-                          {isBusy ? "Updating…" : "Update"}
+                          {isBusy ? t("sound_pack_updating") : t("sound_pack_update")}
                         </button>
                       )}
                       <button
@@ -256,7 +254,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
                         disabled={isBusy}
                         onClick={() => handleDelete(pack.name)}
                       >
-                        {isBusy ? "Removing…" : "Uninstall"}
+                        {isBusy ? t("sound_pack_removing") : t("sound_pack_uninstall")}
                       </button>
                     </>
                   ) : (
@@ -265,7 +263,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
                       disabled={isBusy}
                       onClick={() => handleInstall(pack)}
                     >
-                      {isBusy ? "Installing…" : "Install"}
+                      {isBusy ? t("sound_pack_installing") : t("sound_pack_install")}
                     </button>
                   )}
                 </div>

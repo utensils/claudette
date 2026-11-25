@@ -8,6 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useIsLightTheme } from "../../hooks/useIsLightTheme";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -29,6 +30,12 @@ import {
   statusLabel,
 } from "./fileTreeStatus";
 import styles from "./FileTree.module.css";
+
+const FILE_STATUS_KEYS = {
+  Added: "files_status_added",
+  Modified: "files_status_modified",
+  Deleted: "files_status_deleted",
+} as const;
 
 interface FileTreeProps {
   /** Workspace this tree belongs to. Drives per-workspace expansion +
@@ -72,6 +79,7 @@ export const FileTree = memo(function FileTree({
   onRenameCommit,
   onRenameCancel,
 }: FileTreeProps) {
+  const { t } = useTranslation("modals");
   const expanded = useAppStore(
     (s) => s.allFilesExpandedDirsByWorkspace[workspaceId] ?? EMPTY_EXPANDED,
   );
@@ -275,7 +283,7 @@ export const FileTree = memo(function FileTree({
   );
 
   if (entries.length === 0 && creatingParentPath === null) {
-    return <div className={styles.empty}>No files</div>;
+    return <div className={styles.empty}>{t("files_empty")}</div>;
   }
 
   const createParentClean =
@@ -293,7 +301,7 @@ export const FileTree = memo(function FileTree({
       className={styles.tree}
       ref={containerRef}
       role="tree"
-      aria-label="Project files"
+      aria-label={t("files_tree_aria_label")}
       onKeyDown={handleKeyDown}
     >
       {creatingParentPath !== null && createRowIndex === 0 && (
@@ -403,6 +411,7 @@ function CreateRow({
   onCreateCommit,
   onCreateCancel,
 }: CreateRowProps) {
+  const { t } = useTranslation("modals");
   const iconUrl = getMaterialFileIconUrl("untitled", isLight);
   return (
     <div
@@ -423,7 +432,7 @@ function CreateRow({
       <InlineRenameInput
         name="untitled"
         className={styles.renameInput}
-        ariaLabel="New file name"
+        ariaLabel={t("files_new_file_name_aria_label")}
         onCommit={(name) => onCreateCommit(parentPath, name)}
         onCancel={onCreateCancel}
       />
@@ -462,6 +471,7 @@ function Row({
   onRenameCommit,
   onRenameCancel,
 }: RowProps) {
+  const { t } = useTranslation("modals");
   const isDir = node.kind === "dir";
   const ChevronIcon = isDir
     ? expanded
@@ -479,8 +489,8 @@ function Row({
     status == null
       ? null
       : typeof status === "string"
-        ? status
-        : `Renamed from ${status.Renamed.from}`;
+        ? t(FILE_STATUS_KEYS[status])
+        : t("files_status_renamed_from", { from: status.Renamed.from });
   const rowClassName = [
     styles.row,
     selected ? styles.rowSelected : "",
@@ -549,7 +559,7 @@ function Row({
         <InlineRenameInput
           name={node.name}
           className={styles.renameInput}
-          ariaLabel={`Rename ${node.name}`}
+          ariaLabel={t("files_rename_aria_label", { name: node.name })}
           onCommit={onRenameCommit}
           onCancel={onRenameCancel}
         />
@@ -559,8 +569,8 @@ function Row({
       {node.kind === "dir" && node.statusCount > 0 && (
         <span
           className={styles.dirStatus}
-          title={`${node.statusCount} changed ${node.statusCount === 1 ? "file" : "files"}`}
-          aria-label={`${node.statusCount} changed ${node.statusCount === 1 ? "file" : "files"}`}
+          title={t("files_changed_count", { count: node.statusCount })}
+          aria-label={t("files_changed_count", { count: node.statusCount })}
         >
           {node.statusCount}
         </span>

@@ -123,7 +123,11 @@ export const AgentToolCallGroup = memo(function AgentToolCallGroup({
           className={styles.agentToolGroupHeader}
           expanded={!isCollapsed}
           onToggle={onToggle}
-          ariaLabel={`${isCollapsed ? "Expand" : "Collapse"} ${activity.toolName} transcript details`}
+          ariaLabel={
+            isCollapsed
+              ? t("agent_transcript_expand_aria", { tool: activity.toolName })
+              : t("agent_transcript_collapse_aria", { tool: activity.toolName })
+          }
           ariaControls={nestedId}
         >
           {headerContent}
@@ -141,8 +145,7 @@ export const AgentToolCallGroup = memo(function AgentToolCallGroup({
           )}
           {typeof activity.agentToolUseCount === "number" && (
             <span>
-              {activity.agentToolUseCount} agent tool call
-              {activity.agentToolUseCount !== 1 ? "s" : ""}
+              {t("agent_tool_calls", { count: activity.agentToolUseCount })}
             </span>
           )}
           {typeof activity.agentTotalTokens === "number" && (

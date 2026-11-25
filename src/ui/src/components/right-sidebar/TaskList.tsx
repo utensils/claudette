@@ -1,5 +1,6 @@
 import { memo, useRef, useState, type RefObject } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type {
   SubagentTaskRun,
   TaskRun,
@@ -69,6 +70,7 @@ function TaskItem({
   task: TrackedTask;
   rowRef?: RefObject<HTMLDivElement | null>;
 }) {
+  const { t } = useTranslation();
   const isCompleted = task.status === "completed";
   const isCancelled = task.status === "cancelled";
 
@@ -78,14 +80,14 @@ function TaskItem({
         className={styles.statusIcon}
         style={{ color: statusColor(task.status) }}
         role="img"
-        aria-label={task.status.replace(/_/g, " ")}
+        aria-label={t(`tasks_status_${task.status}`)}
       >
         {statusIcon(task.status)}
       </span>
       <span
         className={`${styles.description} ${isCompleted || isCancelled ? styles.completedDescription : ""}`}
       >
-        {task.description || `Task #${task.id}`}
+        {task.description || t("tasks_task_n", { id: task.id })}
       </span>
       {task.priority === "high" && (
         <span className={`${styles.priorityBadge} ${styles.priorityHigh}`}>
@@ -94,7 +96,7 @@ function TaskItem({
       )}
       {task.priority === "low" && (
         <span className={`${styles.priorityBadge} ${styles.priorityLow}`}>
-          low
+          {t("tasks_priority_low")}
         </span>
       )}
     </div>
@@ -126,8 +128,12 @@ function TaskRows({
 }
 
 function SubagentSection({ run }: { run: SubagentTaskRun }) {
+  const { t } = useTranslation();
   return (
-    <section className={styles.section} aria-label={`Subagent: ${run.label}`}>
+    <section
+      className={styles.section}
+      aria-label={t("tasks_subagent_aria", { label: run.label })}
+    >
       <div className={styles.sectionHeader}>
         <span className={styles.subagentLabel} title={run.tooltip ?? run.label}>
           {run.label}
@@ -150,6 +156,7 @@ function RunSummary({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className={styles.run}>
       <button
@@ -167,7 +174,7 @@ function RunSummary({
           className={styles.runTitle}
           title={run.tooltip ?? run.label ?? undefined}
         >
-          {run.label ?? `Run ${run.sequence}`}
+          {run.label ?? t("tasks_run_n", { sequence: run.sequence })}
         </span>
         <span className={styles.runMeta}>
           {run.completedCount}/{run.totalCount}
@@ -190,6 +197,7 @@ export const TaskList = memo(function TaskList({
 }: {
   taskHistory: WorkspaceTaskHistoryResult;
 }) {
+  const { t } = useTranslation();
   const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const { current, sessions, siblings, subagents, loading } = taskHistory;
@@ -213,14 +221,14 @@ export const TaskList = memo(function TaskList({
       <BoundedScrollPane ref={listRef} className={styles.list}>
         {isEmpty && (
           <div className={styles.empty}>
-            {loading ? "Loading tasks..." : "No tasks"}
+            {loading ? t("tasks_loading") : t("tasks_none")}
           </div>
         )}
 
         {hasCurrent && (
-          <section className={styles.section} aria-label="Current tasks">
+          <section className={styles.section} aria-label={t("tasks_current_aria")}>
             <div className={styles.sectionHeader}>
-              <span>Current</span>
+              <span>{t("tasks_current")}</span>
               <span className={styles.sectionMeta}>
                 {current.completedCount}/{current.totalCount}
               </span>
@@ -244,7 +252,7 @@ export const TaskList = memo(function TaskList({
             <section
               key={`sibling-${sibling.session.id}`}
               className={styles.section}
-              aria-label={`Sibling session: ${sibling.session.name}`}
+              aria-label={t("tasks_sibling_aria", { name: sibling.session.name })}
             >
               <div className={styles.sectionHeader}>
                 <span
@@ -268,9 +276,9 @@ export const TaskList = memo(function TaskList({
           ))}
 
         {hasHistory && (
-          <section className={styles.section} aria-label="Task history">
+          <section className={styles.section} aria-label={t("tasks_history_aria")}>
             <div className={styles.sectionHeader}>
-              <span>History</span>
+              <span>{t("tasks_history")}</span>
               <span className={styles.sectionMeta}>
                 {taskHistory.historyRunCount}
               </span>
@@ -280,7 +288,7 @@ export const TaskList = memo(function TaskList({
                 <div className={styles.sessionHeader}>
                   <span className={styles.sessionName}>{session.name}</span>
                   {session.status === "Archived" && (
-                    <span className={styles.archivedBadge}>Archived</span>
+                    <span className={styles.archivedBadge}>{t("tasks_archived")}</span>
                   )}
                 </div>
                 {runs.map((run) => {
@@ -311,10 +319,10 @@ export const TaskList = memo(function TaskList({
           type="button"
           className={styles.jumpToCurrent}
           onClick={jumpToActive}
-          aria-label="Jump to current task"
+          aria-label={t("tasks_jump_aria")}
         >
           <ChevronDown size={14} aria-hidden="true" />
-          <span>Jump to current</span>
+          <span>{t("tasks_jump")}</span>
         </button>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { memo, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { Workflow as WorkflowIcon } from "lucide-react";
 import { useLiveWorkflows, type LiveWorkflow } from "../../hooks/useLiveWorkflows";
 import { WORKFLOW_CARD_ANCHOR_ATTR } from "./workflowAnchor";
@@ -21,13 +22,14 @@ function scrollToCard(toolUseId: string) {
 }
 
 function WorkflowPill({ workflow }: { workflow: LiveWorkflow }) {
+  const { t } = useTranslation("chat");
   const { summary, name, toolUseId } = workflow;
   const onClick = useCallback(() => scrollToCard(toolUseId), [toolUseId]);
 
   const counts =
     summary.totalCount > 0
       ? `${summary.doneCount}/${summary.totalCount}`
-      : "starting";
+      : t("workflow_pill_starting");
 
   // Built independently of `counts`, which is shorthand tuned for the
   // pill's width ("1/3", "starting"). Reusing it here produced
@@ -36,13 +38,20 @@ function WorkflowPill({ workflow }: { workflow: LiveWorkflow }) {
   // name — the visual failure badge is not announced at all otherwise.
   const spokenProgress =
     summary.totalCount > 0
-      ? `${summary.doneCount} of ${summary.totalCount} agents complete`
-      : "starting";
+      ? t("workflow_pill_spoken_progress", {
+          done: summary.doneCount,
+          total: summary.totalCount,
+        })
+      : t("workflow_pill_starting");
   const spokenErrors =
     summary.errorCount > 0
-      ? `, ${summary.errorCount} failed`
+      ? t("workflow_pill_spoken_errors", { count: summary.errorCount })
       : "";
-  const ariaLabel = `Workflow ${name}, ${spokenProgress}${spokenErrors}. Jump to details.`;
+  const ariaLabel = t("workflow_pill_aria", {
+    name,
+    progress: spokenProgress,
+    errors: spokenErrors,
+  });
 
   return (
     <button
@@ -72,7 +81,7 @@ function WorkflowPill({ workflow }: { workflow: LiveWorkflow }) {
       </span>
       <span className={styles.counts}>{counts}</span>
       {summary.errorCount > 0 && (
-        <span className={styles.errors}>{summary.errorCount} failed</span>
+        <span className={styles.errors}>{t("agents_failed", { count: summary.errorCount })}</span>
       )}
     </button>
   );

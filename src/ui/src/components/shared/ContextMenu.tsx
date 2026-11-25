@@ -12,6 +12,7 @@ import { ChevronRight } from "lucide-react";
 
 import { useAppStore } from "../../stores/useAppStore";
 import { viewportLayoutSize, viewportToFixed } from "../../utils/zoom";
+import i18n from "../../i18n";
 import { clampMenuToViewport } from "./contextMenuUtils";
 import styles from "./ContextMenu.module.css";
 
@@ -253,7 +254,7 @@ export function ContextMenu({
       if (item.closeOnSelect !== false) onClose();
     } catch (err) {
       console.error("Context menu action failed:", err);
-      useAppStore.getState().addToast(`Action failed: ${String(err)}`);
+      useAppStore.getState().addToast(i18n.t("context_menu_action_failed", { error: String(err) }));
     } finally {
       if (mountedRef.current) {
         setPendingIndex(null);

@@ -1,4 +1,5 @@
 import { useId, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Plug2 } from "lucide-react";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import type { TaskTrackerResult } from "../../hooks/useTaskTracker";
@@ -118,6 +119,7 @@ export function TurnSummary({
    *  same action the FILES tree uses, NOT the diff viewer. */
   onOpenEditFile?: (filePath: string) => void;
 }) {
+  const { t } = useTranslation("chat");
   const visibleActivities = activities ?? turn.activities;
   const hasElapsed = typeof turn.durationMs === "number" && turn.durationMs > 0;
   const hasTokens =
@@ -267,12 +269,12 @@ export function TurnSummary({
               {label != null ? (
                 renderTurnLabel(label)
               ) : (
-                `${visibleActivities.length} tool call${
-                  visibleActivities.length !== 1 ? "s" : ""
-                }`
+                visibleActivities.length === 1
+                  ? t("tool_calls_singular", { count: 1 })
+                  : t("tool_calls_plural", { count: visibleActivities.length })
               )}
               {showFooter && turn.messageCount > 0 &&
-                `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
+                `, ${t("turn_summary_messages", { count: turn.messageCount })}`}
             </span>
             {label == null || kind === "tools" || kind === "mcp" ? (
               breakdown && <span className={styles.turnBreakdown}>{breakdown}</span>

@@ -11,6 +11,8 @@
  * components stops the trend.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "../../../i18n";
 import { updateRepositoryRequiredInputs } from "../../../services/tauri";
 import { useAppStore } from "../../../stores/useAppStore";
 import {
@@ -171,16 +173,28 @@ function rowToField(
       const minN = parseOptional(row.min);
       const maxN = parseOptional(row.max);
       if (Number.isNaN(defaultN as number)) {
-        return { ok: false, error: `"${label}": default must be a number.` };
+        return {
+          ok: false,
+          error: i18n.t("settings:required_inputs_error_default_number", { label }),
+        };
       }
       if (Number.isNaN(minN as number)) {
-        return { ok: false, error: `"${label}": min must be a number.` };
+        return {
+          ok: false,
+          error: i18n.t("settings:required_inputs_error_min_number", { label }),
+        };
       }
       if (Number.isNaN(maxN as number)) {
-        return { ok: false, error: `"${label}": max must be a number.` };
+        return {
+          ok: false,
+          error: i18n.t("settings:required_inputs_error_max_number", { label }),
+        };
       }
       if (minN !== null && maxN !== null && minN > maxN) {
-        return { ok: false, error: `"${label}": min must be ≤ max.` };
+        return {
+          ok: false,
+          error: i18n.t("settings:required_inputs_error_min_max", { label }),
+        };
       }
       return {
         ok: true,
@@ -202,6 +216,7 @@ function rowToField(
 }
 
 export function RequiredInputsEditor({ repoId }: RequiredInputsEditorProps) {
+  const { t } = useTranslation("settings");
   const repo = useAppStore((s) =>
     s.repositories.find((r) => r.id === repoId),
   );
@@ -256,7 +271,7 @@ export function RequiredInputsEditor({ repoId }: RequiredInputsEditorProps) {
           return;
         }
         if (seen.has(result.field.key)) {
-          setError(`Duplicate input name "${result.field.key}".`);
+          setError(t("required_inputs_error_duplicate", { name: result.field.key }));
           return;
         }
         seen.add(result.field.key);
@@ -272,7 +287,7 @@ export function RequiredInputsEditor({ repoId }: RequiredInputsEditorProps) {
         setError(String(e));
       }
     },
-    [updateRepo],
+    [updateRepo, t],
   );
 
   const queueSave = useCallback(() => {
@@ -343,17 +358,14 @@ export function RequiredInputsEditor({ repoId }: RequiredInputsEditorProps) {
 
   return (
     <div className={styles.fieldGroup}>
-      <div className={styles.fieldLabel}>Required inputs</div>
+      <div className={styles.fieldLabel}>{t("required_inputs_label")}</div>
       <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
-        Values new workspaces must supply before they're created. Each becomes
-        an environment variable in the workspace session — visible to the
-        agent, the terminal, and your setup/archive scripts.
+        {t("required_inputs_description")}
       </div>
 
       {rows.length === 0 && (
         <div className={styles.fieldHint}>
-          No required inputs declared. Workspaces in this repo will create
-          immediately without prompting.
+          {t("required_inputs_empty")}
         </div>
       )}
 
@@ -377,7 +389,7 @@ export function RequiredInputsEditor({ repoId }: RequiredInputsEditorProps) {
         className={styles.addPromptButton}
         onClick={addRow}
       >
-        + Add required input
+        {t("required_inputs_add")}
       </button>
     </div>
   );
@@ -390,6 +402,7 @@ interface RowProps {
 }
 
 function RequiredInputRow({ row, onChange, onRemove }: RowProps) {
+  const { t } = useTranslation("settings");
   const keyError = row.key.trim() === "" ? null : validateInputKey(row.key.trim());
   // Compose the base inline-field style with each input's role-specific
   // sizing class. `.requiredInputField` carries the visual chrome (border,
@@ -405,7 +418,7 @@ function RequiredInputRow({ row, onChange, onRemove }: RowProps) {
           onChange={(e) => onChange({ key: e.target.value })}
           placeholder="EXAMPLE_ENV"
           className={`${field} ${styles.requiredInputKeyInput}`}
-          aria-label="Input name (env var)"
+          aria-label={t("required_inputs_name_aria")}
           {...PLAIN_TEXT_INPUT_PROPS}
         />
         <select
@@ -414,18 +427,18 @@ function RequiredInputRow({ row, onChange, onRemove }: RowProps) {
             onChange({ type: e.target.value as RepositoryInputType })
           }
           className={`${field} ${styles.requiredInputTypeSelect}`}
-          aria-label="Input type"
+          aria-label={t("required_inputs_type_aria")}
         >
-          <option value="string">String</option>
-          <option value="number">Number</option>
-          <option value="boolean">Boolean</option>
+          <option value="string">{t("required_inputs_type_string")}</option>
+          <option value="number">{t("required_inputs_type_number")}</option>
+          <option value="boolean">{t("required_inputs_type_boolean")}</option>
         </select>
         <button
           type="button"
           onClick={onRemove}
           className={styles.mcpRemoveBtn}
-          aria-label="Remove input"
-          title="Remove input"
+          aria-label={t("required_inputs_remove")}
+          title={t("required_inputs_remove")}
         >
           ×
         </button>
@@ -435,26 +448,26 @@ function RequiredInputRow({ row, onChange, onRemove }: RowProps) {
         type="text"
         value={row.label}
         onChange={(e) => onChange({ label: e.target.value })}
-        placeholder="Label (shown in the workspace-create prompt)"
+        placeholder={t("required_inputs_label_placeholder")}
         className={fullWidth}
-        aria-label="Prompt label"
+        aria-label={t("required_inputs_label_aria")}
       />
       <input
         type="text"
         value={row.description}
         onChange={(e) => onChange({ description: e.target.value })}
-        placeholder="Description (optional)"
+        placeholder={t("required_inputs_description_placeholder")}
         className={fullWidth}
-        aria-label="Description"
+        aria-label={t("required_inputs_description_aria")}
       />
       {row.type === "string" && (
         <input
           type="text"
           value={row.placeholder}
           onChange={(e) => onChange({ placeholder: e.target.value })}
-          placeholder="Placeholder (optional)"
+          placeholder={t("required_inputs_placeholder_placeholder")}
           className={fullWidth}
-          aria-label="Placeholder"
+          aria-label={t("required_inputs_placeholder_aria")}
         />
       )}
       {row.type === "number" && (
@@ -463,25 +476,25 @@ function RequiredInputRow({ row, onChange, onRemove }: RowProps) {
             type="number"
             value={row.min}
             onChange={(e) => onChange({ min: e.target.value })}
-            placeholder="Min (optional)"
+            placeholder={t("required_inputs_min_placeholder")}
             className={`${field} ${styles.requiredInputNumberField}`}
-            aria-label="Minimum"
+            aria-label={t("required_inputs_min_aria")}
           />
           <input
             type="number"
             value={row.max}
             onChange={(e) => onChange({ max: e.target.value })}
-            placeholder="Max (optional)"
+            placeholder={t("required_inputs_max_placeholder")}
             className={`${field} ${styles.requiredInputNumberField}`}
-            aria-label="Maximum"
+            aria-label={t("required_inputs_max_aria")}
           />
           <input
             type="number"
             value={row.defaultNumber}
             onChange={(e) => onChange({ defaultNumber: e.target.value })}
-            placeholder="Default (optional)"
+            placeholder={t("required_inputs_default_placeholder")}
             className={`${field} ${styles.requiredInputNumberField}`}
-            aria-label="Default value"
+            aria-label={t("required_inputs_default_aria")}
           />
         </div>
       )}
@@ -492,7 +505,7 @@ function RequiredInputRow({ row, onChange, onRemove }: RowProps) {
             checked={row.defaultBool}
             onChange={(e) => onChange({ defaultBool: e.target.checked })}
           />
-          Default to enabled
+          {t("required_inputs_default_enabled")}
         </label>
       )}
       {/* "Required" is meaningless for booleans — they always carry a
@@ -506,7 +519,7 @@ function RequiredInputRow({ row, onChange, onRemove }: RowProps) {
             checked={row.required}
             onChange={(e) => onChange({ required: e.target.checked })}
           />
-          Required at workspace creation
+          {t("required_inputs_required_at_creation")}
         </label>
       )}
     </div>

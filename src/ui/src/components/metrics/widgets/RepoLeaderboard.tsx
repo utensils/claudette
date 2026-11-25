@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../metrics.module.css";
 import { useAppStore } from "../../../stores/useAppStore";
 import { RepoIcon } from "../../shared/RepoIcon";
@@ -9,20 +10,21 @@ function formatUsd(n: number): string {
 }
 
 export function RepoLeaderboard() {
+  const { t } = useTranslation();
   const rows = useAppStore((s) => s.analyticsMetrics?.repoLeaderboard);
   const repositories = useAppStore((s) => s.repositories);
   const repoMap = new Map(repositories.map((r) => [r.id, r]));
 
   return (
     <div className={styles.panel}>
-      <span className={styles.panelTitle}>Repo leaderboard</span>
+      <span className={styles.panelTitle}>{t("metrics_leaderboard")}</span>
       {!rows || rows.length === 0 ? (
-        <div className={styles.empty}>no data yet</div>
+        <div className={styles.empty}>{t("metrics_no_data")}</div>
       ) : (
         <div className={styles.rowList}>
           {rows.map((row) => {
             const repo = repoMap.get(row.repositoryId);
-            const name = repo?.name ?? "unknown repo";
+            const name = repo?.name ?? t("metrics_unknown_repo");
             const icon = repo?.icon;
             return (
               <div key={row.repositoryId} className={styles.leaderRow}>
@@ -32,12 +34,12 @@ export function RepoLeaderboard() {
                   ) : null}
                   {name}
                 </span>
-                <span className={`${styles.rowMuted} ${styles.hideNarrow}`} title="sessions">{row.sessions}s</span>
-                <span className={`${styles.rowMuted} ${styles.hideNarrow}`} title="commits">{row.commits}c</span>
-                <span className={`${styles.rowMuted} ${styles.hideNarrow}`} title="tokens (in + out)">
+                <span className={`${styles.rowMuted} ${styles.hideNarrow}`} title={t("metrics_sessions")}>{row.sessions}s</span>
+                <span className={`${styles.rowMuted} ${styles.hideNarrow}`} title={t("metrics_commits")}>{row.commits}c</span>
+                <span className={`${styles.rowMuted} ${styles.hideNarrow}`} title={t("metrics_tokens_in_out")}>
                   {formatTokens(row.totalInputTokens + row.totalOutputTokens)}t
                 </span>
-                <span className={styles.rowValue} title="cost">
+                <span className={styles.rowValue} title={t("metrics_cost")}>
                   {formatUsd(row.totalCostUsd)}
                 </span>
               </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../Settings.module.css";
 
 interface PlaceholderSettingsProps {
@@ -5,10 +6,11 @@ interface PlaceholderSettingsProps {
 }
 
 export function PlaceholderSettings({ title }: PlaceholderSettingsProps) {
+  const { t } = useTranslation("settings");
   return (
     <div>
       <h2 className={styles.sectionTitle}>{title}</h2>
-      <div className={styles.placeholder}>Coming soon</div>
+      <div className={styles.placeholder}>{t("placeholder_coming_soon")}</div>
     </div>
   );
 }

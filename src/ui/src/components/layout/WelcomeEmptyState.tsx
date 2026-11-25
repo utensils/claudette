@@ -1,4 +1,5 @@
 import { memo, useMemo } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { FolderPlus, Plus, Command, FolderGit2, Search, Layers } from "lucide-react";
 import type { Repository } from "../../types/repository";
 import { useAppStore } from "../../stores/useAppStore";
@@ -41,6 +42,7 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
   title,
   subtitle,
 }: WelcomeEmptyStateProps) {
+  const { t } = useTranslation();
   // Per-row workspace counts give each project chip something more concrete
   // than just its path — a "3 active" badge tells the user where their
   // ongoing work lives without making them open the project to find out.
@@ -94,12 +96,13 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
   // workspace, project-scoped view). "Ready when you are." reads as the
   // assistant's standby rather than a launch screen.
   const resolvedTitle =
-    title ?? (hasRepos ? "Ready when you are." : "Let's set up your first project.");
+    title ??
+    (hasRepos ? t("welcome_title_ready") : t("welcome_title_setup"));
   const resolvedSubtitle =
     subtitle ??
     (hasRepos
-      ? "No active workspaces yet. Create one to start a conversation with Claude."
-      : "Add a project — Claudette will create a git worktree and a Claude session for it.");
+      ? t("welcome_subtitle_ready")
+      : t("welcome_subtitle_setup"));
 
   const suggestedActiveCount = suggestedRepo
     ? activeWorkspaceCountByRepo.get(suggestedRepo.id) ?? 0
@@ -119,7 +122,7 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
             className={styles.activeProject}
             onClick={() => onCreateWorkspace(suggestedRepo.id)}
             disabled={creating}
-            title={`Create a workspace in ${suggestedRepo.name}`}
+            title={t("welcome_create_in", { name: suggestedRepo.name })}
           >
             <span className={styles.activeProjectHead}>
               {suggestedRepo.icon && (
@@ -139,11 +142,10 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
             <span className={styles.activeProjectMeta}>
               <span>
                 <Layers size={11} aria-hidden="true" />
-                {suggestedActiveCount}{" "}
-                {suggestedActiveCount === 1 ? "active workspace" : "active workspaces"}
+                {t("welcome_active_workspaces", { count: suggestedActiveCount })}
               </span>
               {!suggestedRepo.path_valid && (
-                <span className={styles.projectRowMissing}>path missing</span>
+                <span className={styles.projectRowMissing}>{t("welcome_path_missing")}</span>
               )}
             </span>
           </button>
@@ -158,7 +160,7 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
               disabled={creating}
             >
               <Plus size={14} />
-              Create Workspace
+              {t("welcome_create_workspace")}
             </button>
           )}
           <button
@@ -167,13 +169,13 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
             onClick={onAddRepository}
           >
             <FolderPlus size={14} />
-            {hasRepos ? "Add Repository…" : "Add Your First Repository…"}
+            {hasRepos ? t("welcome_add_repository") : t("welcome_add_first_repository")}
           </button>
         </div>
 
         {orderedRepos.length > 1 && (
           <section className={styles.section}>
-            <h2 className={styles.sectionLabel}>Your Projects</h2>
+            <h2 className={styles.sectionLabel}>{t("welcome_your_projects")}</h2>
             <ul className={styles.projectList}>
               {orderedRepos.map((repo) => {
                 const count = activeWorkspaceCountByRepo.get(repo.id) ?? 0;
@@ -184,7 +186,7 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
                       className={styles.projectRow}
                       onClick={() => onCreateWorkspace(repo.id)}
                       disabled={creating}
-                      title={`Create a workspace in ${repo.name}`}
+                      title={t("welcome_create_in", { name: repo.name })}
                     >
                       {repo.icon ? (
                         <RepoIcon
@@ -202,11 +204,11 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
                       <span className={styles.projectRowMeta}>
                         {count > 0 && (
                           <span>
-                            {count} {count === 1 ? "workspace" : "workspaces"}
+                            {t("welcome_workspace_count", { count })}
                           </span>
                         )}
                         {!repo.path_valid && (
-                          <span className={styles.projectRowMissing}>missing</span>
+                          <span className={styles.projectRowMissing}>{t("welcome_missing")}</span>
                         )}
                       </span>
                     </button>
@@ -218,36 +220,41 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
         )}
 
         <section className={styles.section}>
-          <h2 className={styles.sectionLabel}>Tips</h2>
+          <h2 className={styles.sectionLabel}>{t("welcome_tips")}</h2>
           <ul className={styles.tips}>
             <li>
               <FolderGit2 size={12} className={styles.tipIcon} />
               <span>
-                Click a project above (or press{" "}
-                <kbd className={styles.kbd}>{newWorkspaceLabel}</kbd> in any
-                project view) to spin up a fresh workspace.
+                <Trans
+                  i18nKey="welcome_tip_new_workspace"
+                  values={{ shortcut: newWorkspaceLabel }}
+                  components={{ kbd: <kbd className={styles.kbd} /> }}
+                />
               </span>
             </li>
             <li>
               <Search size={12} className={styles.tipIcon} />
               <span>
-                <kbd className={styles.kbd}>{fuzzyFinderLabel}</kbd> opens the
-                fuzzy finder to jump to any workspace.
+                <Trans
+                  i18nKey="welcome_tip_fuzzy_finder"
+                  values={{ shortcut: fuzzyFinderLabel }}
+                  components={{ kbd: <kbd className={styles.kbd} /> }}
+                />
               </span>
             </li>
             <li>
               <Command size={12} className={styles.tipIcon} />
               <span>
-                <kbd className={styles.kbd}>{commandPaletteLabel}</kbd> opens
-                the command palette.
+                <Trans
+                  i18nKey="welcome_tip_command_palette"
+                  values={{ shortcut: commandPaletteLabel }}
+                  components={{ kbd: <kbd className={styles.kbd} /> }}
+                />
               </span>
             </li>
             <li>
               <Plus size={12} className={styles.tipIcon} />
-              <span>
-                Each workspace gets its own git worktree, so parallel agents
-                can't step on each other's branches.
-              </span>
+              <span>{t("welcome_tip_worktree")}</span>
             </li>
           </ul>
         </section>
