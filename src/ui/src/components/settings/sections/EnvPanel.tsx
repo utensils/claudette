@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
+import { SafeTrans } from "../../shared/SafeTrans";
 import type { TFunction } from "i18next";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../../../stores/useAppStore";
@@ -637,7 +638,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
   return (
     <>
       <div className={styles.settingDescription}>
-        <Trans
+        <SafeTrans
           i18nKey="env_panel_description"
           ns="settings"
           values={{
@@ -663,7 +664,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
               active plugin + elapsed counter mirrors the sidebar's
               loading hint so the same data shows up wherever a
               resolve is visible. */}
-          <Trans
+          <SafeTrans
             i18nKey="env_panel_resolving"
             ns="settings"
             values={{ plugin: envProgress.current_plugin, seconds: elapsedSec }}

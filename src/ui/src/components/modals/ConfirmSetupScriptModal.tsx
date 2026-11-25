@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
+import { SafeTrans } from "../shared/SafeTrans";
 import { useAppStore } from "../../stores/useAppStore";
 import { runWorkspaceSetup, setSetupScriptAutoRun } from "../../services/tauri";
 import {
@@ -62,7 +63,7 @@ export function ConfirmSetupScriptModal() {
   return (
     <Modal title={t("setup_script_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        <Trans
+        <SafeTrans
           i18nKey="setup_script_warning"
           ns="modals"
           values={{ source: label }}

@@ -732,6 +732,13 @@ describe("MessagesWithTurns edit summaries", () => {
       "Invalid authentication credentials (401)",
     );
     expect(container.textContent).not.toContain("Sign in");
+    // The auth panel's title ("Claude Code sign-in") also opens the resolved
+    // message, so match it as a whole element rather than a substring.
+    expect(
+      Array.from(container.querySelectorAll("div")).some(
+        (el) => el.textContent?.trim() === "Claude Code sign-in",
+      ),
+    ).toBe(false);
   });
 
   it("still shows files parsed from this turn's own edit activity", async () => {

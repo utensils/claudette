@@ -1,5 +1,6 @@
 import { memo, useMemo } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
+import { SafeTrans } from "../shared/SafeTrans";
 import { FolderPlus, Plus, Command, FolderGit2, Search, Layers } from "lucide-react";
 import type { Repository } from "../../types/repository";
 import { useAppStore } from "../../stores/useAppStore";
@@ -225,7 +226,7 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
             <li>
               <FolderGit2 size={12} className={styles.tipIcon} />
               <span>
-                <Trans
+                <SafeTrans
                   i18nKey="welcome_tip_new_workspace"
                   values={{ shortcut: newWorkspaceLabel }}
                   components={{ kbd: <kbd className={styles.kbd} /> }}
@@ -235,7 +236,7 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
             <li>
               <Search size={12} className={styles.tipIcon} />
               <span>
-                <Trans
+                <SafeTrans
                   i18nKey="welcome_tip_fuzzy_finder"
                   values={{ shortcut: fuzzyFinderLabel }}
                   components={{ kbd: <kbd className={styles.kbd} /> }}
@@ -245,7 +246,7 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
             <li>
               <Command size={12} className={styles.tipIcon} />
               <span>
-                <Trans
+                <SafeTrans
                   i18nKey="welcome_tip_command_palette"
                   values={{ shortcut: commandPaletteLabel }}
                   components={{ kbd: <kbd className={styles.kbd} /> }}

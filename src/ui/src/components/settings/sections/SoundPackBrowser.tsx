@@ -32,13 +32,13 @@ const KNOWN_LANGUAGE_CODES = new Set([
   "ru", "ar", "nl", "pl", "sv", "tr",
 ]);
 
-// Names come from the platform's language display names so they follow the
-// UI language; evaluated at call time so language switches apply.
-function languageLabel(code: string): string {
+// Names come from the platform's language display names, in the UI language
+// the caller passes so a language switch recomputes them.
+function languageLabel(code: string, uiLanguage: string): string {
   if (code === "multi") return i18n.t("settings:sound_pack_language_multi");
   if (!KNOWN_LANGUAGE_CODES.has(code)) return code.toUpperCase();
   try {
-    return new Intl.DisplayNames([i18n.language], { type: "language" }).of(code) ?? code.toUpperCase();
+    return new Intl.DisplayNames([uiLanguage], { type: "language" }).of(code) ?? code.toUpperCase();
   } catch {
     return code.toUpperCase();
   }
@@ -72,7 +72,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
     for (const p of registry) {
       if (p.language) codes.add(p.language);
     }
-    return [...codes].sort((a, b) => languageLabel(a).localeCompare(languageLabel(b)));
+    return [...codes].sort((a, b) => languageLabel(a, uiLanguage).localeCompare(languageLabel(b, uiLanguage)));
   }, [registry, uiLanguage]);
 
   const installedByName = new Map(installed.map((p) => [p.name, p]));
@@ -166,7 +166,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
             <option value="all">{t("sound_pack_all_languages")}</option>
             {languages.map((code) => (
               <option key={code} value={code}>
-                {languageLabel(code)}
+                {languageLabel(code, uiLanguage)}
               </option>
             ))}
           </select>
@@ -230,7 +230,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
                     {[
                       t("sound_pack_sound_count", { count: pack.sound_count }),
                       formatBytes(pack.total_size_bytes),
-                      pack.language ? languageLabel(pack.language) : null,
+                      pack.language ? languageLabel(pack.language, uiLanguage) : null,
                       pack.categories.join(", "),
                     ]
                       .filter(Boolean)

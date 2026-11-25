@@ -1,4 +1,5 @@
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
+import { SafeTrans } from "../shared/SafeTrans";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   installNow,
@@ -80,7 +81,7 @@ export function UpdateBanner() {
       ) : updateInstallWhenIdle ? (
         <>
           <span className={styles.message}>
-            <Trans
+            <SafeTrans
               i18nKey="update_ready"
               values={{ version: updateVersion }}
               components={{ version: <span className={styles.version} /> }}
@@ -98,7 +99,7 @@ export function UpdateBanner() {
       ) : (
         <>
           <span className={styles.message}>
-            <Trans
+            <SafeTrans
               i18nKey="update_available"
               values={{ product: productLabel, version: updateVersion }}
               components={{ version: <span className={styles.version} /> }}

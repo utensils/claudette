@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { SafeTrans } from "../shared/SafeTrans";
 import type { TFunction } from "i18next";
 import {
   Plus,
@@ -235,7 +236,7 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
             <li>
               <Command size={12} className={styles.tipIcon} />
               <span>
-                <Trans
+                <SafeTrans
                   i18nKey="empty_tabs_tip_new_tab"
                   ns="chat"
                   values={{ shortcut: newTabLabel }}
@@ -246,7 +247,7 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
             <li>
               <X size={12} className={styles.tipIcon} />
               <span>
-                <Trans
+                <SafeTrans
                   i18nKey="empty_tabs_tip_close_tab"
                   ns="chat"
                   values={{ shortcut: closeTabLabel }}
@@ -267,7 +268,7 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
             <li>
               <Clock size={12} className={styles.tipIcon} />
               <span>
-                <Trans
+                <SafeTrans
                   i18nKey="empty_tabs_tip_fuzzy_finder"
                   ns="chat"
                   values={{ shortcut: fuzzyFinderLabel }}
