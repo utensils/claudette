@@ -21,13 +21,21 @@ Like every other scroll surface in Claudette, the Tasks list does not elastic-bo
 
 ## Subagent Tasks
 
-When the main agent spawns subagents (via Claude Code's `TaskCreate` / agent-teams flow), each subagent's own task list renders in its own section above **History**, labeled with the subagent's name. The main agent's checklist stays in **Current**; subagent buckets are kept separate so the two never collide. Once a subagent finishes (status leaves `running`), its bucket is archived into **History** under the owning session.
+A delegated agent appears in **Tasks** even when its assignment needs no checklist. Open the agent summary in chat to see the workers, their latest status, and any results or milestones they reported. A child can continue running after the parent answers. The stored status is the last observation Claudette received.
 
-Subagent labels are derived from the agent's `description` field and capped at one line / 80 characters so long spawn prompts don't blow up the layout. Hover the label to see the full single-line collapse of the original description.
+- **Claude Code** supplies agent lifecycle events and can show nested tool activity and checklists.
+- **Codex** identifies each worker by its thread. Spawning or waiting on several workers can update each one independently.
+- **Antigravity** can expose a delegation without a child conversation ID. In that case Claudette shows **Delegated**. The launch call returning only confirms the handoff.
+
+An agent can report a milestone, a blocker, or a result through Claudette. A reported result and the provider's completion state appear separately. Reopening the chat or reconnecting to a shared desktop reloads the saved run details. A standalone server records the Claude lifecycle events it receives. Claudette’s MCP reporting tool and the Codex and Antigravity harnesses are available on desktop hosts.
+
+When Codex workers ask questions or request approval, each request has its own card in the parent chat. You can answer them in any order, including after the parent turn ends.
+
+![Tasks showing two active agents and the result of a completed test run](../../../assets/screenshots/subagent-runs.png)
 
 ## Sibling Sessions
 
-TeamCreate teammates run as **sibling chat sessions** in the same workspace. While a teammate's agent is still running, that session's live tasks (and its own subagents) appear as a dedicated lane in the Tasks panel — distinguished from **Current** by the session name and a pulsing live dot. Only after the teammate goes idle do its leftover tasks graduate into **History** under the session's name.
+TeamCreate teammates run as **sibling chat sessions** in the same workspace. Expand a worker in **Tasks** and select **Open teammate tab** to visit its linked session when available. While a teammate's agent is still running, that session's live tasks (and its own subagents) appear as a dedicated lane in the Tasks panel — distinguished from **Current** by the session name and a pulsing live dot. Only after the teammate goes idle do its leftover tasks graduate into **History** under the session's name.
 
 The right sidebar remembers which tab (**Files**, **Changes**, or **Tasks**) you last selected for each workspace. Switching to a different workspace and back leaves your tab choice intact — every workspace returns to exactly where you left it. On a brand-new workspace, the tab defaults to **Files**; it auto-switches to **Tasks** the first time live tasks appear so you don't have to hunt for the tab. Once you've explicitly chosen a tab for that workspace (or the auto-switch has fired), the choice is locked in for the session and no further auto-switches occur. Restarting the app resets all workspaces to **Files**.
 

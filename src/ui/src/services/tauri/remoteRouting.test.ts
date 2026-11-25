@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { setRemoteRoutingResolver } from "./remoteRouting";
-import { prepareCrossHarnessMigration, submitPlanApproval } from "./chat";
+import { prepareCrossHarnessMigration, submitAgentApproval, submitPlanApproval } from "./chat";
 import { createChatSession } from "./chatSessions";
 import { closePty, spawnPty, writePty } from "./pty";
 import { loadCommitFileDiff } from "./diff";
@@ -42,6 +42,17 @@ describe("remote routing", () => {
       tool_use_id: "tool-1",
       approved: true,
       reason: null,
+    });
+  });
+
+  it("answers a child on its originating connection when two hosts share session IDs", async () => {
+    await submitAgentApproval("remote-session", "child-1", true, undefined, "conn-2");
+    expect(sendRemoteCommand).toHaveBeenCalledWith("conn-2", "submit_agent_approval", {
+      chat_session_id: "remote-session", tool_use_id: "child-1", approved: true, reason: null,
+    });
+    await submitAgentApproval("remote-session", "child-2", false, undefined, null);
+    expect(invoke).toHaveBeenCalledWith("submit_agent_approval", {
+      sessionId: "remote-session", toolUseId: "child-2", approved: false, reason: null,
     });
   });
 

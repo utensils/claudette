@@ -266,3 +266,44 @@
 .priorityLow {
   color: var(--text-dim);
 }
+
+.agentDetails {
+  padding-inline: 8px;
+  min-width: 0;
+  font-size: var(--caption-size);
+  line-height: 1.45;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.agentDetails p {
+  margin: 2px 0;
+  white-space: pre-wrap;
+}
+
+.agentDetails time {
+  color: var(--text-dim);
+}
+
+.agentStatus {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  text-transform: none;
+  font-size: var(--caption-size);
+}
+
+.agentStatus[data-status="running"] { color: var(--accent-primary); }
+.agentStatus[data-status="needs_approval"] { color: var(--tool-task); }
+.agentStatus[data-status="failed"] { color: var(--accent-error); }
+.agentStatus[data-status="completed"] { color: var(--accent-success); }
+
+.linkedSession {
+  display: block;
+  border: 0;
+  background: transparent;
+  color: var(--accent-primary);
+  font: inherit;
+  cursor: pointer;
+  padding: 3px 0;
+}
+.linkedSession:hover { text-decoration: underline; }

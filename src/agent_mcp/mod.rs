@@ -147,7 +147,7 @@ genuinely need input — do not call them to narrate progress.";
 /// so each is steered only when actually available.
 #[must_use]
 pub fn compose_mcp_nudge(send_to_user_enabled: bool, agent_interaction_enabled: bool) -> String {
-    let mut parts: Vec<&str> = vec![MCP_SCHEDULING_NUDGE];
+    let mut parts: Vec<&str> = vec![MCP_SCHEDULING_NUDGE, tools::progress::GUIDANCE];
     if send_to_user_enabled {
         parts.push(SEND_TO_USER_NUDGE);
     }
@@ -297,6 +297,7 @@ mod builtin_tests {
         // Neither → scheduling guidance only (the server is always injected).
         let neither = compose_mcp_nudge(false, false);
         assert!(neither.contains("ScheduleWakeup"));
+        assert!(neither.contains(tools::progress::NAME));
         assert!(!neither.contains("Inline file delivery"));
         assert!(!neither.contains("Interactive user prompts"));
     }

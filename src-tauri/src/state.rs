@@ -1,3 +1,5 @@
+mod session_startup;
+use session_startup::SessionStartup;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -66,6 +68,7 @@ pub enum AttentionKind {
 /// resolve them using the tool_use_id they already track.
 #[derive(Debug, Clone)]
 pub struct PendingPermission {
+    pub child_owned: bool,
     pub request_id: String,
     pub tool_name: String,
     /// Original tool input sent by the model — used verbatim as the base for
@@ -284,6 +287,22 @@ impl AgentSessionState {
         self.attention_notification_sent = false;
     }
 
+    /// Answering one worker can leave another worker or the parent waiting.
+    pub fn refresh_pending_attention(&mut self) {
+        let pending = &self.pending_permissions;
+        if pending.is_empty() {
+            self.reset_attention();
+        } else {
+            self.needs_attention = true;
+            self.attention_kind =
+                Some(if pending.values().any(|p| p.tool_name == "ExitPlanMode") {
+                    AttentionKind::Plan
+                } else {
+                    AttentionKind::Ask
+                });
+        }
+    }
+
     pub fn remember_local_user_message_uuid(&mut self, uuid: String) {
         // Cap the set at 1024 entries — clear before inserting the entry that
         // would push us past the cap so the post-insert size never exceeds it.
@@ -479,6 +498,7 @@ pub struct AppState {
     /// Each value carries its owning `workspace_id` for reverse lookups
     /// (tray aggregation, notifications, worktree path resolution).
     pub agents: RwLock<HashMap<String, AgentSessionState>>,
+    pub(crate) session_startup: SessionStartup,
     /// Active PTY processes keyed by pty_id.
     pub ptys: RwLock<HashMap<u64, PtyHandle>>,
     /// Active file-tail streams for agent-owned background task terminal tabs.
@@ -671,6 +691,7 @@ impl AppState {
             db_path,
             worktree_base_dir: RwLock::new(worktree_base_dir),
             agents: RwLock::new(HashMap::new()),
+            session_startup: SessionStartup::default(),
             ptys: RwLock::new(HashMap::new()),
             agent_task_tailers: RwLock::new(HashMap::new()),
             next_pty_id: AtomicU64::new(1),

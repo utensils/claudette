@@ -184,6 +184,15 @@ impl AgentSession {
         }
     }
 
+    /// Retained child prompts for this connection, independent of stream lag.
+    pub fn child_control_replay(&self) -> Option<super::ChildControlReplay> {
+        match self {
+            Self::ClaudeCode(_) => None,
+            Self::CodexAppServer(session) => Some(session.child_control_replay()),
+            Self::AntigravityAcp(session) => Some(session.child_control_replay()),
+        }
+    }
+
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AgentEvent> {
         match self {
             Self::ClaudeCode(session) => session.subscribe(),

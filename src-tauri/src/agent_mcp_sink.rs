@@ -18,6 +18,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use base64::Engine;
+use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::agent_mcp::bridge::Sink;
 use claudette::agent_mcp::protocol::{BridgePayload, BridgeResponse};
 use claudette::agent_mcp::tools::interaction;
@@ -41,10 +42,12 @@ use crate::state::{AppState, AttentionKind, PendingPermission};
 /// workspace granularity, but the chat-surface routing path no longer reads
 /// it. Both are kept on the struct because they are NOT the same id.
 pub struct ChatBridgeSink {
+    pub generation: i64,
     pub app: AppHandle,
     pub db_path: PathBuf,
     pub workspace_id: String,
     pub chat_session_id: String,
+    pub harness: AgentBackendRuntimeHarness,
 }
 
 impl Sink for ChatBridgeSink {
@@ -57,7 +60,16 @@ impl Sink for ChatBridgeSink {
         let workspace_id = self.workspace_id.clone();
         let chat_session_id = self.chat_session_id.clone();
         Box::pin(async move {
-            handle_payload(app, db_path, workspace_id, chat_session_id, payload).await
+            handle_payload(
+                app,
+                db_path,
+                workspace_id,
+                chat_session_id,
+                self.harness,
+                self.generation,
+                payload,
+            )
+            .await
         })
     }
 }
@@ -102,6 +114,8 @@ async fn handle_payload(
     db_path: PathBuf,
     workspace_id: String,
     chat_session_id: String,
+    harness: AgentBackendRuntimeHarness,
+    generation: i64,
     payload: BridgePayload,
 ) -> BridgeResponse {
     match payload {
@@ -146,6 +160,18 @@ async fn handle_payload(
             .await
         }
         BridgePayload::HookEvent { input } => {
+            if harness == AgentBackendRuntimeHarness::ClaudeCode
+                && let Some(update) =
+                    claudette::agent::subagent_tracking::claude_subagent_hook(&input)
+            {
+                crate::commands::chat::subagents::persist(
+                    &app,
+                    &db_path,
+                    &chat_session_id,
+                    generation,
+                    &update,
+                );
+            }
             let _ = app.emit(
                 "agent-hook-event",
                 AgentHookEvent {
@@ -195,6 +221,36 @@ async fn handle_payload(
         BridgePayload::Monitor { task_id, until } => {
             monitor_background_task(app, db_path, workspace_id, chat_session_id, task_id, until)
                 .await
+        }
+        BridgePayload::ReportAgentProgress { report } => {
+            if let Err(err) = report.validate() {
+                return BridgeResponse::err(err);
+            }
+            let harness = match harness {
+                AgentBackendRuntimeHarness::ClaudeCode => "claude",
+                AgentBackendRuntimeHarness::CodexAppServer => "codex",
+                AgentBackendRuntimeHarness::AntigravityAcp => "antigravity",
+            };
+            let db = match Database::open(&db_path) {
+                Ok(db) => db,
+                Err(err) => return BridgeResponse::err(err.to_string()),
+            };
+            match db.report_subagent_progress(
+                &chat_session_id,
+                harness,
+                report.run_id.trim(),
+                generation,
+                report.kind.as_str(),
+                report.summary.trim(),
+            ) {
+                Ok(changed) => {
+                    if let Some(row) = changed {
+                        let _ = app.emit("subagent-run-updated", &row);
+                    }
+                    BridgeResponse::message("Progress recorded.")
+                }
+                Err(err) => BridgeResponse::err(err),
+            }
         }
         BridgePayload::AskUser { questions } => {
             ask_user(app, workspace_id, chat_session_id, questions).await
@@ -320,6 +376,7 @@ async fn block_on_interactive(
         session.pending_permissions.insert(
             tool_use_id.clone(),
             PendingPermission {
+                child_owned: false,
                 // MCP-origin requests have no CLI control_request to answer; the
                 // request_id is unused for routing but kept stable for the
                 // notification dedup check below.

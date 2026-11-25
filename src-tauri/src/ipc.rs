@@ -65,6 +65,7 @@ const METHODS: &[&str] = &[
     "list_workspaces",
     "list_chat_sessions",
     "get_chat_session",
+    "get_subagent_runs",
     "get_chat_snapshot",
     "load_completed_turns",
     "load_attachments_for_session",
@@ -130,6 +131,7 @@ struct IpcAttachment {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct PendingAgentControl {
+    child_owned: bool,
     tool_use_id: String,
     tool_name: String,
     input: serde_json::Value,
@@ -421,6 +423,15 @@ pub(crate) async fn dispatch_method(
                 .map_err(|e| e.to_string())
         }),
         "list_chat_sessions" => handle_list_chat_sessions(app, params).await,
+        "get_subagent_runs" => {
+            let state = app_state(app)?;
+            let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+            serde_json::to_value(
+                db.list_subagent_runs(&param_chat_session_id(params)?)
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())
+        }
         "get_chat_session" => handle_get_chat_session(app, params).await,
         "get_chat_snapshot" => handle_get_chat_snapshot(app, params).await,
         "load_completed_turns" => handle_load_completed_turns(app, params),
@@ -574,6 +585,7 @@ fn pending_controls_for_session(
         .pending_permissions
         .iter()
         .map(|(tool_use_id, pending)| PendingAgentControl {
+            child_owned: pending.child_owned,
             tool_use_id: tool_use_id.clone(),
             tool_name: pending.tool_name.clone(),
             input: pending.original_input.clone(),
@@ -1841,6 +1853,7 @@ mod tests {
         agent.pending_permissions.insert(
             "toolu_ask".into(),
             crate::state::PendingPermission {
+                child_owned: false,
                 request_id: "req-1".into(),
                 tool_name: "AskUserQuestion".into(),
                 original_input: json!({"questions": [{"question": "Proceed?"}]}),
@@ -1849,6 +1862,7 @@ mod tests {
         agent.pending_permissions.insert(
             "toolu_plan".into(),
             crate::state::PendingPermission {
+                child_owned: false,
                 request_id: "req-2".into(),
                 tool_name: "ExitPlanMode".into(),
                 original_input: json!({"plan": "Do it"}),

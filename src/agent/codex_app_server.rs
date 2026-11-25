@@ -1,3 +1,5 @@
+mod subagents;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use super::environment::build_agent_command;
+use super::provider_subagents::ChildApprovals;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
     InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle,
@@ -88,6 +91,7 @@ impl Default for CodexAppServerOptions {
 
 pub struct CodexAppServerSession {
     pid: u32,
+    child_approvals: ChildApprovals,
     stdin: Option<CodexStdin>,
     event_tx: broadcast::Sender<AgentEvent>,
     /// Side-channel for `account/rateLimits/updated` notifications and
@@ -196,6 +200,7 @@ impl CodexAppServerSession {
         let session = Self {
             pid,
             stdin: Some(Arc::new(tokio::sync::Mutex::new(stdin))),
+            child_approvals: ChildApprovals::default(),
             event_tx,
             rate_limits_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
@@ -269,6 +274,7 @@ impl CodexAppServerSession {
         Self {
             pid,
             stdin: None,
+            child_approvals: ChildApprovals::default(),
             event_tx,
             rate_limits_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
@@ -292,6 +298,10 @@ impl CodexAppServerSession {
 
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    pub(super) fn child_control_replay(&self) -> super::ChildControlReplay {
+        self.child_approvals.replay("codex")
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
@@ -603,7 +613,10 @@ impl CodexAppServerSession {
             .as_ref()
             .ok_or_else(|| "Codex app-server stdin is not available".to_string())?;
         let mut stdin = stdin.lock().await;
-        write_jsonrpc_message(&mut *stdin, &server_response).await
+        write_jsonrpc_message(&mut *stdin, &server_response).await?;
+        self.child_approvals
+            .answered(request_id, "codex", &self.event_tx);
+        Ok(())
     }
 
     async fn initialize(&self, client_version: &str) -> Result<(), String> {
@@ -730,18 +743,31 @@ impl CodexAppServerSession {
 
     fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
         let event_tx = self.event_tx.clone();
+        let approvals = self.child_approvals.clone();
         let rate_limits_tx = self.rate_limits_tx.clone();
         let pending = self.pending.clone();
         let stdin = self.stdin.clone();
         let active_turn_id = self.active_turn_id.clone();
         let manual_compaction_in_flight = self.manual_compaction_in_flight.clone();
         let turn_output = self.turn_output.clone();
+        let thread_id = self.thread_id.clone();
+        let resume_thread = self.resume_thread_id.clone();
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
+            let mut children = subagents::ChildThreads::new(approvals);
             loop {
                 match read_jsonrpc_message(&mut reader).await {
                     Ok(Some(message)) => {
+                        if let Some(root) = thread_id
+                            .lock()
+                            .await
+                            .as_deref()
+                            .or(resume_thread.as_deref())
+                            && children.route(root, &message, &event_tx)
+                        {
+                            continue;
+                        }
                         route_app_server_message(
                             pid,
                             &event_tx,
@@ -883,6 +909,7 @@ impl CodexAppServerSession {
         stderr_task: tokio::task::JoinHandle<()>,
     ) {
         let event_tx = self.event_tx.clone();
+        let approvals = self.child_approvals.clone();
         let pending = self.pending.clone();
         tokio::spawn(async move {
             let status = child.wait().await.ok().and_then(|status| status.code());
@@ -890,6 +917,7 @@ impl CodexAppServerSession {
             // lines (version/auth errors) before signaling ProcessExited.
             let _ = tokio::time::timeout(CODEX_STDERR_DRAIN_TIMEOUT, stderr_task).await;
             fail_pending_requests(&pending, "Codex app-server process exited").await;
+            approvals.closed(&event_tx);
             let _ = event_tx.send(AgentEvent::ProcessExited(status));
         });
     }

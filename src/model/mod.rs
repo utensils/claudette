@@ -1,4 +1,6 @@
 mod agent_conclusion;
+mod subagent;
+pub use subagent::{SubagentRun, SubagentRunUpdate};
 mod attachment;
 pub mod cesp;
 mod chat_message;

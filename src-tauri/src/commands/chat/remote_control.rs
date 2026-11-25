@@ -90,6 +90,7 @@ pub async fn set_claude_remote_control(
         disable_1m_context,
         backend_id,
     };
+    let startup = state.session_startup.acquire(&chat_session_id).await;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let chat_session = db
         .get_chat_session(&chat_session_id)
@@ -152,6 +153,7 @@ pub async fn set_claude_remote_control(
         };
         (ps, pid)
     };
+    drop(startup);
 
     if enabled && should_pin_title_before_control_request(&chat_session) {
         let title_messages = {
@@ -577,18 +579,19 @@ async fn ensure_persistent_session_for_remote_control(
     // (above) and the call itself (in `agent_mcp_sink::handle_payload`),
     // not the whole server. Same wiring as the spawn / respawn blocks in
     // `chat::send::send_chat_message`.
-    let bridge = {
-        let (bridge, mcp_with_claudette) = start_bridge_and_inject_mcp(
+    let (bridge, generation) = {
+        let (bridge, mcp_with_claudette, generation) = start_bridge_and_inject_mcp(
             app,
             &state.db_path,
             &workspace_id,
             &chat_session_id,
+            agent_settings.backend_runtime.harness,
             agent_settings.mcp_config.clone(),
             interaction_enabled,
         )
         .await?;
         agent_settings.mcp_config = mcp_with_claudette;
-        bridge
+        (bridge, generation)
     };
     agent_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
 
@@ -613,6 +616,7 @@ async fn ensure_persistent_session_for_remote_control(
     .await
     .map_err(|err| crate::missing_cli::handle_err(app, &err).unwrap_or(err))?;
     let ps = Arc::new(AgentSession::from_claude_code(ps));
+    let child_events = ps.subscribe();
     let pid = ps.pid();
 
     {
@@ -682,6 +686,15 @@ async fn ensure_persistent_session_for_remote_control(
         let _ = db.reopen_agent_session(&claude_session_id);
         let _ = db.update_agent_session_turn(&claude_session_id, chat_session.turn_count);
     }
+    super::subagents::observe_process(
+        app,
+        &workspace_id,
+        &chat_session_id,
+        pid,
+        generation,
+        child_events,
+        ps.child_control_replay(),
+    );
     Ok((ps, pid))
 }
 

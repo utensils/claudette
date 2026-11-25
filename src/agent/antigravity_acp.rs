@@ -22,6 +22,8 @@
 //!   `combinedOutput`, `exitCode`, etc.) and never auto-approves
 //!   `interaction_*` user questions.
 
+mod subagents;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,6 +42,7 @@ use super::codex_app_server::{
     CODEX_COMMAND_APPROVAL_TOOL, CODEX_FILE_CHANGE_APPROVAL_TOOL, CODEX_PERMISSIONS_APPROVAL_TOOL,
 };
 use super::environment::build_agent_command;
+use super::provider_subagents::ChildApprovals;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
     InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle, UserContentBlock,
@@ -237,6 +240,7 @@ impl AcpTurnState {
 
 pub struct AntigravityAcpSession {
     pid: u32,
+    child_approvals: ChildApprovals,
     stdin: Option<AcpStdin>,
     event_tx: broadcast::Sender<AgentEvent>,
     pending: PendingAcpRequests,
@@ -314,6 +318,7 @@ impl AntigravityAcpSession {
         let session = Self {
             pid,
             stdin: Some(Arc::new(tokio::sync::Mutex::new(stdin))),
+            child_approvals: ChildApprovals::default(),
             event_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
@@ -370,6 +375,7 @@ impl AntigravityAcpSession {
         Self {
             pid,
             stdin: None,
+            child_approvals: ChildApprovals::default(),
             event_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
@@ -389,6 +395,10 @@ impl AntigravityAcpSession {
 
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    pub(super) fn child_control_replay(&self) -> super::ChildControlReplay {
+        self.child_approvals.replay("antigravity")
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
@@ -599,7 +609,10 @@ impl AntigravityAcpSession {
             .as_ref()
             .ok_or_else(|| "Antigravity ACP stdin is not available".to_string())?;
         let mut writer = stdin.lock().await;
-        write_acp_message(&mut *writer, &server_response).await
+        write_acp_message(&mut *writer, &server_response).await?;
+        self.child_approvals
+            .answered(request_id, "antigravity", &self.event_tx);
+        Ok(())
     }
 
     async fn initialize(&self, client_version: &str) -> Result<(), String> {
@@ -906,15 +919,28 @@ impl AntigravityAcpSession {
 
     fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
         let event_tx = self.event_tx.clone();
+        let approvals = self.child_approvals.clone();
         let pending = self.pending.clone();
         let stdin = self.stdin.clone();
         let turn_state = self.turn_state.clone();
+        let root_session = self.acp_session_id.clone();
+        let resume_session = self.resume_session_id.clone();
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
+            let mut delegations = subagents::Delegations::default();
             loop {
                 match read_acp_message(&mut reader).await {
                     Ok(Some(message)) => {
+                        if let Some(root) = root_session
+                            .lock()
+                            .await
+                            .as_deref()
+                            .or(resume_session.as_deref())
+                            && delegations.route(&approvals, root, &message, &event_tx)
+                        {
+                            continue;
+                        }
                         route_acp_message(
                             pid,
                             &event_tx,
@@ -998,11 +1024,13 @@ impl AntigravityAcpSession {
         stderr_task: tokio::task::JoinHandle<()>,
     ) {
         let event_tx = self.event_tx.clone();
+        let approvals = self.child_approvals.clone();
         let pending = self.pending.clone();
         tokio::spawn(async move {
             let status = child.wait().await.ok().and_then(|s| s.code());
             let _ = tokio::time::timeout(ACP_STDERR_DRAIN_TIMEOUT, stderr_task).await;
             fail_pending_requests(&pending, "Antigravity ACP process exited").await;
+            approvals.closed(&event_tx);
             let _ = event_tx.send(AgentEvent::ProcessExited(status));
         });
     }

@@ -130,6 +130,7 @@ fn queue_control_prompt(
     session.pending_permissions.insert(
         tool_use_id,
         PendingPermission {
+            child_owned: false,
             request_id,
             tool_name,
             original_input: input,
@@ -181,6 +182,16 @@ pub(super) async fn route_turn_control_request(
     chat_session_id: &str,
     event: &AgentEvent,
 ) -> bool {
+    route_process_control_request(app, workspace_id, chat_session_id, event, None).await
+}
+
+pub(super) async fn route_process_control_request(
+    app: &AppHandle,
+    workspace_id: &str,
+    chat_session_id: &str,
+    event: &AgentEvent,
+    owner_pid: Option<u32>,
+) -> bool {
     let AgentEvent::Stream(StreamEvent::ControlRequest {
         request_id,
         request:
@@ -196,6 +207,14 @@ pub(super) async fn route_turn_control_request(
 
     let app_state = app.state::<AppState>();
     let mut agents = app_state.agents.write().await;
+    if let Some(owner) = owner_pid
+        && agents
+            .get(chat_session_id)
+            .and_then(|s| s.persistent_session.as_ref())
+            .is_none_or(|ps| ps.pid() != owner)
+    {
+        return false;
+    }
     let mut permission_response = None;
     let kind = if let Some(session) = agents.get_mut(chat_session_id) {
         match route_control_request_session_state(
@@ -205,7 +224,13 @@ pub(super) async fn route_turn_control_request(
             tool_use_id,
             input,
         ) {
-            ControlRequestSessionRoute::Interactive { kind } => Some(kind),
+            ControlRequestSessionRoute::Interactive { kind } => {
+                // Only the process-owned subagent listener supplies owner_pid.
+                if let Some(pending) = session.pending_permissions.get_mut(tool_use_id) {
+                    pending.child_owned = owner_pid.is_some();
+                }
+                Some(kind)
+            }
             ControlRequestSessionRoute::PermissionResponse { response } => {
                 permission_response = session.persistent_session.clone().map(|ps| (ps, response));
                 None
@@ -225,6 +250,7 @@ pub(super) async fn route_turn_control_request(
             "workspace_id": workspace_id,
             "chat_session_id": chat_session_id,
             "tool_use_id": tool_use_id,
+            "child_owned": owner_pid.is_some(),
             "tool_name": tool_name,
             "input": input,
         });
@@ -1084,6 +1110,7 @@ pub async fn send_chat_message(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let startup = state.session_startup.acquire(&session_id).await;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let chat_session_id = session_id;
@@ -1310,7 +1337,7 @@ pub async fn send_chat_message(
     // AgentQuestionCard dismissed on a new user message — the CLI is actually
     // blocked mid-turn and needs an explicit control_response. The drain is
     // synchronous (under the lock); the deny sends happen after we drop it.
-    let to_deny_new_turn = drain_pending_permissions(session);
+    let to_deny_new_turn = super::interaction::drain_parent_permissions(session);
 
     // If a previous turn is still running and there's no persistent session,
     // stop the stale process. With a persistent session, the process is shared
@@ -1442,8 +1469,7 @@ pub async fn send_chat_message(
         Some(claude_mcp_rules.as_str()),
     );
     session.turn_count += 1;
-    session.needs_attention = false;
-    session.attention_kind = None;
+    session.refresh_pending_attention();
 
     // backend_runtime / resolved_model were resolved up front (before
     // persist). Reuse them here instead of re-resolving.
@@ -2052,6 +2078,7 @@ pub async fn send_chat_message(
         }
     };
 
+    let mut child_events = None;
     let turn_handle = if let Some(ref ps) = existing_persistent {
         // Reuse existing persistent process — send turn via stdin. Mark the
         // process busy before writing so the Remote Control monitor does not
@@ -2093,23 +2120,24 @@ pub async fn send_chat_message(
                 drop(agents);
 
                 let mut respawn_settings = agent_settings.clone();
-                let bridge = match respawn_settings.backend_runtime.harness {
+                let (bridge, generation) = match respawn_settings.backend_runtime.harness {
                     // Injected unconditionally for the same reason as the
                     // spawn path above — scheduling tools ride this server.
                     AgentBackendRuntimeHarness::ClaudeCode
                     | AgentBackendRuntimeHarness::CodexAppServer
                     | AgentBackendRuntimeHarness::AntigravityAcp => {
-                        let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                        let (b, mcp_with_claudette, generation) = start_bridge_and_inject_mcp(
                             &app,
                             &state.db_path,
                             &workspace_id,
                             &chat_session_id,
+                            agent_settings.backend_runtime.harness,
                             agent_settings.mcp_config.clone(),
                             interaction_enabled,
                         )
                         .await?;
                         respawn_settings.mcp_config = mcp_with_claudette;
-                        Some(b)
+                        (Some(b), generation)
                     }
                 };
                 if let Some(bridge) = bridge.as_ref()
@@ -2216,6 +2244,7 @@ pub async fn send_chat_message(
                     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                     session.remember_local_user_message_uuid(local_user_message_uuid.clone());
                 }
+                child_events = Some((ps.subscribe(), ps.child_control_replay(), generation));
                 let handle = if is_native_compact {
                     ps.start_compact().await?
                 } else {
@@ -2273,7 +2302,7 @@ pub async fn send_chat_message(
         // bridge is stored on the session below so it lives exactly as
         // long as the persistent CLI process.
         let mut spawn_settings = agent_settings.clone();
-        let bridge = match spawn_settings.backend_runtime.harness {
+        let (bridge, generation) = match spawn_settings.backend_runtime.harness {
             // The Claudette MCP server carries always-on scheduling tools
             // (ScheduleWakeup / Cron*) alongside the toggleable send_to_user
             // tool, so it is injected unconditionally — the send_to_user
@@ -2282,17 +2311,18 @@ pub async fn send_chat_message(
             AgentBackendRuntimeHarness::ClaudeCode
             | AgentBackendRuntimeHarness::CodexAppServer
             | AgentBackendRuntimeHarness::AntigravityAcp => {
-                let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                let (b, mcp_with_claudette, generation) = start_bridge_and_inject_mcp(
                     &app,
                     &state.db_path,
                     &workspace_id,
                     &chat_session_id,
+                    agent_settings.backend_runtime.harness,
                     agent_settings.mcp_config.clone(),
                     interaction_enabled,
                 )
                 .await?;
                 spawn_settings.mcp_config = mcp_with_claudette;
-                Some(b)
+                (Some(b), generation)
             }
         };
         if let Some(bridge) = bridge.as_ref()
@@ -2373,6 +2403,7 @@ pub async fn send_chat_message(
             let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
             session.remember_local_user_message_uuid(local_user_message_uuid.clone());
         }
+        child_events = Some((ps.subscribe(), ps.child_control_replay(), generation));
         let handle = if is_native_compact {
             ps.start_compact().await?
         } else {
@@ -2446,6 +2477,20 @@ pub async fn send_chat_message(
         }
     }
     drop(agents);
+
+    if let Some((rx, controls, generation)) = child_events {
+        super::subagents::observe_process(
+            &app,
+            &workspace_id,
+            &chat_session_id,
+            spawned_pid,
+            generation,
+            rx,
+            controls,
+        );
+    }
+
+    drop(startup);
 
     // Capture rename context before the bridge spawn.
     let has_repo = repo.is_some();
@@ -2581,6 +2626,14 @@ pub async fn send_chat_message(
         let mut notified_via_result = false;
         let mut assistant_auth_failure_seen = false;
         while let Some(event) = rx.recv().await {
+            if matches!(
+                event,
+                AgentEvent::SubagentRun(_)
+                    | AgentEvent::SubagentControl(_)
+                    | AgentEvent::SubagentControlResolved { .. }
+            ) {
+                continue;
+            }
             if let AgentEvent::Stderr(line) = &event {
                 stderr_lines.push(line.clone());
             }
@@ -2690,7 +2743,12 @@ pub async fn send_chat_message(
             }
 
             background_task_inputs.observe_bash_input_delta(&event);
-            team_agent_inputs.observe_event(&event, team_agent_tabs_enabled, &app, &ws_id);
+            team_agent_inputs.observe_event(
+                &event,
+                team_agent_tabs_enabled,
+                &app,
+                &chat_session_id_for_stream,
+            );
             background_task_inputs
                 .observe_bash_input_stop(
                     &event,
@@ -3447,6 +3505,34 @@ mod tests {
             posted_env_trust_warning: false,
             pending_history_prelude: None,
         }
+    }
+
+    #[test]
+    fn parent_turn_preserves_overlapping_child_controls_and_attention() {
+        let mut session = test_agent_session_state();
+        for (key, child_owned) in [("parent", false), ("child-a", true), ("child-b", true)] {
+            queue_control_prompt(
+                &mut session,
+                key.into(),
+                "AskUserQuestion".into(),
+                key.into(),
+                serde_json::json!({}),
+            );
+            session
+                .pending_permissions
+                .get_mut(key)
+                .unwrap()
+                .child_owned = child_owned;
+        }
+        super::super::interaction::drain_parent_permissions(&mut session);
+        assert!(!session.pending_permissions.contains_key("parent"));
+        session.pending_permissions.remove("child-a");
+        session.refresh_pending_attention();
+        assert!(session.pending_permissions.contains_key("child-b"));
+        assert!(session.needs_attention);
+        session.pending_permissions.remove("child-b");
+        session.refresh_pending_attention();
+        assert!(!session.needs_attention);
     }
 
     #[test]

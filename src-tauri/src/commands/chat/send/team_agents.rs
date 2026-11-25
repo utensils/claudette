@@ -33,7 +33,7 @@ impl TeamAgentInputTracker {
         event: &AgentEvent,
         team_agent_tabs_enabled: bool,
         app: &AppHandle,
-        workspace_id: &str,
+        parent_session_id: &str,
     ) {
         if !team_agent_tabs_enabled {
             return;
@@ -73,14 +73,15 @@ impl TeamAgentInputTracker {
         if let AgentEvent::Stream(StreamEvent::Stream {
             event: InnerStreamEvent::ContentBlockStop { index },
         }) = event
-            && let Some((_tool_use_id, input_json)) = self.inputs.remove(index)
+            && let Some((tool_use_id, input_json)) = self.inputs.remove(index)
         {
             let app_for_team_agent = app.clone();
-            let workspace_id_for_team_agent = workspace_id.to_string();
+            let parent_session_id = parent_session_id.to_owned();
             tokio::spawn(async move {
                 if let Err(err) = open_claudette_session_for_team_agent(
                     app_for_team_agent,
-                    workspace_id_for_team_agent,
+                    parent_session_id,
+                    tool_use_id,
                     input_json,
                 )
                 .await
@@ -210,7 +211,8 @@ fn spawn_claudette_send_chat_child(
 
 async fn open_claudette_session_for_team_agent(
     app: AppHandle,
-    workspace_id: String,
+    parent_session_id: String,
+    tool_use_id: String,
     input_json: String,
 ) -> Result<(), String> {
     let Some(dispatch) = build_claudette_dispatch_for_team_agent(&input_json)? else {
@@ -218,9 +220,16 @@ async fn open_claudette_session_for_team_agent(
     };
 
     let state = app.state::<AppState>();
-    let session =
-        crate::commands::chat::session::create_chat_session(workspace_id.clone(), state).await?;
+    let Some((session, runs)) = Database::open(&state.db_path)
+        .and_then(|db| db.create_team_agent_tab(&parent_session_id, &tool_use_id))
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
     let _ = app.emit("chat-session-created", &session);
+    for run in runs {
+        let _ = app.emit("subagent-run-updated", run);
+    }
 
     let state = app.state::<AppState>();
     if crate::commands::chat::session::rename_chat_session(

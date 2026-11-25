@@ -46,8 +46,8 @@ export function viaSession<T>(
   method: string,
   params: Record<string, unknown>,
   local: () => Promise<T>,
+  connectionId = remoteConnectionForSession(sessionId),
 ): Promise<T> {
-  const connectionId = remoteConnectionForSession(sessionId);
   if (!connectionId) return local();
   return sendRemoteCommand(connectionId, method, {
     chat_session_id: sessionId,

@@ -15,6 +15,7 @@ import type { DownloadableAttachment } from "../../utils/attachmentDownload";
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { ChatErrorBanner } from "./ChatErrorBanner";
+import { SubagentSummaryButton } from "./SubagentSummaryButton";
 import { ChatInputArea } from "./ChatInputArea";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { CliInvocationBanner } from "./CliInvocationBanner";
@@ -394,6 +395,10 @@ export function ChatPanelSessionView({
         visible={!isAtBottom && messages.length > 0}
         onClick={scrollToBottom}
       />
+
+      {selectedWorkspaceId && activeSessionId && (
+        <SubagentSummaryButton workspaceId={selectedWorkspaceId} sessionId={activeSessionId} />
+      )}
 
       {queuedMessages.length > 0 && activeSessionId && (
         <QueuedMessagesPopover

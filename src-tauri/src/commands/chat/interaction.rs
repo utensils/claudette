@@ -107,7 +107,7 @@ pub async fn submit_agent_answer(
             .pending_permissions
             .remove(&tool_use_id)
             .expect("checked above");
-        session.reset_attention();
+        session.refresh_pending_attention();
         (pending, ps)
     };
 
@@ -168,7 +168,7 @@ async fn submit_mcp_answer(
                 ));
             }
             session.pending_permissions.remove(tool_use_id);
-            session.reset_attention();
+            session.refresh_pending_attention();
         }
     }
     let Some(pending) = state.take_mcp_reply(tool_use_id).await else {
@@ -294,7 +294,7 @@ async fn submit_approval_response(
             .pending_permissions
             .remove(&tool_use_id)
             .expect("checked above");
-        session.reset_attention();
+        session.refresh_pending_attention();
         let ps = if is_synthetic_codex_plan_approval(&pending) {
             None
         } else {
@@ -348,6 +348,21 @@ pub async fn submit_agent_approval(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     submit_approval_response(session_id, tool_use_id, approved, reason, state).await
+}
+
+/// A new parent prompt does not cancel concurrently running child work.
+pub(super) fn drain_parent_permissions(
+    session: &mut AgentSessionState,
+) -> Option<(Arc<AgentSession>, Vec<PendingPermission>)> {
+    let drained: Vec<_> = session
+        .pending_permissions
+        .extract_if(|_, p| !p.child_owned)
+        .map(|(_, p)| p)
+        .collect();
+    if drained.is_empty() {
+        return None;
+    }
+    Some((session.persistent_session.clone()?, drained))
 }
 
 /// Synchronously drain any pending permission requests from `session` and

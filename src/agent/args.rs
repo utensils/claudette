@@ -279,6 +279,13 @@ pub(super) fn build_settings_json(settings: &AgentSettings) -> Option<String> {
         );
     }
     if let Some(ref hook_bridge) = settings.hook_bridge {
+        use crate::agent_mcp::tools::progress;
+        if progress::has_trusted_claude_entry(settings.mcp_config.as_deref(), hook_bridge) {
+            obj.insert(
+                "permissions".into(),
+                serde_json::json!({"allow": [progress::CLAUDE_TOOL_NAME]}),
+            );
+        }
         let hook = serde_json::json!({
             "matcher": "",
             "hooks": [{
@@ -413,6 +420,39 @@ fn build_stdin_message_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_injected_reporting_tool_is_preapproved() {
+        let mut settings = AgentSettings {
+            hook_bridge: Some(crate::agent::AgentHookBridge {
+                command: "claudette --agent-hook".into(),
+                socket_addr: "test.sock".into(),
+                token: "test-token".into(),
+            }),
+            ..Default::default()
+        };
+        let mut server = serde_json::json!({
+            "type":"stdio", "command":std::env::current_exe().unwrap().to_string_lossy(),
+            "args":["--agent-mcp"], "env":{"CLAUDETTE_MCP_SOCKET":"test.sock","CLAUDETTE_MCP_TOKEN":"test-token"}
+        });
+        let grants = |settings: &AgentSettings| {
+            serde_json::from_str::<serde_json::Value>(&build_settings_json(settings).unwrap())
+                .unwrap()["permissions"]
+                .clone()
+        };
+        let config =
+            |server| Some(serde_json::json!({"mcpServers":{"claudette":server}}).to_string());
+        assert!(grants(&settings).is_null());
+        settings.mcp_config = config(server.clone());
+        assert_eq!(
+            grants(&settings),
+            serde_json::json!({"allow":["mcp__claudette__report_agent_progress"]})
+        );
+
+        server["command"] = serde_json::json!("another-server");
+        settings.mcp_config = config(server);
+        assert!(grants(&settings).is_null());
+    }
 
     #[test]
     fn native_scheduling_disallow_requires_claudette_server() {

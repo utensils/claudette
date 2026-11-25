@@ -1518,7 +1518,7 @@ describe("deriveTaskState — subagent task tracking", () => {
     ]);
   });
 
-  it("ignores subagent calls that aren't task-related", () => {
+  it("shows a subagent with no checklist when its tools do not create tasks", () => {
     const subagent = agentActivity("Agent E", [
       agentCall({
         toolName: "Bash",
@@ -1532,8 +1532,9 @@ describe("deriveTaskState — subagent task tracking", () => {
       }),
     ]);
     const result = deriveTaskState([], [subagent]);
-    // No task tools → no subagent run.
-    expect(result.subagents).toEqual([]);
+    expect(result.subagents).toHaveLength(1);
+    expect(result.subagents[0].tasks).toEqual([]);
+    expect(result.subagents[0].label).toBe("Agent E");
     expect(result.history).toEqual([]);
   });
 
@@ -1644,7 +1645,7 @@ describe("deriveTaskState — subagent task tracking", () => {
     expect(result.history[0].label).toBe("Crashed subagent");
   });
 
-  it("treats missing agentStatus as completed and archives the subagent", () => {
+  it("archives a checkpointed subagent with unknown lifecycle without reporting completion", () => {
     // Historical / DB-reconstructed activities frequently arrive with
     // no `agentStatus` set. We can't keep them suspended in the live
     // subagents lane forever, and treating them as "running" would
@@ -1663,7 +1664,8 @@ describe("deriveTaskState — subagent task tracking", () => {
       ],
     };
 
-    const result = deriveTaskState([], [orphan]);
+    const result = deriveTaskState([{ id: "checkpoint", activities: [orphan] }], []);
+    expect(result.history[0].agent?.status).toBe("unknown");
     expect(result.subagents).toHaveLength(0);
     expect(result.history).toHaveLength(1);
     expect(result.history[0].label).toBe("Status-less subagent");

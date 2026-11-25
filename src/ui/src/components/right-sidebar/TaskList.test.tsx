@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskStatus, TrackedTask } from "../../hooks/useTaskTracker";
 import type { WorkspaceTaskHistoryResult } from "../../hooks/useWorkspaceTaskHistory";
 import "../../i18n";
+import { useAppStore } from "../../stores/useAppStore";
 import { TaskList } from "./TaskList";
 
 const mountedRoots: Root[] = [];
@@ -188,6 +189,32 @@ function taskHistory(): WorkspaceTaskHistoryResult {
 }
 
 describe("TaskList", () => {
+  it("opens a linked teammate tab through session selection without dispatching work", async () => {
+    const history = taskHistory();
+    const session = { ...history.sessions[0].session, status: "Active" as const, archived_at: null };
+    useAppStore.setState({
+      selectedWorkspaceId: session.workspace_id,
+      sessionsByWorkspace: { [session.workspace_id]: [session] },
+      activeFileTabByWorkspace: { [session.workspace_id]: "readme.md" },
+      selectedSessionIdByWorkspaceId: { [session.workspace_id]: "parent" },
+    });
+    const container = await render(<TaskList taskHistory={{
+      ...history, subagents: [{
+        id: "child", label: "Review upgrade", status: "needs_approval", tasks: [], completedCount: 0, totalCount: 0,
+        agent: { status: "needs_approval", linkedSessionId: session.id, reportKind: "result", report: "Patch ready" },
+      }],
+    }} />);
+    expect(container.textContent).toContain("Needs approval");
+    expect(container.textContent).toContain("Result reported");
+    const button = [...container.querySelectorAll("button")].find((b) => b.textContent === "Open teammate tab");
+    expect(button).toBeDefined();
+    await act(async () => button!.click());
+    const store = useAppStore.getState();
+    expect(store.selectedSessionIdByWorkspaceId[session.workspace_id]).toBe(session.id);
+    expect(store.activeFileTabByWorkspace[session.workspace_id]).toBeFalsy();
+    expect(store.sessionsByWorkspace[session.workspace_id]).toEqual([session]);
+  });
+
   it("renders current tasks and collapsed session history", async () => {
     const container = await render(<TaskList taskHistory={taskHistory()} />);
 

@@ -128,6 +128,10 @@ pub enum BridgePayload {
         task_id: String,
         until: Option<String>,
     },
+    /// Attach an annotation to a known child in the authenticated session.
+    ReportAgentProgress {
+        report: super::tools::progress::ProgressReport,
+    },
     /// Ask the user one or more questions and block until they answer. The
     /// parent surfaces these through the same interactive card the native
     /// `AskUserQuestion` uses, so any backend (not just the Claude CLI) can

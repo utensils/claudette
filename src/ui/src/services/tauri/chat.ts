@@ -170,6 +170,7 @@ export function submitAgentAnswer(
   sessionId: string,
   toolUseId: string,
   answers: Record<string, string>,
+  connectionId?: string | null,
 ): Promise<void> {
   return viaSession(
     sessionId,
@@ -182,6 +183,7 @@ export function submitAgentAnswer(
         answers,
         annotations: null,
       }),
+    connectionId,
   );
 }
 
@@ -219,6 +221,7 @@ export function submitAgentApproval(
   toolUseId: string,
   approved: boolean,
   reason?: string,
+  connectionId?: string | null,
 ): Promise<void> {
   return viaSession(
     sessionId,
@@ -231,5 +234,6 @@ export function submitAgentApproval(
         approved,
         reason: reason ?? null,
       }),
+    connectionId,
   );
 }

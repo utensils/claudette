@@ -1,7 +1,7 @@
 import type { StateCreator } from "zustand";
 import type { AttachmentInput } from "../../types";
 import type { AppState } from "../useAppStore";
-import { clearSessionAttention } from "./_shared";
+import { subagentSessionKey } from "../../types/subagent";
 
 export interface AgentQuestionItem {
   header?: string;
@@ -94,31 +94,34 @@ function createQueuedMessageId(): string {
   return `queued-${Date.now()}-${queuedMessageFallbackCounter}`;
 }
 
-function syncSessionAttention(
+export function syncSessionAttention(
   state: AppState,
   sessionId: string,
   nextSources: {
     agentQuestions?: Record<string, AgentQuestion>;
     planApprovals?: Record<string, PlanApproval>;
     agentApprovals?: Record<string, AgentApproval>;
+    subagentControls?: AppState["subagentControls"];
   },
+  connectionId?: string | null,
 ) {
   const agentQuestions = nextSources.agentQuestions ?? state.agentQuestions;
   const planApprovals = nextSources.planApprovals ?? state.planApprovals;
   const agentApprovals = nextSources.agentApprovals ?? state.agentApprovals;
   const hasPlan = Boolean(planApprovals[sessionId]);
   const hasAsk = Boolean(agentQuestions[sessionId] || agentApprovals[sessionId]);
-  if (!hasPlan && !hasAsk) {
-    return clearSessionAttention(state.sessionsByWorkspace, sessionId);
-  }
   for (const [wsId, sessions] of Object.entries(state.sessionsByWorkspace)) {
     const idx = sessions.findIndex((session) => session.id === sessionId);
     if (idx >= 0) {
+      const source = state.workspaces.find((ws) => ws.id === wsId)?.remote_connection_id ?? null;
+      if (connectionId !== undefined && connectionId !== source) continue;
+      const controls = nextSources.subagentControls ?? state.subagentControls;
+      const needsAttention = hasPlan || hasAsk || Boolean(controls[subagentSessionKey(source, sessionId)]?.length);
       const updated = [...sessions];
       updated[idx] = {
         ...updated[idx],
-        needs_attention: true,
-        attention_kind: hasPlan ? "Plan" : "Ask",
+        needs_attention: needsAttention,
+        attention_kind: hasPlan ? "Plan" : needsAttention ? "Ask" : null,
       };
       return { ...state.sessionsByWorkspace, [wsId]: updated };
     }

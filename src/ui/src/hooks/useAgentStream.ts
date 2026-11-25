@@ -305,6 +305,7 @@ function isContentDeltaEvent(agentEvent: AgentStreamPayload["event"]): boolean {
 
 /** Payload of the `agent-permission-prompt` event. */
 export interface AgentPermissionPromptPayload {
+  child_owned?: boolean;
   workspace_id?: string;
   chat_session_id: string;
   tool_use_id: string;
@@ -323,6 +324,8 @@ export function applyAgentPermissionPrompt(
   payload: AgentPermissionPromptPayload,
   cachedPlanFilePath: string | null = null,
 ): void {
+  // Child requests remain independently answerable across parent turns.
+  if (payload.child_owned) return;
   const {
     setAgentApproval,
     setAgentQuestion,

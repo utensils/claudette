@@ -1228,6 +1228,8 @@ fn main() {
             commands::chat::checkpoint::load_completed_turns,
             commands::chat::session::list_chat_sessions,
             commands::chat::session::get_chat_session,
+            commands::chat::subagents::get_subagent_runs,
+            commands::chat::subagents::get_pending_subagent_controls,
             commands::chat::session::create_chat_session,
             commands::chat::session::rename_chat_session,
             commands::chat::session::set_session_cli_invocation,

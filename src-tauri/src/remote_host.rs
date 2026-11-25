@@ -25,6 +25,9 @@ use crate::state::AppState;
 /// workspace / session / PTY ID a client needs to route it.
 const FORWARDED_EVENTS: &[&str] = &[
     "agent-stream",
+    "subagent-run-updated",
+    "subagent-control-resolved",
+    "subagent-runs-invalidated",
     "agent-permission-prompt",
     "agent-background-task",
     "agent-task-output",
