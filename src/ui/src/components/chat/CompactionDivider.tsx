@@ -9,12 +9,12 @@ interface CompactionDividerProps {
   event: CompactionEvent;
 }
 
-function formatDurationSeconds(ms: number): string {
+function formatDurationSeconds(ms: number, t: TFunction<"chat">): string {
   const secs = Math.round(ms / 1000);
-  if (secs < 60) return `${secs}s`;
+  if (secs < 60) return t("compaction_duration_seconds", { seconds: secs });
   const mins = Math.floor(secs / 60);
   const rem = secs % 60;
-  return `${mins}m ${rem}s`;
+  return t("compaction_duration_minutes", { minutes: mins, seconds: rem });
 }
 
 function triggerLabel(trigger: string, t: TFunction<"chat">): string {
@@ -65,12 +65,12 @@ export function CompactionDivider({ event }: CompactionDividerProps) {
   const tooltip = [
     t("compaction_title_with_duration", {
       trigger: triggerLabel(event.trigger, t),
-      duration: formatDurationSeconds(event.durationMs),
+      duration: formatDurationSeconds(event.durationMs, t),
     }),
     "",
-    t("compaction_tokens_before", { count: event.preTokens.toLocaleString("en-US") }),
-    t("compaction_tokens_after", { count: event.postTokens.toLocaleString("en-US") }),
-    t("compaction_tokens_freed", { count: freed.toLocaleString("en-US") }),
+    t("compaction_tokens_before", { tokens: event.preTokens.toLocaleString("en-US") }),
+    t("compaction_tokens_after", { tokens: event.postTokens.toLocaleString("en-US") }),
+    t("compaction_tokens_freed", { tokens: freed.toLocaleString("en-US") }),
   ].join("\n");
 
   return (

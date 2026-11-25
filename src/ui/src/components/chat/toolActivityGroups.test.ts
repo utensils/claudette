@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import i18n from "../../i18n";
 import type { ToolActivity } from "../../stores/useAppStore";
 import {
   groupHasRunningActivity,
@@ -262,5 +263,12 @@ describe("toolBreakdown", () => {
         activity("mcp__datadog__search"),
       ]),
     ).toBe("search ×2");
+  });
+});
+
+describe("agents_group_label", () => {
+  it("uses the singular for one agent", () => {
+    expect(i18n.t("chat:agents_group_label", { count: 1, lng: "en" })).toBe("1 agent");
+    expect(i18n.t("chat:agents_group_label", { count: 3, lng: "en" })).toBe("3 agents");
   });
 });

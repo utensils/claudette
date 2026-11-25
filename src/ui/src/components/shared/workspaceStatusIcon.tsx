@@ -56,15 +56,18 @@ export function resolveScmPrIcon(
           : ciState === "failure" ? "var(--status-stopped)"
             : ciState === "pending" ? "var(--badge-ask)"
               : "var(--badge-done)";
+  // Fall back to the raw state if a plugin ever reports one outside the
+  // typed union, rather than showing an i18n key.
+  const prStateLabel = i18n.t(`pr_state_${prState}`, { defaultValue: prState });
   return {
     Icon,
     color,
     title: ciState
       ? i18n.t("pr_status_title_ci", {
-          state: i18n.t(`pr_state_${prState}`),
-          ci: i18n.t(`ci_state_${ciState}`),
+          state: prStateLabel,
+          ci: i18n.t(`ci_state_${ciState}`, { defaultValue: ciState }),
         })
-      : i18n.t("pr_status_title", { state: i18n.t(`pr_state_${prState}`) }),
+      : i18n.t("pr_status_title", { state: prStateLabel }),
     prState,
     ciState,
   };

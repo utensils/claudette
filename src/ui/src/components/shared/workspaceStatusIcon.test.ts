@@ -62,4 +62,14 @@ describe("resolveScmPrIcon", () => {
       resolveScmPrIcon(summary({ prState: "merged", ciState: null }))?.title,
     ).toBe("PR: merged");
   });
+
+  it("falls back to the raw state, not an i18n key, for a state outside the union", () => {
+    const spec = resolveScmPrIcon(
+      summary({
+        prState: "queued" as ScmSummary["prState"],
+        ciState: "neutral" as ScmSummary["ciState"],
+      }),
+    );
+    expect(spec?.title).toBe("PR: queued, CI: neutral");
+  });
 });

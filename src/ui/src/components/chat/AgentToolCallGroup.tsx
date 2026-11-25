@@ -162,7 +162,7 @@ export const AgentToolCallGroup = memo(function AgentToolCallGroup({
             )}
           {/* "latest" only means something while the agent is working. */}
           {activity.agentLastToolName && state === "progress" && (
-            <span>latest: {activity.agentLastToolName}</span>
+            <span>{t("agent_nested_latest", { tool: activity.agentLastToolName })}</span>
           )}
         </div>
       )}
@@ -170,7 +170,7 @@ export const AgentToolCallGroup = memo(function AgentToolCallGroup({
         <div id={nestedId} className={styles.agentNestedChat}>
           {prompt && (
             <div className={styles.agentNestedMessage}>
-              <div className={styles.agentNestedRole}>Prompt</div>
+              <div className={styles.agentNestedRole}>{t("agent_nested_prompt")}</div>
               <div className={styles.agentNestedText}>
                 <HighlightedPlainText
                   text={relativizePath(prompt, worktreePath)}
@@ -189,7 +189,7 @@ export const AgentToolCallGroup = memo(function AgentToolCallGroup({
           ))}
           {calls.length > 0 && (
             <div className={styles.agentNestedSection}>
-              <div className={styles.agentNestedRole}>Tool calls</div>
+              <div className={styles.agentNestedRole}>{t("agent_nested_tool_calls")}</div>
               <div className={styles.agentToolCallList}>
                 {hiddenCallCount > 0 && (
                   <button
@@ -258,7 +258,7 @@ export const AgentToolCallGroup = memo(function AgentToolCallGroup({
           )}
           {resultText && (
             <div className={styles.agentNestedMessage}>
-              <div className={styles.agentNestedRole}>Result</div>
+              <div className={styles.agentNestedRole}>{t("agent_nested_result")}</div>
               <div
                 className={
                   resultClamped
