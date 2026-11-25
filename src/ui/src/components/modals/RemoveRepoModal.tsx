@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
+import { SafeTrans } from "../shared/SafeTrans";
 import { useAppStore } from "../../stores/useAppStore";
 import { removeRepository } from "../../services/tauri";
 import { Modal } from "./Modal";
@@ -37,7 +38,7 @@ export function RemoveRepoModal() {
   return (
     <Modal title={t("remove_repo_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        <Trans
+        <SafeTrans
           i18nKey="remove_repo_warning"
           ns="modals"
           values={{ name: repoName }}

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
+import { SafeTrans } from "../../shared/SafeTrans";
 import type { TFunction } from "i18next";
 
 import { ensureAndValidateMcps } from "../../../services/mcp";
@@ -716,7 +717,7 @@ export function ClaudeCodePluginsSettings() {
 
       {pendingActionHint && pendingTargetHint && (
         <div className={styles.pluginNotice}>
-          <Trans
+          <SafeTrans
             i18nKey="ccp_pending_action"
             ns="settings"
             values={{ action: pendingActionHint, target: pendingTargetHint }}

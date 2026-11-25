@@ -17,6 +17,7 @@ import { refreshGrammars } from "../../../utils/grammarRegistry";
 import { openUrl } from "../../../services/tauri";
 import styles from "../Settings.module.css";
 import { Trans, useTranslation } from "react-i18next";
+import { SafeTrans } from "../../shared/SafeTrans";
 import own from "./CommunitySettings.module.css";
 
 /// Tauri's webview blocks raw <a href> navigation to external origins.
@@ -439,7 +440,7 @@ function InstalledTab({
               <span className={own.meta}>· {i.kind}</span>
             </div>
             <p className={own.meta}>
-              <Trans
+              <SafeTrans
                 i18nKey="community_installed_meta"
                 ns="settings"
                 values={{ date: formatDate(i.installed_at), hash: i.sha256.slice(0, 12) }}

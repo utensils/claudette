@@ -1,4 +1,5 @@
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
+import { SafeTrans } from "../shared/SafeTrans";
 import { Modal } from "../modals/Modal";
 import shared from "../modals/shared.module.css";
 import { displayNameForPath, type FileContextTarget } from "./fileContextMenu";
@@ -33,7 +34,7 @@ export function DeletePathConfirm({
       onClose={onClose}
     >
       <div className={shared.warning}>
-        <Trans
+        <SafeTrans
           i18nKey="files_delete_message"
           ns="modals"
           values={{ name }}
