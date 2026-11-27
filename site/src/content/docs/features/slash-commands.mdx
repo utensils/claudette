@@ -17,7 +17,7 @@ Native commands ship with the app and always work. They split into two flavors:
 | `/compact` | Compact the conversation. Works on every harness. On Claude Code the CLI handles it natively; on Codex Native Claudette issues the `thread/compact/start` JSON-RPC. The timeline renders a compaction divider when the compaction completes. A failed compaction surfaces a notice instead of a divider. |
 | `/plan` | Toggle plan mode on for the next turn. |
 | `/model` `[<model>]` | Show the active workspace model, or set it inline (`/model opus`, `/model claude-3-5-sonnet`, ...). |
-| `/permissions` `[readonly\|standard\|full]` | Show the current permission mode, or set it inline (`/permissions full`). Alias: `/allowed-tools`. |
+| `/permissions` `[readonly\|standard\|full]` | Show the current permission mode, or set it inline (`/permissions full`). At `readonly` and `standard`, Claude agents can't use shell or file-edit tools the level excludes, even read-only commands like `ls` or tools your own Claude settings `allow`. Alias: `/allowed-tools`. |
 | `/status` | Show session/permission status. |
 | `/help` | Show available commands. |
 | `/init` | Generate a `CLAUDE.md` for the current repo. |
