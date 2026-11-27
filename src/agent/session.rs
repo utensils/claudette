@@ -14,7 +14,7 @@ use crate::process::sanitize_claude_subprocess_env;
 use super::AgentSettings;
 use super::args::{
     build_settings_json, build_stdin_message_with_uuid, build_steering_stdin_message,
-    native_scheduling_disallow,
+    native_scheduling_disallow, permission_mode,
 };
 use super::binary::resolve_claude_path;
 use super::environment::{apply_teammate_command_override, build_agent_command};
@@ -640,13 +640,9 @@ fn build_persistent_args(
         args.push(format!("--disallowedTools={disallow}"));
     }
 
-    if settings.plan_mode {
-        args.push("--permission-mode".to_string());
-        args.push("plan".to_string());
-    } else if bypass_permissions {
-        args.push("--permission-mode".to_string());
-        args.push("bypassPermissions".to_string());
-    }
+    // Always explicit — see `permission_mode` for why omitting it is unsafe.
+    args.push("--permission-mode".to_string());
+    args.push(permission_mode(settings.plan_mode, bypass_permissions).to_string());
 
     if let Some(settings_json) = build_settings_json(settings) {
         args.push("--settings".to_string());
@@ -896,6 +892,22 @@ mod tests {
         assert!(args.contains(&"bypassPermissions".to_string()));
         // Should NOT have --allowedTools when bypassing.
         assert!(!args.iter().any(|a| a == "--allowedTools"));
+    }
+
+    #[test]
+    fn test_build_persistent_args_restricted_levels_pin_default_permission_mode() {
+        // Without an explicit mode the CLI would inherit the user's
+        // `permissions.defaultMode` (e.g. "auto") and widen the session.
+        let settings = AgentSettings::default();
+        for level in ["readonly", "standard"] {
+            let tools = crate::permissions::tools_for_level(level);
+            let args = build_persistent_args("sess-1", false, &tools, None, &settings);
+            let idx = args
+                .iter()
+                .position(|a| a == "--permission-mode")
+                .unwrap_or_else(|| panic!("{level}: --permission-mode missing"));
+            assert_eq!(args[idx + 1], "default", "{level}");
+        }
     }
 
     #[test]

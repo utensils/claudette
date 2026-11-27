@@ -177,13 +177,8 @@ pub fn build_claude_args(
 
     // Permission mode must be set on every turn — each `claude` invocation is
     // an independent process that doesn't inherit the previous turn's flags.
-    if settings.plan_mode {
-        args.push("--permission-mode".to_string());
-        args.push("plan".to_string());
-    } else if bypass_permissions {
-        args.push("--permission-mode".to_string());
-        args.push("bypassPermissions".to_string());
-    }
+    args.push("--permission-mode".to_string());
+    args.push(permission_mode(settings.plan_mode, bypass_permissions).to_string());
 
     // Per-turn settings via --settings JSON.
     if let Some(settings_json) = build_settings_json(settings) {
@@ -246,6 +241,25 @@ pub fn build_claude_args(
     }
 
     args
+}
+
+/// The `--permission-mode` value for a Claude spawn.
+///
+/// Always explicit: without the flag the CLI falls back to the user's
+/// `permissions.defaultMode` from their own Claude settings, so a
+/// `"auto"`, `"acceptEdits"` or `"bypassPermissions"` default there would
+/// silently widen a readonly/standard Claudette session past its
+/// `--allowedTools` list. `"default"` is the CLI's prompt-for-everything
+/// mode (newer CLIs also call it `"manual"` but still accept `"default"`,
+/// which older CLIs require).
+pub(super) fn permission_mode(plan_mode: bool, bypass_permissions: bool) -> &'static str {
+    if plan_mode {
+        "plan"
+    } else if bypass_permissions {
+        "bypassPermissions"
+    } else {
+        "default"
+    }
 }
 
 /// Claude Code's built-in scheduling tools. They keep their schedules inside
@@ -606,6 +620,25 @@ mod tests {
             .position(|a| a == "--model")
             .expect("--model should be present");
         assert_eq!(args[idx + 1], "opus");
+    }
+
+    #[test]
+    fn test_build_args_restricted_levels_pin_default_permission_mode() {
+        // Without an explicit mode the CLI would inherit the user's
+        // `permissions.defaultMode` (e.g. "auto") and widen the session.
+        let settings = AgentSettings::default();
+        for level in ["readonly", "standard"] {
+            let tools = crate::permissions::tools_for_level(level);
+            for is_resume in [false, true] {
+                let args =
+                    build_claude_args("sess-1", "hello", is_resume, &tools, None, &settings, false);
+                let idx = args
+                    .iter()
+                    .position(|a| a == "--permission-mode")
+                    .unwrap_or_else(|| panic!("{level}: --permission-mode missing"));
+                assert_eq!(args[idx + 1], "default", "{level}");
+            }
+        }
     }
 
     #[test]
