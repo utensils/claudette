@@ -49,9 +49,70 @@ pub fn is_bypass_tools(tools: &[String]) -> bool {
     tools.len() == 1 && tools[0] == "*"
 }
 
+/// Built-in tools that change the machine or the worktree. A restricted
+/// level must route every call of these it doesn't pre-approve through
+/// Claudette's permission handler (which denies with the escalation path).
+///
+/// `--allowedTools` alone can't guarantee that: the Claude CLI merges it
+/// with `allow` rules from the user's own settings files, and it runs
+/// read-only Bash commands (`ls`, `cat`, `git log`, …) without a prompt in
+/// every mode. An `ask` rule wins over both (the CLI checks deny, then ask,
+/// then allow), so these become `ask` rules for the spawn.
+const GATED_TOOLS: &[&str] = &[
+    "Bash",
+    "PowerShell",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+];
+
+/// The `permissions.ask` rules a Claude spawn needs so its level can't be
+/// widened by the user's saved `allow` rules or the CLI's read-only
+/// auto-approval: every [`GATED_TOOLS`] entry the level doesn't pre-approve.
+///
+/// Empty for "full" (bypass) and for an empty tool list, which no
+/// permission level produces.
+pub fn ask_rules_for(allowed_tools: &[String]) -> Vec<String> {
+    if allowed_tools.is_empty() || is_bypass_tools(allowed_tools) {
+        return Vec::new();
+    }
+    GATED_TOOLS
+        .iter()
+        .filter(|tool| !allowed_tools.iter().any(|allowed| allowed == *tool))
+        .map(|tool| (*tool).to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readonly_gates_every_write_capable_tool() {
+        let ask = ask_rules_for(&tools_for_level("readonly"));
+        for tool in GATED_TOOLS {
+            assert!(ask.contains(&(*tool).to_string()), "{tool} not gated");
+        }
+    }
+
+    #[test]
+    fn standard_gates_shell_but_not_its_own_edit_tools() {
+        let ask = ask_rules_for(&tools_for_level("standard"));
+        assert!(ask.contains(&"Bash".to_string()));
+        assert!(ask.contains(&"PowerShell".to_string()));
+        assert!(ask.contains(&"NotebookEdit".to_string()));
+        // An ask rule beats allow, so gating a pre-approved tool would
+        // make standard prompt (and be denied) for its own Write/Edit.
+        assert!(!ask.contains(&"Write".to_string()));
+        assert!(!ask.contains(&"Edit".to_string()));
+    }
+
+    #[test]
+    fn full_and_empty_add_no_ask_rules() {
+        assert!(ask_rules_for(&tools_for_level("full")).is_empty());
+        assert!(ask_rules_for(&[]).is_empty());
+    }
 
     #[test]
     fn full_returns_wildcard() {

@@ -644,7 +644,7 @@ fn build_persistent_args(
     args.push("--permission-mode".to_string());
     args.push(permission_mode(settings.plan_mode, bypass_permissions).to_string());
 
-    if let Some(settings_json) = build_settings_json(settings) {
+    if let Some(settings_json) = build_settings_json(settings, allowed_tools) {
         args.push("--settings".to_string());
         args.push(settings_json);
     }
@@ -908,6 +908,18 @@ mod tests {
                 .unwrap_or_else(|| panic!("{level}: --permission-mode missing"));
             assert_eq!(args[idx + 1], "default", "{level}");
         }
+    }
+
+    #[test]
+    fn test_build_persistent_args_gates_unapproved_tools_with_ask_rules() {
+        let settings = AgentSettings::default();
+        let tools = crate::permissions::tools_for_level("standard");
+        let args = build_persistent_args("sess-1", false, &tools, None, &settings);
+        let idx = args.iter().position(|a| a == "--settings").unwrap();
+        let json: serde_json::Value = serde_json::from_str(&args[idx + 1]).unwrap();
+        let ask = json["permissions"]["ask"].as_array().unwrap();
+        assert!(ask.contains(&"Bash".into()));
+        assert!(!ask.contains(&"Edit".into()));
     }
 
     #[test]

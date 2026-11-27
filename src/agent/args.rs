@@ -181,7 +181,7 @@ pub fn build_claude_args(
     args.push(permission_mode(settings.plan_mode, bypass_permissions).to_string());
 
     // Per-turn settings via --settings JSON.
-    if let Some(settings_json) = build_settings_json(settings) {
+    if let Some(settings_json) = build_settings_json(settings, allowed_tools) {
         args.push("--settings".to_string());
         args.push(settings_json);
     }
@@ -281,8 +281,19 @@ pub(super) fn native_scheduling_disallow(mcp_config: Option<&str>) -> Option<Str
     Some(NATIVE_SCHEDULING_TOOLS.join(","))
 }
 
-pub(super) fn build_settings_json(settings: &AgentSettings) -> Option<String> {
+/// `allowed_tools` is the spawn's permission level; its
+/// [`crate::permissions::ask_rules_for`] rules go in `permissions.ask` so the
+/// user's saved `allow` rules can't widen a restricted session.
+pub(super) fn build_settings_json(
+    settings: &AgentSettings,
+    allowed_tools: &[String],
+) -> Option<String> {
     let mut obj = serde_json::Map::new();
+    let mut permissions = serde_json::Map::new();
+    let ask = crate::permissions::ask_rules_for(allowed_tools);
+    if !ask.is_empty() {
+        permissions.insert("ask".into(), serde_json::json!(ask));
+    }
     if settings.fast_mode {
         obj.insert("fastMode".to_string(), serde_json::Value::Bool(true));
     }
@@ -295,9 +306,9 @@ pub(super) fn build_settings_json(settings: &AgentSettings) -> Option<String> {
     if let Some(ref hook_bridge) = settings.hook_bridge {
         use crate::agent_mcp::tools::progress;
         if progress::has_trusted_claude_entry(settings.mcp_config.as_deref(), hook_bridge) {
-            obj.insert(
-                "permissions".into(),
-                serde_json::json!({"allow": [progress::CLAUDE_TOOL_NAME]}),
+            permissions.insert(
+                "allow".into(),
+                serde_json::json!([progress::CLAUDE_TOOL_NAME]),
             );
         }
         let hook = serde_json::json!({
@@ -325,6 +336,9 @@ pub(super) fn build_settings_json(settings: &AgentSettings) -> Option<String> {
                 }],
             }),
         );
+    }
+    if !permissions.is_empty() {
+        obj.insert("permissions".into(), serde_json::Value::Object(permissions));
     }
     if obj.is_empty() {
         None
@@ -435,6 +449,75 @@ fn build_stdin_message_inner(
 mod tests {
     use super::*;
 
+    fn ask_rules(args: &[String]) -> Vec<String> {
+        let idx = args
+            .iter()
+            .position(|a| a == "--settings")
+            .expect("--settings missing");
+        let json: serde_json::Value = serde_json::from_str(&args[idx + 1]).unwrap();
+        serde_json::from_value(json["permissions"]["ask"].clone()).unwrap()
+    }
+
+    #[test]
+    fn restricted_levels_gate_unapproved_tools_with_ask_rules() {
+        // Without these the user's saved `allow` rules (or the CLI's
+        // read-only Bash auto-approval) would run tools the level excludes.
+        let settings = AgentSettings::default();
+        for is_resume in [false, true] {
+            let readonly = crate::permissions::tools_for_level("readonly");
+            let args = build_claude_args("s", "hi", is_resume, &readonly, None, &settings, false);
+            let ask = ask_rules(&args);
+            for tool in ["Bash", "Write", "Edit", "NotebookEdit"] {
+                assert!(ask.contains(&tool.to_string()), "readonly: {tool}");
+            }
+
+            let standard = crate::permissions::tools_for_level("standard");
+            let args = build_claude_args("s", "hi", is_resume, &standard, None, &settings, false);
+            let ask = ask_rules(&args);
+            assert!(ask.contains(&"Bash".to_string()));
+            assert!(!ask.contains(&"Write".to_string()));
+            assert!(!ask.contains(&"Edit".to_string()));
+        }
+
+        let full = crate::permissions::tools_for_level("full");
+        let args = build_claude_args("s", "hi", false, &full, None, &settings, false);
+        assert!(!args.iter().any(|a| a == "--settings"));
+    }
+
+    #[test]
+    fn ask_rules_coexist_with_the_reporting_tool_grant() {
+        let settings = AgentSettings {
+            hook_bridge: Some(crate::agent::AgentHookBridge {
+                command: "claudette --agent-hook".into(),
+                socket_addr: "test.sock".into(),
+                token: "test-token".into(),
+            }),
+            mcp_config: Some(
+                serde_json::json!({"mcpServers":{"claudette":{
+                    "type":"stdio",
+                    "command":std::env::current_exe().unwrap().to_string_lossy(),
+                    "args":["--agent-mcp"],
+                    "env":{"CLAUDETTE_MCP_SOCKET":"test.sock","CLAUDETTE_MCP_TOKEN":"test-token"}
+                }}})
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+        let readonly = crate::permissions::tools_for_level("readonly");
+        let json: serde_json::Value =
+            serde_json::from_str(&build_settings_json(&settings, &readonly).unwrap()).unwrap();
+        assert_eq!(
+            json["permissions"]["allow"],
+            serde_json::json!(["mcp__claudette__report_agent_progress"])
+        );
+        assert!(
+            json["permissions"]["ask"]
+                .as_array()
+                .unwrap()
+                .contains(&"Bash".into())
+        );
+    }
+
     #[test]
     fn only_the_injected_reporting_tool_is_preapproved() {
         let mut settings = AgentSettings {
@@ -450,7 +533,7 @@ mod tests {
             "args":["--agent-mcp"], "env":{"CLAUDETTE_MCP_SOCKET":"test.sock","CLAUDETTE_MCP_TOKEN":"test-token"}
         });
         let grants = |settings: &AgentSettings| {
-            serde_json::from_str::<serde_json::Value>(&build_settings_json(settings).unwrap())
+            serde_json::from_str::<serde_json::Value>(&build_settings_json(settings, &[]).unwrap())
                 .unwrap()["permissions"]
                 .clone()
         };
