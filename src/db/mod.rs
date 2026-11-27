@@ -515,25 +515,29 @@ impl Database {
 
         if has_orphaned_ws {
             let tx = self.conn.unchecked_transaction()?;
-            let orphaned: Vec<(String, Option<String>, i64)> = {
+            // Only the workspace id: the legacy `workspaces.session_id` /
+            // `turn_count` columns were dropped by
+            // 20260508142050_drop_legacy_workspace_session_columns, so the
+            // healed session starts fresh (no Claude session, zero turns).
+            let orphaned: Vec<String> = {
                 let mut stmt = tx.prepare(
-                    "SELECT w.id, w.session_id, w.turn_count
+                    "SELECT w.id
                      FROM workspaces w
                      WHERE NOT EXISTS (
                          SELECT 1 FROM chat_sessions cs WHERE cs.workspace_id = w.id
                      )",
                 )?;
-                stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                stmt.query_map([], |row| row.get(0))?
                     .collect::<Result<Vec<_>, _>>()?
             };
-            for (ws_id, claude_sid, tc) in &orphaned {
+            for ws_id in &orphaned {
                 let sid = uuid::Uuid::new_v4().to_string();
                 tx.execute(
                     "INSERT INTO chat_sessions
                         (id, workspace_id, session_id, name, name_edited,
                          turn_count, sort_order, status)
-                     VALUES (?1, ?2, ?3, 'Main', 0, ?4, 0, 'active')",
-                    params![sid, ws_id, claude_sid, tc],
+                     VALUES (?1, ?2, NULL, 'Main', 0, 0, 0, 'active')",
+                    params![sid, ws_id],
                 )?;
                 tx.execute(
                     "UPDATE chat_messages SET chat_session_id = ?1
@@ -634,6 +638,51 @@ fn is_fresh_database_file(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::db::test_support::*;
+
+    /// A workspace left with no chat session must not stop the database
+    /// opening: `heal_orphaned_sessions` runs on every open and once read
+    /// `workspaces.session_id` / `turn_count`, which
+    /// `20260508142050_drop_legacy_workspace_session_columns` removed.
+    #[test]
+    fn open_heals_workspace_without_chat_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        {
+            let db = Database::open(&path).unwrap();
+            db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+                .unwrap();
+            db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+                .unwrap();
+            db.conn()
+                .execute_batch(
+                    "INSERT INTO chat_messages (id, workspace_id, role, content)
+                         VALUES ('m1', 'w1', 'user', 'hello');
+                     DELETE FROM chat_sessions WHERE workspace_id = 'w1';",
+                )
+                .unwrap();
+        }
+
+        let db = Database::open(&path).expect("open must heal, not fail");
+        let (sid, name, turns): (String, String, i64) = db
+            .conn()
+            .query_row(
+                "SELECT id, name, turn_count FROM chat_sessions WHERE workspace_id = 'w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "Main");
+        assert_eq!(turns, 0);
+        let msg_session: String = db
+            .conn()
+            .query_row(
+                "SELECT chat_session_id FROM chat_messages WHERE id = 'm1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(msg_session, sid);
+    }
 
     // --- Write-lock / busy-retry tests ---
 
