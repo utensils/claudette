@@ -539,16 +539,20 @@ impl Database {
                      VALUES (?1, ?2, NULL, 'Main', 0, 0, 0, 'active')",
                     params![sid, ws_id],
                 )?;
-                tx.execute(
-                    "UPDATE chat_messages SET chat_session_id = ?1
-                     WHERE workspace_id = ?2 AND chat_session_id IS NULL",
-                    params![sid, ws_id],
-                )?;
-                tx.execute(
-                    "UPDATE conversation_checkpoints SET chat_session_id = ?1
-                     WHERE workspace_id = ?2 AND chat_session_id IS NULL",
-                    params![sid, ws_id],
-                )?;
+                // Reattach history whose session is NULL *or* gone: a
+                // session deleted with foreign keys off (an external
+                // `sqlite3` shell) skips the cascade and leaves the dead id.
+                for table in ["chat_messages", "conversation_checkpoints"] {
+                    tx.execute(
+                        &format!(
+                            "UPDATE {table} SET chat_session_id = ?1
+                             WHERE workspace_id = ?2
+                               AND (chat_session_id IS NULL
+                                    OR chat_session_id NOT IN (SELECT id FROM chat_sessions))"
+                        ),
+                        params![sid, ws_id],
+                    )?;
+                }
             }
             tx.commit()?;
         }
@@ -643,6 +647,11 @@ mod tests {
     /// opening: `heal_orphaned_sessions` runs on every open and once read
     /// `workspaces.session_id` / `turn_count`, which
     /// `20260508142050_drop_legacy_workspace_session_columns` removed.
+    ///
+    /// The sessions are deleted with foreign keys off (as an external
+    /// `sqlite3` shell does by default), so the cascade never runs and the
+    /// message and checkpoint keep the dead session id. Healing must
+    /// reattach that history, not just rows whose id is already NULL.
     #[test]
     fn open_heals_workspace_without_chat_session() {
         let dir = tempfile::tempdir().unwrap();
@@ -655,9 +664,18 @@ mod tests {
                 .unwrap();
             db.conn()
                 .execute_batch(
-                    "INSERT INTO chat_messages (id, workspace_id, role, content)
-                         VALUES ('m1', 'w1', 'user', 'hello');
-                     DELETE FROM chat_sessions WHERE workspace_id = 'w1';",
+                    "INSERT INTO chat_messages (id, workspace_id, chat_session_id, role, content)
+                         SELECT 'm1', 'w1', id, 'user', 'hello'
+                         FROM chat_sessions WHERE workspace_id = 'w1';
+                     INSERT INTO chat_messages (id, workspace_id, role, content)
+                         VALUES ('m2', 'w1', 'assistant', 'unassigned');
+                     INSERT INTO conversation_checkpoints
+                         (id, workspace_id, chat_session_id, message_id, turn_index)
+                         SELECT 'cp1', 'w1', id, 'm1', 0
+                         FROM chat_sessions WHERE workspace_id = 'w1';
+                     PRAGMA foreign_keys=OFF;
+                     DELETE FROM chat_sessions WHERE workspace_id = 'w1';
+                     PRAGMA foreign_keys=ON;",
                 )
                 .unwrap();
         }
@@ -673,15 +691,28 @@ mod tests {
             .unwrap();
         assert_eq!(name, "Main");
         assert_eq!(turns, 0);
-        let msg_session: String = db
+        for (table, id) in [
+            ("chat_messages", "m1"),
+            ("chat_messages", "m2"),
+            ("conversation_checkpoints", "cp1"),
+        ] {
+            let got: String = db
+                .conn()
+                .query_row(
+                    &format!("SELECT chat_session_id FROM {table} WHERE id = ?1"),
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(got, sid, "{table} {id} must be reattached to Main");
+        }
+        let violations: i64 = db
             .conn()
-            .query_row(
-                "SELECT chat_session_id FROM chat_messages WHERE id = 'm1'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })
             .unwrap();
-        assert_eq!(msg_session, sid);
+        assert_eq!(violations, 0);
     }
 
     // --- Write-lock / busy-retry tests ---
