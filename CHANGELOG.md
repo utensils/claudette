@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.30.0](https://github.com/utensils/claudette/compare/v0.29.0...v0.30.0) (2026-11-27)
+
+
+### Features
+
+* **agents:** track subagent progress across Claude, Codex and Antigravity ([#1044](https://github.com/utensils/claudette/issues/1044)) ([9e9f906](https://github.com/utensils/claudette/commit/9e9f90611450471129b335652f2ae822a56348d8))
+* **i18n:** add French (fr) translation ([#1045](https://github.com/utensils/claudette/issues/1045)) ([3479d59](https://github.com/utensils/claudette/commit/3479d596a46cd15f06fda9b0faad7595a352eca5))
+
+
+### Bug Fixes
+
+* **agents:** stop saved allow rules widening restricted Claude sessions ([#1050](https://github.com/utensils/claudette/issues/1050)) ([dd74411](https://github.com/utensils/claudette/commit/dd74411c726030e683884b264f9bdd42bb9ad54b))
+* **i18n:** escape Trans values and finish [#1045](https://github.com/utensils/claudette/issues/1045) follow-ups ([#1047](https://github.com/utensils/claudette/issues/1047)) ([e708492](https://github.com/utensils/claudette/commit/e70849228be0f6b1b60ddbd28ba99b4bb55ec243))
+* pin Claude permission mode and stop orphan heal failing open ([#1049](https://github.com/utensils/claudette/issues/1049)) ([12d43db](https://github.com/utensils/claudette/commit/12d43db1df8f0463761161b4214ecf9736120558))
+* **usage:** price models from llm-prices instead of a hand-kept table ([#1035](https://github.com/utensils/claudette/issues/1035)) ([40cb9b9](https://github.com/utensils/claudette/commit/40cb9b96ca7f73af388798bffea13881be0eec55))
+
 ## [0.29.0](https://github.com/utensils/claudette/compare/v0.28.0...v0.29.0) (2026-11-24)
 
 
